@@ -30,3 +30,8 @@ RUN curl -LO https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/la
 
 # Set the working directory
 WORKDIR /tmp/telco-dast-qe
+
+#Set podman permissions and create .local folder
+RUN mkdir -p /.local
+RUN chown podman:podman -R /.local
+USER podman

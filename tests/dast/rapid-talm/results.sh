@@ -7,7 +7,7 @@ TMP_DIR=/tmp
 ARTIFACT_DIR=${ARTIFACT_DIR}
 
 # Name for rapiterm pod
-RANDOM_NAME=rapiterm-lca
+RANDOM_NAME=rapiterm-talm
 
 # Name of PVC in RapiDAST Resource, i.e. which PVC to mount to grab results
 PVC=rapidast-pvc
@@ -19,7 +19,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: $RANDOM_NAME
-  namespace: rapidast-lca
+  namespace: rapidast-talm
 spec:
   containers:
     - name: terminal
@@ -44,12 +44,12 @@ EOF
 
 kubectl apply -f $TMP_DIR/$RANDOM_NAME
 rm $TMP_DIR/$RANDOM_NAME
-kubectl -n rapidast-lca wait --for=condition=Ready pod/$RANDOM_NAME
-kubectl -n rapidast-lca cp $RANDOM_NAME:/zap/results $ARTIFACT_DIR
+kubectl -n rapidast-talm wait --for=condition=Ready pod/$RANDOM_NAME
+kubectl -n rapidast-talm cp $RANDOM_NAME:/zap/results $ARTIFACT_DIR
 
 # Function to search for 'session' file and zap-report.json recursively
 search_for_files() {
-  local dir="$1/lca"
+  local dir="$1/talm"
   local found_session=0
   local found_zap_report=0
 

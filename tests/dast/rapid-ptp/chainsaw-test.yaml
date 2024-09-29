@@ -1,0 +1,56 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  creationTimestamp: null
+  name: rapidast-ptp
+spec:
+  steps:
+    - name: step-00
+      try:
+    - apply:
+        file: 00-create-project.yaml
+    - assert:
+        file: 00-assert.yaml
+    - name: step-01
+      try:
+    - apply:
+        file: 01-create-sa.yaml
+    - assert:
+        file: 01-assert.yaml
+    - name: step-02
+      try:
+    - script:
+        timeout: 30s
+        content: ./create_rapidast_configmap.sh
+    - assert:
+        file: 02-assert.yaml
+    - name: step-03
+      try:
+    - apply:
+        file: 03-rapidast-job.yaml
+    - assert:
+        file: 03-assert.yaml
+    - name: step-04
+      try:
+    - script:
+        timeout: 6m
+        content: ./results.sh
+      finally:
+        - command:
+          timeout: 1m
+          entrypoint: oc
+          args:
+            - -n
+            - rapidast-ptp
+            - delete
+            - pod
+            - rapiterm-ptp
+        - command:
+          timeout: 1m
+          entrypoint: oc
+          args:
+            - -n
+            - rapidast-ptp
+            - delete
+            - pod
+            - --selector=batch.kubernetes.io/job-name=rapidast-job

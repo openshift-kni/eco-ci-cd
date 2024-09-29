@@ -1,0 +1,7 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rapidast-job
+  namespace: rapidast-talm
+status:
+  succeeded: 1

@@ -17,6 +17,10 @@ RUN mkdir -p /tmp/go/bin $GOCACHE \
 
 # Install dependencies required by test cases and debugging
 RUN apt-get update && apt-get install -y jq vim libreadline-dev
+RUN apt-get -y install podman
+RUN mkdir -p /.local
+RUN chown podman:podman -R /.local
+USER podman
 
 # Install Chainsaw e2e testing tool
 RUN go install github.com/kyverno/chainsaw@v0.2.0

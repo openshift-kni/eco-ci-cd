@@ -35,4 +35,5 @@ WORKDIR /tmp/telco-dast-qe
 RUN mkdir -p /.local
 RUN useradd podman
 RUN chown podman:podman -R /.local
+RUN chmod 777 /.local
 USER podman

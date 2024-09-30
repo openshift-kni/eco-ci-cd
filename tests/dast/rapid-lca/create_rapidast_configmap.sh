@@ -44,4 +44,3 @@ EOF
 
 # Create the ConfigMap
 echo "$configmap_content" | oc -n rapidast-lca create -f -
-

@@ -16,8 +16,7 @@ RUN mkdir -p /tmp/go/bin $GOCACHE \
     && chmod -R 777 /tmp/go/bin $GOPATH $GOCACHE
 
 # Install dependencies required by test cases and debugging
-RUN apt-get update && apt-get install -y jq vim libreadline-dev
-RUN apt-get -y install podman
+RUN apt-get update && apt-get install -y jq vim libreadline-dev podman
 
 # Install Chainsaw e2e testing tool
 RUN go install github.com/kyverno/chainsaw@v0.2.0
@@ -32,6 +31,8 @@ RUN curl -LO https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/la
 WORKDIR /tmp/telco-dast-qe
 
 #Set podman permissions and create .local folder
-RUN mkdir -p /.local
-RUN chown podman:podman -R /.local
+RUN mkdir -p /.local \
+    && useradd podman \
+    && chown podman:podman -R /.local \
+    && chmod 777 /.local \
 USER podman

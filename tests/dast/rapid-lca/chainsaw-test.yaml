@@ -5,38 +5,38 @@ metadata:
   name: rapidast-lca
 spec:
   steps:
-    - name: step-00
-      try:
+  - name: step-00
+    try:
     - apply:
         file: 00-create-project.yaml
     - assert:
         file: 00-assert.yaml
-    - name: step-01
-      try:
+  - name: step-01
+    try:
     - apply:
         file: 01-create-sa.yaml
     - assert:
         file: 01-assert.yaml
-    - name: step-02
-      try:
+  - name: step-02
+    try:
     - script:
         timeout: 30s
         content: ./create_rapidast_configmap.sh
     - assert:
         file: 02-assert.yaml
-    - name: step-03
-      try:
+  - name: step-03
+    try:
     - apply:
         file: 03-rapidast-job.yaml
     - assert:
         file: 03-assert.yaml
-    - name: step-04
-      try:
+  - name: step-04
+    try:
     - script:
         timeout: 6m
         content: ./results.sh
-      finally:
-        - command:
+    finally:
+      - command:
           timeout: 1m
           entrypoint: oc
           args:
@@ -45,7 +45,7 @@ spec:
             - delete
             - pod
             - rapiterm-lca
-        - command:
+      - command:
           timeout: 1m
           entrypoint: oc
           args:

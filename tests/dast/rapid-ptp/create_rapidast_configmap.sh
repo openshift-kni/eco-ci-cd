@@ -31,7 +31,7 @@ data:
       zap:
         apiScan:
           apis:
-            apiUrl: "https://kubernetes.default.svc/openapi/v3/apis/ptp.openshift.io/v1alpha1"
+            apiUrl: "https://kubernetes.default.svc/openapi/v3/apis/ptp.openshift.io/v1"
         passiveScan:
           disabledRules: "2,10015,10027,10096,10024,10054"
         activeScan:

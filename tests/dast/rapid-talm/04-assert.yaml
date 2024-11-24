@@ -2,4 +2,4 @@ apiVersion: kuttl.dev/v1beta1
 kind: TestAssert
 timeout: 180
 commands:
- - script: ./tests/e2e-rh-sdl/rapidast-talm/results.sh
+ - script: ./tests/dast/rapidast-talm/results.sh

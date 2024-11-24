@@ -36,9 +36,7 @@ spec:
         - command:
             - sh
             - -c
-            - rapidast.py --log-level debug --config
-              /helm/config/rapidastconfig.yaml && find /opt/rapidast/results/ptp
-              -name zap-report.json -exec cat {} \;
+            - rapidast.py --log-level debug --config /helm/config/rapidastconfig.yaml && find /opt/rapidast/results/ptp -name zap-report.json -exec cat {} \;
           image: quay.io/redhatproductsecurity/rapidast:latest
           imagePullPolicy: Always
           name: rapidast-chart
@@ -62,5 +60,5 @@ spec:
             name: rapidast-configmap
           name: config-volume
         - name: results-volume
-          persistentVolumeClaim: null
-          claimName: rapidast-pvc
+          persistentVolumeClaim:
+           claimName: rapidast-pvc

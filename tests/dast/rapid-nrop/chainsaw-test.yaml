@@ -28,6 +28,8 @@ spec:
     try:
     - apply:
         file: 03-rapidast-job.yaml
+    - sleep:
+        duration: 60s
     - assert:
         file: 03-assert.yaml
   - name: step-04

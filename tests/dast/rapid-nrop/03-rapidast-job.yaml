@@ -33,32 +33,32 @@ spec:
       serviceAccount: privileged-sa
       serviceAccountName: privileged-sa
       containers:
-        - command:
-            - sh
-            - -c
-            - rapidast.py --log-level debug --config /helm/config/rapidastconfig.yaml && find /opt/rapidast/results/nrop -name zap-report.json -exec cat {} \;
-          image: quay.io/redhatproductsecurity/rapidast:latest
-          imagePullPolicy: Always
-          name: rapidast-chart
-          resources: {}
-          securityContext:
-            privileged: true
-            terminationMessagePath: /dev/termination-log
-            terminationMessagePolicy: File
-          volumeMounts:
-            - mountPath: /helm/config
-              name: config-volume
-            - mountPath: /opt/rapidast/results/
-              name: results-volume
+      - command:
+        - sh
+        - -c
+        - rapidast.py --log-level debug --config /helm/config/rapidastconfig.yaml && find /opt/rapidast/results/nrop -name zap-report.json -exec cat {} \;
+        image: quay.io/redhatproductsecurity/rapidast:latest
+        imagePullPolicy: Always
+        name: rapidast-chart
+        resources: {}
+        securityContext:
+          privileged: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /helm/config
+          name: config-volume
+        - mountPath: /opt/rapidast/results/
+          name: results-volume
       dnsPolicy: ClusterFirst
       restartPolicy: Never
       schedulerName: default-scheduler
       terminationGracePeriodSeconds: 30
       volumes:
-        - configMap:
-            defaultMode: 420
-            name: rapidast-configmap
-          name: config-volume
-        - name: results-volume
-          persistentVolumeClaim:
-           claimName: rapidast-pvc
+      - configMap:
+          defaultMode: 420
+          name: rapidast-configmap
+        name: config-volume
+      - name: results-volume
+        persistentVolumeClaim:
+          claimName: rapidast-pvc

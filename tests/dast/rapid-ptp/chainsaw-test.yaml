@@ -28,29 +28,31 @@ spec:
     try:
     - apply:
         file: 03-rapidast-job.yaml
+    - sleep:
+        duration: 60s
     - assert:
         file: 03-assert.yaml
-    - name: step-04
-      try:
+  - name: step-04
+    try:
     - script:
         timeout: 6m
         content: ./results.sh
     finally:
-      - command:
-          timeout: 1m
-          entrypoint: oc
-          args:
-            - -n
-            - rapidast-ptp
-            - delete
-            - pod
-            - rapiterm-ptp
-      - command:
-          timeout: 1m
-          entrypoint: oc
-          args:
-            - -n
-            - rapidast-ptp
-            - delete
-            - pod
-            - --selector=batch.kubernetes.io/job-name=rapidast-job
+    - command:
+        timeout: 1m
+        entrypoint: oc
+        args:
+          - -n
+          - rapidast-ptp
+          - delete
+          - pod
+          - rapiterm-ptp
+    - command:
+        timeout: 1m
+        entrypoint: oc
+        args:
+          - -n
+          - rapidast-ptp
+          - delete
+          - pod
+          - --selector=batch.kubernetes.io/job-name=rapidast-job

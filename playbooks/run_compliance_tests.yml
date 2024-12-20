@@ -1,0 +1,36 @@
+- name: Run compliance tests
+  hosts: robot
+  gather_facts: true
+  vars:
+    eco_validation_repo: https://github.com/openshift-kni/eco-validation
+    eco_validation_repo_version: "{{ omit }}" # default to latest
+  tasks:
+    - name: Clone eco-validation
+      ansible.builtin.git:
+        repo: "{{ eco_validation_repo }}"
+        dest: "eco-validation"
+        version: "{{ eco_validation_repo_version }}"
+        force: true
+
+    - name: Run reploy operators
+      ansible.builtin.command:
+        cmd: ansible-playbook -i ~/inventory.yml playbooks/redeploy_oran_o2ims_operators.yml
+        chdir: "eco-validation"
+      changed_when: false
+
+    - name: Run tests
+      ansible.builtin.command:
+        cmd: ansible-playbook -i ~/inventory.yml playbooks/run_compliance_tests.yml -e artifacts_dir={{ remote_artifacts_dir }}
+        chdir: "eco-validation"
+      vars:
+        remote_artifacts_dir: "{{ ansible_env.HOME }}/testing"
+      changed_when: false
+      register: test_run_cmd_result
+      failed_when: test_run_cmd_result.rc != 0
+
+    - name: Copy test results
+      ansible.posix.synchronize:
+        src: "{{ ansible_env.HOME }}/testing/compliance_tests"
+        dest: "{{ artifacts_dir }}"
+        mode: pull
+      delegate_to: localhost

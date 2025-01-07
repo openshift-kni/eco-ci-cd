@@ -2,8 +2,11 @@
 collections:
   - name: community.libvirt
     version: "1.3.0"
-  - name: redhatci.ocp
-    version: "2.2.1744706207"
+#  - name: redhatci.ocp
+#    version: "2.2.1744706207"
+  - name: https://github.com/ccardenosa/ansible-collection-redhatci-ocp.git
+    type: git
+    version: kcli-wrapper-role
   - name: kubernetes.core
     version: "2.4.2"
   - name: junipernetworks.junos

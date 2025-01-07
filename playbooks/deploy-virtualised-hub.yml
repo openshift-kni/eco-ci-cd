@@ -1,0 +1,49 @@
+---
+- name: Deploy Virtualized Hub cluster playbook
+  hosts:
+    - all
+  gather_facts: false
+  roles:
+    - redhatci.ocp.kcli_wrapper
+  no_log: "{{ hide_ansible_logs | default(true) }}"
+
+  tasks:
+
+  - name: Retrive kubeconfig remote file
+    vars:
+      cluster_name: "{{ lookup('ansible.builtin.env', 'HUB_CLUSTER_NAME') }}"
+      b64_kubeconfig: "{{ kcli_wrp_credentials[cluster_name].b64_kubeconfig }}"
+      kubeadmin_password: "{{ kcli_wrp_credentials[cluster_name].kubeadmin_password }}"
+      shared_dir: "{{ lookup('ansible.builtin.env', 'SHARED_DIR') | default('/tmp') }}"
+    block:
+
+      - name: Create temporary kubeconfig remote file
+        ansible.builtin.tempfile:
+          state: directory
+          prefix: "{{ cluster_name }}-"
+        register: _cluster_credentials
+
+      - name: Dump cluster credentials to shared kubeconfig file
+        ansible.builtin.shell: |
+          echo {{ b64_kubeconfig }} | base64 -d > {{ _cluster_credentials.path }}/kubeconfig-via-socks5-proxy
+          echo {{ kubeadmin_password }} > {{ _cluster_credentials.path }}/kubeadmin-password
+
+      - name: Store kubeconfig file into SHARED folder
+        ansible.builtin.fetch:
+          src: "{{ _cluster_credentials.path }}/kubeconfig-via-socks5-proxy"
+          dest: "{{ shared_dir }}/kubeconfig"
+          flat: true
+
+      - name: Store kubeadmin_password file into SHARED folder
+        ansible.builtin.fetch:
+          src: "{{ _cluster_credentials.path }}/kubeadmin-password"
+          dest: "{{ shared_dir }}/kubeadmin-password"
+          flat: true
+
+    always:
+
+      - name: Remove the remote temporary kubeconfig file
+        when: _cluster_credentials.path is defined
+        ansible.builtin.file:
+          path: "{{ _cluster_credentials.path }}"
+          state: absent

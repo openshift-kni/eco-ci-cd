@@ -1,3 +1,6 @@
 ---
 collections:
-  - redhatci.ocp
+  # - redhatci.ocp
+  - name: https://github.com/ccardenosa/ansible-collection-redhatci-ocp.git
+    type: git
+    version: kcli-wrapper-role

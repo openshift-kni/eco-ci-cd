@@ -1,0 +1,321 @@
+## Disclaimer
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for Bare-Metal Hypervisor Deployment Using Kickstart and iDRAC Boot
+
+## Overview
+# This playbook automates the deployment of a hypervisor on bare-metal servers
+# using a Kickstart-enabled ISO and iDRAC/ILO boot. It ensures that all necessary
+# configurations, software installations, and network settings are applied
+# for a fully operational virtualization environment.
+#
+# Note: The Bastion Linux server should be pre-installed and accessible
+# in order to deploy the hypervisor.
+
+## Prerequisites
+# - Ansible 2.10+ installed on the control node.
+# - Target servers must be accessible via SSH.
+# - Ensure the `passlib` and `community.general` collections are installed.
+# - iDRAC or equivalent out-of-band management configured on the bare-metal server.
+
+## Roles Requirements
+# The playbook uses multiple roles:
+# - kickstart_iso: Prepares the Kickstart-enabled ISO.
+# - redhatci.ocp.setup_http_store: Sets up HTTP storage for hosting the ISO.
+# - redhatci.ocp.boot_iso: Boots the bare-metal server using the ISO.
+
+## Variables Used by Playbook
+# Please note: For `kickstart_iso` variables, refer to the `kickstart_iso` README.
+# all:
+#   activate_system_cmd: active-bin                       # Command to activate the system
+#   ansible_become_password: "become_password"            # Password for becoming root (BECOME PASSWORD)
+#   ansible_password: "pa$$word"                          # SSH password for Ansible user
+#   ansible_ssh_private_key: 'ssh-key'                    # Path to the private SSH key for authentication
+#   ansible_user: user                                    # SSH username for remote access
+#   bmc_password: 'pa$$word'                              # Password for BMC (Baseboard Management Controller)
+#   bmc_user: 'user'                                      # Username for BMC authentication
+#   ssh_public_key: 'public_ssh_key'                      # Public SSH key for authentication after bare-metal installation
+#   system_rpm_link: http://example.rpm                   # URL to the RPM package used for system activation
+
+# hypervisor:
+#   ansible_host: 10.1.1.1                                # IP address or hostname of the hypervisor
+#   bmc_address: BMC_ADDRESS                              # BMC address of the hypervisor
+#   net_config: |-
+#     interface_name: "eth0"                              # Main interface name used for Ansible connection
+#     hostname: "hypervisor.example.com"                  # Hostname of the hypervisor
+#     ip: "{{ ansible_host }}"                            # IP address of the hypervisor (matches ansible_host)
+#     mask: "255.255.255.0"                               # Subnet mask
+#     gw: "10.1.1.254"                                    # Gateway address
+#     dns: "10.1.1.254"                                   # DNS server address
+#   seconday_networks: |-                                 # BM secondary networks
+#     bridge-1:                                           # Name of the bridge interface
+#       ipv4: "192.168.1.1/24"                            # IPv4 address and subnet
+#       vlan: 998                                         # VLAN ID
+#       ifname: "eth0"                                    # Interface name for the bridge
+#     bridge-2:
+#       ipv4: "192.168.2.1/24"
+#       vlan: 999
+#       ifname: "eth0"
+#   timezone: "America/Toronto"                           # Timezone of the hypervisor
+#   vendor: "HPE"                                         # Vendor of the hypervisor (could also be Dell, depending on the out-of-band interface type)
+
+# bastion:
+#   ansible_host: 10.1.1.2                                # IP address or hostname of the bastion server
+
+# bastions:
+#   dest_iso_dir: /tmp/                                   # Destination directory for ISO files
+#   system_iso_rdu_link: http://Link-to-rdu-iso-file.iso  # Link to the RDU ISO file
+#   system_iso_tlv_link: http://link-to-tlv-iso-file.iso  # Link to the TLV ISO file
+
+
+## Playbook Workflow
+# 1. Kickstart ISO Creation:
+#    - The `kickstart_iso` role generates a Kickstart-enabled ISO.
+#    - The ISO is hosted on the bastion server's HTTP storage.
+
+# 2. Bare-Metal Boot:
+#    - The bare-metal server boots using the ISO hosted on the bastion server.
+#    - The playbook waits for the installation to complete before proceeding.
+
+# 3. Post-Installation Configuration:
+#    - Installs the system RPM package and activates the OS.
+#    - Configures network interfaces and bridges for virtualization.
+#    - Sets up virtualization tools like `qemu-kvm`, `libvirt`, and `virt-install`.
+
+# 4. Final Setup:
+#    - Configures SSH keys for secure access.
+#    - Sets up libvirt storage and permissions.
+#    - Ensures all software dependencies are updated.
+
+## Running the Playbook
+# Ensure that host_vars and group_vars are properly installed.
+# Execute the playbook with the following command:
+# ansible-playbook playbooks/infra/deploy-vm-bastion-libvirt.yml -i ./inventories/infra/deploy-bm-hypervisor.yml
+---
+- name: Create a Kickstart-enabled ISO
+  hosts: bastion
+  gather_facts: true
+  vars:
+    iso_mount_path: "{{ dest_iso_dir }}/mount"
+    os_install_path: "{{ dest_iso_dir }}/os-install"
+    location: rdu
+    system_iso_link: "{{ system_iso_rdu_link if location == 'rdu' else system_iso_tlv_link }}"
+  tasks:
+    - name: Set ISO name
+      ansible.builtin.set_fact:
+        iso_name: installation.iso
+
+    - name: Prepare kickstart iso
+      ansible.builtin.import_role:
+        name: kickstart_iso
+      vars:
+        kickstart_iso_link: "{{ system_iso_link }}"
+        kickstart_iso_name: "{{ iso_name }}"
+        kickstart_iso_file_desire_location: /opt/http_store/data
+        kickstart_iso_timezone: "{{ hostvars['hypervisor'].timezone }}"
+        kickstart_iso_password: "{{ ansible_password }}"
+        kickstart_iso_username: "{{ ansible_user }}"
+        kickstart_iso_net_config: "{{ hostvars['hypervisor'].net_config | from_yaml }}"
+
+    - name: Setup http storage
+      ansible.builtin.import_role:
+        name: redhatci.ocp.setup_http_store
+
+- name: Deploy Bare-Metal
+  hosts: hypervisor
+  gather_facts: false
+  become: true
+  vars:
+    system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
+  tasks:
+    - name: Boot BM using pre-configured ISO
+      ansible.builtin.import_role:
+        name: redhatci.ocp.boot_iso
+      vars:
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_host'] }}/{{ hostvars['bastion']['iso_name'] }}"
+
+    - name: Wait until BM installation is completed
+      ansible.builtin.wait_for_connection:
+        delay: 360
+        sleep: 10
+        timeout: 7200
+      notify:
+        - Remove installation ISO
+
+    - name: Get system rpm from repository
+      ansible.builtin.get_url:
+        url: "{{ system_rpm_link }}"
+        dest: "{{ system_rpm_path }}"
+        force: false
+        mode: "0640"
+
+    - name: Install system rpm
+      ansible.builtin.dnf:
+        name: "{{ system_rpm_path }}"
+        state: present
+        disable_gpg_check: true
+
+    - name: Activate OS
+      ansible.builtin.command:
+        "{{ activate_system_cmd }}"
+      changed_when: false
+
+    - name: Set passwordless sudo
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/{{ ansible_user }}
+        line: "{{ ansible_user }} ALL=(ALL) NOPASSWD: ALL"
+        mode: "0640"
+        create: true
+
+    - name: Configure network connection baremetal
+      vars:
+        ipaddr_mask: "{{ (net_config | from_yaml)['ip'] }}/{{ (net_config | from_yaml)['mask'] }}"
+      community.general.nmcli:
+        type: bridge
+        conn_name: bridge-baremetal
+        method4: manual
+        method6: disabled
+        state: present
+        stp: false
+        ifname: baremetal
+        autoconnect: true
+        ip4: "{{ ipaddr_mask | ansible.utils.ipaddr('address/prefix') }}"
+        gw4: "{{ (net_config | from_yaml)['gw'] }}"
+        dns4:
+          - "{{ (net_config | from_yaml)['dns'] }}"
+
+
+    - name: Set up network connection bridge-slave
+      community.general.nmcli:
+        type: ethernet
+        slave_type: bridge
+        ifname: "{{ (net_config | from_yaml)['interface_name'] }}"
+        master: baremetal
+        method4: disabled
+        conn_name: "{{ (net_config | from_yaml)['interface_name'] }}"
+        state: present
+        autoconnect: true
+
+    - name: Reload NetworkManager connections
+      ansible.builtin.shell: |
+        "nmcli con down  {{ (net_config | from_yaml)['interface_name'] }} &&
+         nmcli con up  {{ (net_config | from_yaml)['interface_name'] }} &&
+         nmcli con up bridge-baremetal && nmcli con up  {{ (net_config | from_yaml)['interface_name'] }}"
+      changed_when: true
+
+    - name: Gather facts
+      ansible.builtin.gather_facts:
+
+    - name: Configure secondary interface bridges
+      when: item.value.ifname in ansible_facts.interfaces
+      loop: "{{ seconday_networks | from_yaml | dict2items }}"
+      community.general.nmcli:
+        type: bridge
+        conn_name: "{{ item.key }}"
+        method4: manual
+        method6: disabled
+        state: present
+        stp: false
+        ifname: "{{ item.key }}"
+        autoconnect: true
+        ip4: "{{ item.value.ipv4 }}"
+
+    - name: Configure vlan interfaces
+      when: item.value.ifname in ansible_facts.interfaces
+      loop: "{{ seconday_networks | from_yaml | dict2items }}"
+      community.general.nmcli:
+        type: vlan
+        conn_name: "vlan{{ item.value.vlan }}"
+        state: present
+        ifname: "vlan{{ item.value.vlan }}"
+        autoconnect: true
+        slave_type: bridge
+        vlanid: "{{ item.value.vlan }}"
+        master: "{{ item.key }}"
+        vlandev: "{{ item.value.ifname }}"
+
+    - name: Install virtualization packages
+      ansible.builtin.dnf:
+        name:
+          - qemu-kvm
+          - libvirt
+          - virt-install
+          - virt-viewer
+          - libguestfs-tools-c
+        state: present
+
+    - name: Add the user to libvirt group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: libvirt
+        append: true
+
+    - name: Allow VM management for user - {{ ansible_user }}
+      ansible.builtin.blockinfile:
+        state: present
+        dest: /etc/libvirt/qemu.conf
+        block: |
+          user= "{{ ansible_user }}"
+          group= "{{ ansible_user }}"
+
+    - name: Create libvirt storage under user's directory
+      become: false
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.libvirt/images"
+        recurse: true
+        mode: "0744"
+        state: directory
+
+    - name: Remove libvirt images directory
+      ansible.builtin.file:
+        path: /var/lib/libvirt/images
+        state: absent
+
+    - name: Create a symbolic link for libvirt default storage
+      ansible.builtin.file:
+        src: "/home/{{ ansible_user }}/.libvirt/images"
+        dest: /var/lib/libvirt/images
+        state: link
+
+    - name: Update all dependencies to the latest versions
+      ansible.builtin.package:
+        name: '*'
+        state: latest
+        update_cache: true
+        update_only: true
+
+    - name: Make sure a libvirtd service unit is running
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: libvirtd
+        enabled: true
+
+    - name: Set up authorized_keys
+      become: false
+      ansible.builtin.lineinfile:
+        path: /home/{{ ansible_user }}/.ssh/authorized_keys
+        create: true
+        line: "{{ ssh_public_key }}"
+        mode: "0600"
+
+    - name: Setup RSA key
+      become: false
+      ansible.builtin.copy:
+        content: "{{ ansible_ssh_private_key }}"
+        dest: /home/{{ ansible_user }}/.ssh/id_rsa
+        mode: "0600"
+
+    - name: Setup RSA public key
+      become: false
+      ansible.builtin.copy:
+        content: "{{ ssh_public_key }}"
+        dest: /home/{{ ansible_user }}/.ssh/id_rsa.pub
+        mode: "0600"
+
+  handlers:
+    - name: Remove installation ISO
+      ansible.builtin.file:
+        path: /opt/http_store/data/{{ hostvars['bastion']['iso_name'] }}"
+        state: absent

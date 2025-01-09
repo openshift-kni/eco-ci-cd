@@ -5,3 +5,4 @@ skip_list:
 # Define paths or files to ignore
 exclude_paths:
   - "tests/dast"
+  - "collections"

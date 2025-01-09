@@ -1,0 +1,7 @@
+.idea
+*host_vars*
+*group_vars*
+.vscode
+inventory*
+*__pycache__*
+collections

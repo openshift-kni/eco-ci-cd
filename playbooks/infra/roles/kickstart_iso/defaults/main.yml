@@ -1,0 +1,7 @@
+---
+# defaults file for kickstart_iso
+kickstart_iso_dest_dir: "/tmp"
+kickstart_iso_mount_path: "/tmp/mount"
+kickstart_iso_os_install_path: "/tmp/os-install"
+kickstart_iso_name: "installation.iso"
+kickstart_iso_link: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-41-1.4.iso"

@@ -1,0 +1,25 @@
+---
+# handlers file for kickstart_iso
+- name: Remove mount directory {{ kickstart_iso_mount_path }}
+  become: true
+  ansible.builtin.file:
+    state: absent
+    path: "{{ kickstart_iso_mount_path }}"
+
+- name: Remove working directory
+  become: true
+  ansible.builtin.file:
+    state: absent
+    path: "{{ kickstart_iso_os_install_path }}"
+
+- name: Remove installation ISO from {{ kickstart_iso_dest_dir }}
+  become: true
+  ansible.builtin.file:
+    state: absent
+    path: "{{ kickstart_iso_dest_dir }}/{{ kickstart_iso_name }}"
+
+- name: "Remove ISO from {{ kickstart_iso_dest_dir }}"
+  become: true
+  ansible.builtin.file:
+    state: absent
+    path: "{{ kickstart_iso_dest_dir }}/{{ kickstart_iso_link | basename }}"

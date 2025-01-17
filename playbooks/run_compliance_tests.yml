@@ -2,8 +2,8 @@
   hosts: robot
   gather_facts: true
   vars:
-    eco_validation_repo: https://github.com/openshift-kni/eco-validation
-    eco_validation_repo_version: "{{ omit }}" # default to latest
+    eco_validation_repo: https://github.com/nocturnalastro/eco-validation
+    eco_validation_repo_version: "o2ims_compliance_tests"
   tasks:
     - name: Clone eco-validation
       ansible.builtin.git:

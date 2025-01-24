@@ -1,0 +1,3 @@
+---
+# defaults file for ocp_version
+ocp_version_facts_release: '4.17'

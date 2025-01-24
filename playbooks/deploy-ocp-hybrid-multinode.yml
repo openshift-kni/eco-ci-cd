@@ -1,0 +1,199 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# This Ansible playbook is designed for deploying an OpenShift cluster.
+# It includes various roles and tasks necessary to configure a bastion host,
+# deploy virtual machines (VMs), and boot bare-metal (BM) and VM nodes.
+# The playbook also sets up dependencies, generates manifests, and monitors the installation process.
+
+## Overview:
+# This playbook automates the process of deploying ocp cluster. It includes:
+# - Bastion host setup: Installs required dependencies and extracts OpenShift installer.
+# - OCP version facts: Retrieves OpenShift release information.
+# - HTTP storage setup: Configures HTTP-based storage for required artifacts.
+# - Virtual control plane setup: Enables necessary repositories and configures sushy tools.
+# - VM and BM booting: Deploys instances and boots nodes using an agent-based installer.
+# - Installation monitoring: Ensures the installation process completes successfully.
+
+## Prerequisites:
+# - Ansible 2.10+ installed on the control node.
+# - Ansible control node configured with necessary permissions.
+# - SSH Access to hypervisors hosts.
+# - SSH Access to bastion hosts.
+# - ocp version of link to ocp release
+# - pre-configured hosts_vars and grup_vars directories
+
+## Roles Requirements
+# The playbook uses role:
+# - redhatci.ocp.create_vms: Creates VMs on given hypervisor.
+
+# Required Roles:
+# The playbook uses roles:
+# - ocp_version_facts
+# - redhatci.ocp.setup_http_store
+# - ocp_client
+# - redhatci.ocp.extract_openshift_installer
+# - redhatci.ocp.generate_manifests
+# - redhatci.ocp.generate_agent_iso
+# - redhatci.ocp.process_kvm_nodes
+# - redhatci.ocp.setup_sushy_tools
+# - redhatci.ocp.destroy_vms
+# - redhatci.ocp.create_vms
+# - redhatci.ocp.boot_iso
+# - redhatci.ocp.monitor_agent_based_installer
+
+## Usage:
+# - Ensure all required variables are defined in the inventory or host_vars/group_vars.
+# - Execute the playbook using Ansible's command-line tool:
+#
+#   Deploy latest 4.17
+#     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml --extra-vars 'release=4.17'
+#   Deploy specific release from link:
+#     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml
+#       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.15.44-x86_64'
+#   Deploy specific version:
+#     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml --extra-vars 'release=4.17.9'
+#
+# Notes:
+# - This playbook assumes the hypervisor and bastion hosts are pre-installed and ready.
+# - Test in a non-production environment before deploying.
+---
+- name: Setup bastion environment and generate manifests for cluster deployment
+  hosts: bastion
+  vars:
+    release: "4.17"
+  tasks:
+
+    - name: Set openshift-installer path fact
+      ansible.builtin.set_fact:
+        openshift_installer_extract_dest_path: "{{ dest_iso_dir }}/wip/extract"
+
+    - name: Install dependencies required for the installer
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - nmstate
+        state: present
+
+    - name: Ensure firewalld is running
+      become: true
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+
+    # The role below sets follwing facts. Please note values are just examples
+    # ocp_version_facts_pull_spec: quay.io/openshift-release-dev/ocp-release:4.15.44-x86_64
+    # ocp_version_facts_parsed_release: "4.15.44"
+    # ocp_version_facts_major: "4"
+    # ocp_version_facts_minor: "15"
+    # ocp_version_facts_oc_client_pull_link:
+    #   "https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/4.15.44/openshift-client-linux-4.15.44.tar.gz"
+    # ocp_version_facts_z_stream: "44"
+    # ocp_version_facts_dev_version: "rc1"
+    - name: Set OCP version facts
+      ansible.builtin.import_role:
+        name: ocp_version_facts
+      vars:
+        ocp_version_facts_release: "{{ release }}"
+
+    - name: Setup HTTP storage
+      ansible.builtin.import_role:
+        name: redhatci.ocp.setup_http_store
+
+    - name: Deploy/Redeploy OCP client
+      ansible.builtin.import_role:
+        name: oc_client_install
+      vars:
+        oc_client_install_url: "{{ ocp_version_facts_oc_client_pull_link }}"
+        oc_client_install_archive_dest_dir: "{{ dest_iso_dir }}"
+
+    - name: Download and extract OCP installer
+      ansible.builtin.import_role:
+        name: redhatci.ocp.extract_openshift_installer
+      vars:
+        openshift_version: "{{ ocp_version_facts_parsed_release }}"
+        release_image: "{{ ocp_version_facts_pull_spec }}"
+        extract_dest_path: "{{ openshift_installer_extract_dest_path }}"
+
+    - name: Generate deployment manifests for OCP installation
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_manifests
+
+    - name: Generate boot ISO for agent-based installer
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_agent_iso
+      vars:
+        gai_cluster_name: "{{ cluster_name }}"
+        gai_repo_root_path: "{{ repo_root_path }}"
+        gai_pull_secret: "{{ pull_secret }}"
+        gai_agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
+        gai_discovery_iso_name: "agent.iso"
+        gai_remote_http_src: true
+        gai_http_delegate_host: "{{ inventory_hostname }}"
+
+    - name: Process KVM nodes to set facts
+      ansible.builtin.import_role:
+        name: redhatci.ocp.process_kvm_nodes
+
+- name: Setup Virtual Control Plane
+  hosts: vm_hosts
+  tasks:
+
+    - name: Enable CRB repository
+      become: true
+      ansible.builtin.command: "dnf config-manager --enable rhosp-rhel-9.4-crb"
+      changed_when: false
+
+    - name: Setup sushy tool to emulate OOB interface
+      ansible.builtin.import_role:
+        name: redhatci.ocp.setup_sushy_tools
+      vars:
+        cert_state: "QE"
+        cert_locality: TLV
+        cert_organization: RH
+        cert_country: US
+        cert_organizational_unit: QE
+        fetched_dest: "/tmp/artifacts"
+
+    - name: Destroy pre-installed VMs
+      ansible.builtin.import_role:
+        name: redhatci.ocp.destroy_vms
+
+    - name: Create VMs
+      ansible.builtin.import_role:
+        name: redhatci.ocp.create_vms
+
+- name: Boot Bare-Metal Nodes
+  hosts: workers
+  gather_facts: false
+  tasks:
+    - name: Boot ISO
+      ansible.builtin.import_role:
+        name: redhatci.ocp.boot_iso
+      vars:
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}/{{ agent_iso_name }}"
+
+- name: Boot Virtual Machines
+  hosts: masters
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Boot ISO
+      ansible.builtin.import_role:
+        name: redhatci.ocp.boot_iso
+      vars:
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}/{{ agent_iso_name }}"
+
+- name: Monitor installation process of agent-based installer
+  hosts: bastion
+  gather_facts: false
+  tasks:
+
+    - name: Monitor agent based installation
+      ansible.builtin.import_role:
+        name: redhatci.ocp.monitor_agent_based_installer
+      vars:
+        agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
+        mabi_retry_install_complete_check: true

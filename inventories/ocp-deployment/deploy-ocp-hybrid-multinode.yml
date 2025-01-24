@@ -1,0 +1,28 @@
+nodes:
+    children:
+        masters:
+        workers:
+
+masters:
+    hosts:
+        master0:
+        master1:
+        master2:
+
+workers:
+    hosts:
+        worker0:
+        worker1:
+        worker2:
+
+bastions:
+    hosts:
+        bastion:
+
+hypervisors:
+    hosts:
+        hypervisor:
+
+vm_hosts:
+    children:
+        hypervisors:

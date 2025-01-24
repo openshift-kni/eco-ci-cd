@@ -1,0 +1,19 @@
+---
+# handlers file for oc_client_install
+- name: Delete openshift-client-linux.tar.gz
+  ansible.builtin.file:
+    state: absent
+    path: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+
+- name: Delete checksum file
+  ansible.builtin.file:
+    state: absent
+    path: "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+
+- name: Delete oc and kubectl binaries from temp directory
+  ansible.builtin.file:
+    path: "{{ oc_client_install_archive_dest_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - "oc"
+    - "kubectl"

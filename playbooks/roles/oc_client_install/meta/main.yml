@@ -1,0 +1,16 @@
+galaxy_info:
+  author: Nikita Kononov
+  description: >
+    This Ansible role automates the installation and management of the OpenShift Client (`oc`). It verifies if the client is installed,
+    removes any existing versions, and deploys the latest specified version.
+     **Disclaimer:** This role is provided as-is, without any guarantees of support or maintenance.
+  company: Red Hat
+  license: Apache-2.0
+  standalone: true
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - oc
+    - occlient
+    - ocinstallation
+
+dependencies: []

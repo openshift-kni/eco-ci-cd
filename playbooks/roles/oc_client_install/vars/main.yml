@@ -1,0 +1,4 @@
+---
+# vars file for oc_client_install
+oc_client_install_archive_name: openshift-client-linux.tar.gz
+checksum_file_name: sha256sum.txt

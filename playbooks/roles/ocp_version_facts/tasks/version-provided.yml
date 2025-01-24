@@ -1,0 +1,22 @@
+---
+- name: Fetch data from JSON API
+  ansible.builtin.uri:
+    url: "{{ ocp_version_facts_link }}"
+    return_content: true
+  register: api_response
+
+- name: Process query
+  ansible.builtin.set_fact:
+    ocp_version_facts_query: >
+      {{ api_response.json.tags
+        | selectattr('name', 'search', ocp_version_facts_release)
+        | selectattr('phase', 'equalto', 'Accepted')
+        | list
+        | first }}
+
+- name: Set ocp_version_facts_pull_spec,ocp_version_facts_parsed_release and ocp_version_facts_oc_client_pull_link facts
+  ansible.builtin.set_fact:
+    ocp_version_facts_pull_spec: "{{ ocp_version_facts_query.pullSpec }}"
+    ocp_version_facts_parsed_release: "{{ ocp_version_facts_query.name }}"
+    ocp_version_facts_oc_client_pull_link:
+      "{{ ocp_version_facts_query.downloadURL }}/{{ ocp_version_facts_client_prefix }}{{ ocp_version_facts_query.name }}.tar.gz"

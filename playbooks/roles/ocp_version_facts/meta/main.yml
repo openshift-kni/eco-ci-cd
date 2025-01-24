@@ -1,0 +1,16 @@
+galaxy_info:
+  author: Nikita Kononov
+  description: >
+    Ansible role is responsible for managing and setting OpenShift Container Platform (OCP) version-related facts.
+    It ensures that necessary version information is properly parsed, validated, and available for further automation tasks.
+     **Disclaimer:** This role is provided as-is, without any guarantees of support or maintenance.
+  company: Red Hat
+  license: Apache-2.0
+  standalone: true
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - ocp
+    - facts
+    - version
+    - ocpversion
+dependencies: []

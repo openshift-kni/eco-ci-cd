@@ -340,6 +340,14 @@
         dest: /home/{{ ansible_user }}/.ssh/id_rsa.pub
         mode: "0600"
 
+    - name: Ensure packages are installed
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - java
+        - podman
+
   handlers:
     - name: Remove installation ISO
       ansible.builtin.file:

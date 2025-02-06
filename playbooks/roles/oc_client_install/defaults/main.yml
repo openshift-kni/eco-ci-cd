@@ -1,0 +1,3 @@
+---
+# defaults file for oc_client_install
+oc_client_install_archive_dest_dir: /tmp

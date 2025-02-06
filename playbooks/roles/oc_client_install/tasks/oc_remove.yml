@@ -1,0 +1,21 @@
+---
+- name: Search for 'oc' binaries
+  become: true
+  ansible.builtin.find:
+    paths:
+      - /usr/local/bin
+      - /usr/bin
+      - /opt/bin
+      - /home/{{ ansible_user }}/.local/bin
+      - /tmp
+    patterns: 'oc'
+    file_type: file
+    follow: true
+  register: oc_binaries
+
+- name: Remove existing oc binary
+  become: true
+  ansible.builtin.file:
+    state: absent
+    path: "{{ item }}"
+  loop: "{{ oc_binaries.files | map(attribute='path') | list }}"

@@ -1,0 +1,13 @@
+---
+- name: Set pull spec
+  ansible.builtin.set_fact:
+    ocp_version_facts_pull_spec: "{{ ocp_version_facts_release }}"
+
+- name: Grab version from pull spec
+  ansible.builtin.set_fact:
+    ocp_version_facts_parsed_release: "{{ ocp_version_facts_pull_spec | regex_search('ocp-release:([0-9]+\\.[0-9]+\\.[0-9]+)', '\\1') | first }}"
+
+- name: Setup oc client pull link
+  ansible.builtin.set_fact:
+    ocp_version_facts_oc_client_pull_link: "{{ ocp_version_facts_artifacts_link }}/{{ ocp_version_facts_parsed_release }}/\
+      {{ ocp_version_facts_client_prefix }}{{ ocp_version_facts_parsed_release }}.tar.gz"

@@ -1,0 +1,85 @@
+- name: Make a request to trigger tools extraction
+  ansible.builtin.uri:
+    url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}"
+    return_content: true
+
+- name: Remove OC client archive and checksum file if exist
+  ansible.builtin.file:
+    state: absent
+    path: "{{ item }}"
+  loop:
+    - "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+    - "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+
+- name: Download checksum file
+  register: download_result
+  until: download_result is not failed
+  retries: 60
+  delay: 10
+  notify: "Delete checksum file"
+  ansible.builtin.get_url:
+    url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}/{{ checksum_file_name }}"
+    dest: "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+    mode: '0640'
+
+- name: Read checksum file and store content in data variable
+  ansible.builtin.command: "cat {{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+  changed_when: false
+  register: data
+
+- name: Print client's archive sha256
+  vars:
+    checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
+  ansible.builtin.debug:
+    msg: "sha256:{{ checksum[0].split(' ')[0] }}"
+
+- name: Download openshift-client-linux.tar.gz
+  register: download_result
+  until: download_result is not failed
+  retries: 60
+  delay: 10
+  notify: "Delete openshift-client-linux.tar.gz"
+  vars:
+    checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
+  ansible.builtin.get_url:
+    url: "{{ oc_client_install_url }}"
+    dest: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+    mode: '0640'
+    checksum: "sha256:{{ checksum[0].split(' ')[0] }}"
+
+- name: Extract archive
+  ansible.builtin.unarchive:
+    src: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+    dest: "{{ oc_client_install_archive_dest_dir }}"
+    remote_src: true
+
+- name: Ensure user's .local/bin directory exists
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ansible_env.HOME }}/.local"
+    - "{{ ansible_env.HOME }}/.local/bin"
+
+- name: Move oc and kubectl binaries to user's .local/bin
+  notify: "Delete oc and kubectl binaries from temp directory"
+  ansible.builtin.copy:
+    src: "{{ oc_client_install_archive_dest_dir }}/{{ item }}"
+    dest: "{{ ansible_env.HOME }}/.local/bin/{{ item }}"
+    mode: '0774'
+    remote_src: true
+  loop:
+    - "oc"
+    - "kubectl"
+
+- name: Verify 'oc' binary by running 'oc version'
+  ansible.builtin.command: oc version
+  register: oc_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Fail if 'oc' binary is missing or not executable
+  when: oc_check.rc != 0
+  ansible.builtin.fail:
+    msg: "'oc' binary is missing or not executable!"

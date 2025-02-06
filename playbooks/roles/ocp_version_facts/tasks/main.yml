@@ -1,0 +1,48 @@
+---
+# tasks file for ocp_version
+- name: Set facts for provided pull spec
+  when: ocp_version_facts_release | length > 7
+  ansible.builtin.include_tasks:
+    file: ./pull-spec-provided.yml
+
+- name: Set facts for short release version
+  when: ocp_version_facts_release | length <= 7
+  ansible.builtin.include_tasks:
+    file: ./version-provided.yml
+
+- name: Set major/minor/z_stream versions
+  ansible.builtin.set_fact:
+    ocp_version_facts_major: "{{ ocp_version_facts_parsed_release.split('.')[0] }}"
+    ocp_version_facts_minor: "{{ ocp_version_facts_parsed_release.split('.')[1] }}"
+    ocp_version_facts_z_stream: "{{ ocp_version_facts_parsed_release.split('.')[2] }}"
+
+- name: Set dev version if present and remove z-stream
+  when: '"0-" in ocp_version_facts_parsed_release.split(".")[2]'
+  ansible.builtin.set_fact:
+    ocp_version_facts_dev_version: "{{ ocp_version_facts_parsed_release.split('.')[2] + '.' + ocp_version_facts_parsed_release.split('.')[3] }}"
+    ocp_version_facts_z_stream: null
+
+- name: Assert that all required facts are configured
+  ansible.builtin.assert:
+    that:
+      - ocp_version_facts_pull_spec is defined
+      - ocp_version_facts_parsed_release is defined
+      - ocp_version_facts_major is defined
+      - ocp_version_facts_minor is defined
+      - ocp_version_facts_oc_client_pull_link is defined
+      - ocp_version_facts_dev_version is defined or ocp_version_facts_z_stream is defined
+    fail_msg: "One or more required facts are missing"
+    success_msg: "All required facts are configured"
+
+- name: Display ocp_version_facts
+  when: (vars[item] is defined) and (vars[item] is not none)
+  loop:
+    - ocp_version_facts_pull_spec
+    - ocp_version_facts_parsed_release
+    - ocp_version_facts_major
+    - ocp_version_facts_minor
+    - ocp_version_facts_oc_client_pull_link
+    - ocp_version_facts_dev_version
+    - ocp_version_facts_z_stream
+  ansible.builtin.debug:
+    msg: "{{ item }}: {{ lookup('vars', item) }}"

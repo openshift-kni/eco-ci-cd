@@ -1,0 +1,25 @@
+---
+- name: Verify that oc_client_install_url var is defined
+  ansible.builtin.assert:
+    that:
+      - oc_client_install_url is defined
+    fail_msg: "Please provide oc_client_install_url variable to role"
+
+- name: Install dependencies
+  become: true
+  ansible.builtin.dnf:
+    name: unzip
+    state: present
+
+- name: Check if oc is installed
+  ansible.builtin.command: which oc
+  changed_when: false
+  failed_when: oc_installed.rc not in [0,1]
+  register: oc_installed
+
+- name: Remove pre-existing oc client
+  ansible.builtin.include_tasks: oc_remove.yml
+  when: oc_installed.rc in [ 0 ]
+
+- name: Deploy oc client
+  ansible.builtin.include_tasks: oc_install.yml

@@ -89,19 +89,43 @@
     vm_name: "{{ hostvars['bastion'].vm_name }}"
     vm_disk_name: "{{ vm_name }}_main.qcow2"
     libvirtd_disk_path: /var/lib/libvirt/images
-    vm_net_config:
-      network:
-        version: 2
-        ethernets:
-          "{{ hostvars['bastion'].vm_external_interface }}":
-            match:
-              name: "{{ hostvars['bastion'].vm_external_interface }}"
-            addresses:
-              - "{{ hostvars['bastion'].ansible_host }}/{{ hostvars['bastion'].net_prefix }}"
-            gateway4: "{{ hostvars['bastion'].gateway }}"
-            nameservers:
-              addresses: ["{{ hostvars['bastion'].dns }}"]
   tasks:
+
+    - name: Render network configuration
+      ansible.builtin.set_fact:
+        vm_net_config:
+          network:
+            version: 2
+            ethernets:
+              external-connection:
+                match:
+                  name: "{{ hostvars['bastion'].vm_external_interface }}"
+                addresses:
+                  - "{{ hostvars['bastion'].ansible_host }}/{{ hostvars['bastion'].net_prefix }}"
+                gateway4: "{{ hostvars['bastion'].gateway }}"
+                gateway6: "{{ hostvars['bastion'].gateway6 | default(omit) }}"
+                dhcp4: false
+                nameservers:
+                  addresses: ["{{ hostvars['bastion'].dns }}"]
+
+    - name: Append IPv6 to vm_net_config
+      when: hostvars['bastion'].ipv6 is defined
+      ansible.builtin.set_fact:
+        vm_net_config: >-
+          {{
+            vm_net_config | combine(
+              {
+                'network': {
+                  'ethernets': {
+                    'external-connection': {
+                      'addresses': (vm_net_config.network.ethernets['external-connection'].addresses + [hostvars['bastion'].ipv6])
+                    }
+                  }
+                }
+              },
+              recursive=True
+            )
+          }}
 
     - name: Gather VM qcow image
       ansible.builtin.get_url:
@@ -240,6 +264,11 @@
         name: "{{ hostname }}"
       become: true
 
+    - name: Rename external connection
+      become: true
+      ansible.builtin.command: nmcli connection modify "System external-connection" connection.id external
+      changed_when: false
+
     - name: Ensure epel repo present
       ansible.builtin.dnf:
         name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
@@ -255,5 +284,6 @@
           - firewalld
           - podman
           - tmux
+          - java
         state: present
       become: true

@@ -60,15 +60,50 @@
 # - This playbook assumes the hypervisor and bastion hosts are pre-installed and ready.
 # - Test in a non-production environment before deploying.
 ---
+- name: Render nodes variables
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    - name: Render nodes variables
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        network_config: "{{ network_config_string | from_yaml }}"
+        mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
+
+- name: Render masters variables
+  hosts: masters
+  gather_facts: false
+  tasks:
+    - name: Render masters variables
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        network_interfaces: "{{ network_interfaces_string | from_yaml }}"
+
 - name: Setup bastion environment and generate manifests for cluster deployment
   hosts: bastion
   vars:
     release: "4.17"
+    pull_secret: "{{ pull_secret_string | b64decode }}"
   tasks:
+
+    - name: Render bastion variables
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        extra_cluster_networks: "{{ extra_cluster_networks_string | from_yaml }}"
+        extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
+        extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
+        api_vips: "{{ api_vips_string | from_yaml }}"
+        ingress_vips: "{{ ingress_vips_string | from_yaml }}"
 
     - name: Set openshift-installer path fact
       ansible.builtin.set_fact:
         openshift_installer_extract_dest_path: "{{ dest_iso_dir }}/wip/extract"
+
+    - name: Ensure cluster_name variable is set
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+        fail_msg: "Please provide cluster_name variable to playbook"
 
     - name: Install dependencies required for the installer
       become: true

@@ -34,5 +34,9 @@ WORKDIR /tmp/telco-dast-qe
 RUN mkdir -p /.local \
     && useradd podman \
     && chown podman:podman -R /.local \
-    && chmod 777 /.local
+    && chmod 777 /.local \
+    && echo podman:10000:1000 > /etc/subuid \
+    && echo podman:10000:1000 > /etc/subgid \
+    && mkdir -p /home/podman \
+    && chown podman:podman -R /home/podman
 USER podman

@@ -185,13 +185,15 @@
         type: bridge
         conn_name: bridge-baremetal
         method4: manual
-        method6: disabled
+        method6: "{{ 'manual' if (net_config | from_yaml)['ip6'] is defined else 'disabled' }}"
         state: present
         stp: false
         ifname: baremetal
         autoconnect: true
         ip4: "{{ ipaddr_mask | ansible.utils.ipaddr('address/prefix') }}"
         gw4: "{{ (net_config | from_yaml)['gw'] }}"
+        ip6: "{{ (net_config | from_yaml)['ip6'] | default(omit) }}"
+        gw6: "{{ (net_config | from_yaml)['gw6'] | default(omit) }}"
         dns4:
           - "{{ (net_config | from_yaml)['dns'] }}"
 
@@ -227,13 +229,14 @@
           community.general.nmcli:
             type: bridge
             conn_name: "{{ item.key }}"
-            method4: manual
-            method6: disabled
+            method4: "{{ 'manual' if item.value.ipv4 is defined else 'disabled' }}"
+            method6: "{{ 'manual' if item.value.ipv6 is defined else 'disabled' }}"
             state: present
             stp: false
             ifname: "{{ item.key }}"
             autoconnect: true
-            ip4: "{{ item.value.ipv4 }}"
+            ip4: "{{ item.value.ipv4 | default(omit) }}"
+            ip6: "{{ item.value.ipv6 | default(omit) }}"
 
         - name: Set up network connection bridge-slave for secondary connection
           when: item.value.vlan is not defined

@@ -92,7 +92,7 @@
 ## Running the Playbook
 # Ensure that host_vars and group_vars are properly installed.
 # Execute the playbook with the following command:
-# ansible-playbook playbooks/infra/deploy-vm-bastion-libvirt.yml -i ./inventories/infra/deploy-bm-hypervisor.yml
+# ansible-playbook playbooks/infra/deploy-bm-hypervisor.yml -i ./inventories/infra/deploy-bm-hypervisor.yml
 ---
 - name: Create a Kickstart-enabled ISO
   hosts: bastion

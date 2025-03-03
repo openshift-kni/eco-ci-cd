@@ -2,3 +2,4 @@
 # vars file for oc_client_install
 oc_client_install_archive_name: openshift-client-linux.tar.gz
 checksum_file_name: sha256sum.txt
+mirror_url: https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp

@@ -1,8 +1,3 @@
-- name: Make a request to trigger tools extraction
-  ansible.builtin.uri:
-    url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}"
-    return_content: true
-
 - name: Remove OC client archive and checksum file if exist
   ansible.builtin.file:
     state: absent
@@ -11,41 +6,78 @@
     - "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
     - "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
 
-- name: Download checksum file
-  register: download_result
-  until: download_result is not failed
-  retries: 60
-  delay: 10
-  notify: "Delete checksum file"
-  ansible.builtin.get_url:
-    url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}/{{ checksum_file_name }}"
-    dest: "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
-    mode: '0640'
+- name: Deploy OC client
+  block:
+    - name: Try to download checksum file from mirror
+      register: download_result
+      until: download_result is not failed
+      retries: 3
+      delay: 5
+      notify: "Delete checksum file"
+      ansible.builtin.get_url:
+        url: "{{ mirror_url }}/{{ oc_clinet_install_version }}/{{ checksum_file_name }}"
+        dest: "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+        mode: '0640'
 
-- name: Read checksum file and store content in data variable
-  ansible.builtin.command: "cat {{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
-  changed_when: false
-  register: data
+    - name: Read checksum file and store content in data variable
+      ansible.builtin.command: "cat {{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+      changed_when: false
+      register: data
+
+    - name: Download openshift-client-linux.tar.gz from mirror
+      register: download_result
+      until: download_result is not failed
+      retries: 3
+      delay: 5
+      notify: "Delete openshift-client-linux.tar.gz"
+      vars:
+        checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
+      ansible.builtin.get_url:
+        url: "{{ mirror_url }}/{{ oc_clinet_install_version }}/openshift-client-linux-{{ oc_clinet_install_version }}.tar.gz"
+        dest: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+        mode: '0640'
+        checksum: "sha256:{{ checksum[0].split(' ')[0] }}"
+
+  rescue:
+    - name: Make a request to trigger tools extraction
+      ansible.builtin.uri:
+        url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}"
+
+    - name: Download checksum file
+      register: download_result
+      until: download_result is not failed
+      retries: 60
+      delay: 10
+      notify: "Delete checksum file"
+      ansible.builtin.get_url:
+        url: "{{ oc_client_install_url.split('/')[:-1] | join('/') }}/{{ checksum_file_name }}"
+        dest: "{{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+        mode: '0640'
+
+    - name: Read checksum file and store content in data variable
+      ansible.builtin.command: "cat {{ oc_client_install_archive_dest_dir }}/{{ checksum_file_name }}"
+      changed_when: false
+      register: data
+
+    - name: Download openshift-client-linux.tar.gz
+      register: download_result
+      until: download_result is not failed
+      retries: 60
+      delay: 10
+      notify: "Delete openshift-client-linux.tar.gz"
+      vars:
+        checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
+      ansible.builtin.get_url:
+        url: "{{ oc_client_install_url }}"
+        dest: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
+        mode: '0640'
+        checksum: "sha256:{{ checksum[0].split(' ')[0] }}"
 
 - name: Print client's archive sha256
   vars:
     checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
   ansible.builtin.debug:
     msg: "sha256:{{ checksum[0].split(' ')[0] }}"
-
-- name: Download openshift-client-linux.tar.gz
-  register: download_result
-  until: download_result is not failed
-  retries: 60
-  delay: 10
-  notify: "Delete openshift-client-linux.tar.gz"
-  vars:
-    checksum: "{{ data.stdout_lines | select('match', '.*' ~ oc_client_install_url.split('/')[-1] ~ '$') }}"
-  ansible.builtin.get_url:
-    url: "{{ oc_client_install_url }}"
-    dest: "{{ oc_client_install_archive_dest_dir }}/{{ oc_client_install_archive_name }}"
-    mode: '0640'
-    checksum: "sha256:{{ checksum[0].split(' ')[0] }}"
 
 - name: Extract archive
   ansible.builtin.unarchive:

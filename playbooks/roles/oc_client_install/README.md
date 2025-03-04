@@ -11,7 +11,7 @@ This Ansible role automates the installation and management of the OpenShift Cli
 - Verifies if the `oc_client_install_url` variable is provided.
 - Checks if `oc` is already installed.
 - Removes existing `oc` binary if found.
-- Downloads and installs the `oc` client from the specified source.
+- Downloads and installs the `oc` client either from mirror or from the specified source.
 - Ensures proper directory structure for the `oc` binary.
 - Moves both `oc` and `kubectl` binaries to the user's `.local/bin` directory.
 - Verifies the installation by running `oc version`.
@@ -31,6 +31,7 @@ This Ansible role automates the installation and management of the OpenShift Cli
 | `oc_client_install_url` | URL to download the OpenShift client archive (Required) |yes|
 | `oc_client_install_archive_dest_dir` | Directory where the archive will be stored |no|
 | `oc_client_install_archive_name` | Name of the downloaded archive file |no|
+| `oc_clinet_install_version` | Specifies the OC client version used for retrieving the archive from the mirror link |no|
 
 ### Usage
 Include this role in your playbook as follows:
@@ -67,7 +68,7 @@ Include this role in your playbook as follows:
    Ensures any previously downloaded archive is removed before downloading.
 
 3. **Download OpenShift Client Archive**  
-   Fetches the `openshift-client-linux.tar.gz` file from the given URL.
+   Fetches the `openshift-client-linux.tar.gz` file either from the mirror or from the given URL.
 
 4. **Extract Archive**  
    Unpacks the downloaded archive.
@@ -103,7 +104,19 @@ None.
       vars:
         oc_client_install_url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/openshift-client-linux.tar.gz"
 ```
-
+Example of getting client from the mirror first:
+```yaml
+- hosts: localhost
+  gather_facts: no
+  roles:
+    - name: Deploy/Redeploy OCP client
+      ansible.builtin.import_role:
+        name: oc_client_install
+      vars:
+        oc_client_install_url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/"
+        oc_client_install_archive_dest_dir: "/tmp/client"
+        oc_clinet_install_version: "4.17.10"
+```
 ### License
 Apache
 

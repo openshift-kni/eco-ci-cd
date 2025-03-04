@@ -143,6 +143,7 @@
       vars:
         oc_client_install_url: "{{ ocp_version_facts_oc_client_pull_link }}"
         oc_client_install_archive_dest_dir: "{{ dest_iso_dir }}"
+        oc_clinet_install_version: "{{ ocp_version_facts_parsed_release }}"
 
     - name: Download and extract OCP installer
       ansible.builtin.import_role:

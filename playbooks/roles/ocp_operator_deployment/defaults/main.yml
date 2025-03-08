@@ -1,0 +1,5 @@
+---
+# defaults file for ocp_operator_deployment
+ocp_operator_deployment_default_label:
+  workload.openshift.io/allowed: management
+ocp_operator_deployment_catalog_source_ns: openshift-marketplace

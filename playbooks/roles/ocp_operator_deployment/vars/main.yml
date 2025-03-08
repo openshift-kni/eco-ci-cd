@@ -1,0 +1,6 @@
+---
+# vars file for ocp_operator_deployment
+stage: redhat-operators-stage
+prod: redhat-operators
+pre_ga: redhat-operators-pre-ga
+brew: redhat-operators-brew

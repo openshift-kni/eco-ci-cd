@@ -1,0 +1,46 @@
+- name: Verify if stage catalog already deployed
+  kubernetes.core.k8s_info:
+    api: operators.coreos.com/v1alpha1
+    namespace: "{{ ocp_operator_deployment_catalog_source_ns }}"
+    kind: CatalogSource
+    name: "{{ item.catalog }}"
+  register: catalog_source
+
+- name: Check if secret exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ ocp_operator_deployment_catalog_source_ns }}"
+    name: "{{ item.catalog }}"
+  register: secret_check
+
+- name: Create catalog source secret if missing
+  when: secret_check.resources | length == 0
+  vars:
+    _secret_definition: |-
+      apiVersion: v1
+      kind: Secret
+      type: kubernetes.io/dockerconfigjson
+      metadata:
+        name: "{{ item.catalog }}"
+        namespace: "{{ ocp_operator_deployment_catalog_source_ns }}"
+      data:
+        .dockerconfigjson: "{{ ocp_operator_deployment_stage_cs_secret | to_json | b64encode }}"
+  kubernetes.core.k8s:
+    definition: "{{ _secret_definition }}"
+    state: present
+
+- name: Deploy catalog source if not present
+  when: catalog_source.resources | length == 0
+  ansible.builtin.include_role:
+    name: redhatci.ocp.catalog_source
+  vars:
+    cs_name: "{{ item.catalog }}"
+    cs_namespace: "{{ ocp_operator_deployment_catalog_source_ns }}"
+    cs_image: "{{ ocp_operator_deployment_stage_repo_image }}:v{{ ocp_operator_deployment_version }}"
+    cs_publisher: "Red Hat"
+    cs_secrets:
+      - "{{ item.catalog }}"
+    cs_update_strategy:
+      registryPoll:
+        interval: 15m

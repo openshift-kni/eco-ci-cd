@@ -1,0 +1,85 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook automates the deployment of multiple OpenShift operators using
+# the **Operator Lifecycle Manager (OLM)**. It includes tasks to install necessary dependencies,
+# configure variables, and deploy the specified operators into the designated namespaces.
+
+## Prerequisites:
+# - Ansible 2.9+ installed on the control node.
+# - Ansible control node configured with necessary permissions.
+# - SSH Access to bastion hosts.
+# - ocp version of link to operator release version
+# - pre-configured hosts_vars and grup_vars directories
+# - installed openshift cluster
+# - KUBECONFIG file
+
+## Roles Requirements
+# The playbook uses role:
+# - redhatci.ocp.catalog_source
+# - redhatci.ocp.catalog_source
+
+## Usage:
+# - Ensure all required variables are defined in the inventory or host_vars/group_vars.
+# - Execute the playbook using Ansible's command-line tool:
+#
+# ansible-playbook ./playbooks/deploy-ocp-operators.yaml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+# --extra-vars 'kubeconfig="/path/to/kubeconfig" \
+# version="4.16" operators=[
+# {"name":"sriov-network-operator","catalog":"redhat-operators","nsname":"openshift-sriov-network-operator","deploy_default_config":"true"},\
+# {"name":"metallb-operator","catalog":"redhat-operators","nsname":"metallb-system","channel":"stable","og_spec":{},deploy_default_config: "true"}]
+#
+# Notes:
+# - This playbook assumes the OCP cluster and bastion hosts are pre-installed and ready.
+# - Test in a non-production environment before deploying.
+---
+- name: Deploy operator
+  hosts: bastion
+  gather_facts: false
+  # Refer to the variables below as an example.
+  # vars:
+    # version: "4.17"
+    # operators: # Refer as example
+    #   - name: sriov-network-operator
+    #     catalog: redhat-operators-stage
+    #     nsname: openshift-sriov-network-operator
+    #     deploy_default_config: true
+    #   - name: ptp-operator
+    #     catalog: redhat-operators-stage
+    #     nsname: openshift-ptp
+    #     ns_labels:
+    #       workload.openshift.io/allowed: management
+    #       name: openshift-ptp
+    #   - name: kubernetes-nmstate-operator
+    #     catalog: redhat-operators
+    #     nsname: openshift-nmstate
+    #   - name: sriov-fec
+    #     catalog: certified-operators
+    #     nsname: vran-acceleration-operators
+    #     channel: stable
+    #   - name: metallb-operator
+    #     catalog: redhat-operators-stage
+    #     nsname: metallb-system
+    #     channel: stable
+    #     deploy_default_config: true
+    #     og_spec: {}
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes
+          - openshift
+        state: present
+
+    - name: Install Operators
+      ansible.builtin.include_role:
+        name: ocp_operator_deployment
+      vars:
+        ocp_operator_deployment_version: "{{ version }}"
+        ocp_operator_deployment_operators: "{{ operators | from_json }}"
+        ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
+        ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"

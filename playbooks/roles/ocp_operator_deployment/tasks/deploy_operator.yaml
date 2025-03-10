@@ -1,0 +1,34 @@
+---
+- name: Set OperatorGroup spec configuration
+  ansible.builtin.set_fact:
+    operator_group_spec_config: >-
+      {{
+        item.og_spec | default({'targetNamespaces': [item.nsname]})
+      }}
+
+- name: Deploy operator via olm
+  tags:
+    - skip_ansible_lint
+  ansible.builtin.include_role:
+    name: redhatci.ocp.olm_operator
+  vars:
+    operator: "{{ item.name }}"
+    source: "{{ item.catalog }}"
+    namespace: "{{ item.nsname }}"
+    operator_group_name: "{{ item.og_name | default(item.name) }}"
+    channel: "{{ item.channel | default(omit) }}"
+    ns_labels:
+      "{{ item.ns_labels | default(ocp_operator_deployment_default_label) }}"
+    operator_group_spec: "{{ operator_group_spec_config }}"
+    starting_csv: "{{ item.starting_csv | default(omit) }}"
+    install_approval: "{{ item.install_approval | default('Automatic') }}"
+
+- name: Apply default operator configuration if exist
+  kubernetes.core.k8s:
+    template: "{{ role_path }}/templates/{{ item.name }}-config.j2"
+    state: present
+    force: true
+  register: result
+  when:
+    - item.deploy_default_config is defined
+    - item.deploy_default_config

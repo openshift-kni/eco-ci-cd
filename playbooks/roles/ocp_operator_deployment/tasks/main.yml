@@ -1,0 +1,37 @@
+---
+# tasks file for ocp_operator_deployment
+- name: Verify that required variables are present
+  ansible.builtin.assert:
+    that:
+      - ocp_operator_deployment_operators is defined
+      - ocp_operator_deployment_operators | length > 0
+      - ocp_operator_deployment_version is defined
+    fail_msg: Required variables are not set or empty
+
+- name: Verify that stage repo required variables are present
+  loop: "{{ ocp_operator_deployment_operators }}"
+  ansible.builtin.assert:
+    that:
+      - ocp_operator_deployment_stage_repo_image is defined
+      - ocp_operator_deployment_stage_cs_secret is defined
+    fail_msg: Required stage variables are not set
+  when: item.catalog  == stage
+
+- name: Deploy stage CatalogSource
+  ansible.builtin.include_tasks: deploy_stage.yaml
+  loop: "{{ ocp_operator_deployment_operators }}"
+  when: item.catalog  == stage
+
+- name: Deploy pre-ga CatalogSource
+  ansible.builtin.include_tasks: deploy_pre_ga.yaml
+  loop: "{{ ocp_operator_deployment_operators }}"
+  when: item.catalog  == pre_ga
+
+- name: Deploy brew CatalogSource
+  ansible.builtin.include_tasks: deploy_brew.yaml
+  loop: "{{ ocp_operator_deployment_operators }}"
+  when: item.catalog == brew
+
+- name: "Deploy operator"
+  ansible.builtin.include_tasks: deploy_operator.yaml
+  loop: "{{ ocp_operator_deployment_operators }}"

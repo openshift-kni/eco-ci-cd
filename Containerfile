@@ -12,6 +12,7 @@ RUN dnf -y install \
 RUN pip3 install --no-cache-dir \
     ansible \
     ansible-lint \
+    netaddr \
     jmespath
 
 # Copy application files to eco-ci-cd folder

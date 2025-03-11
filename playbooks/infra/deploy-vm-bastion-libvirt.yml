@@ -27,7 +27,7 @@
 ## Usage:
 # - Ensure all required variables are defined in the inventory or host_vars/group_vars.
 # - Execute the playbook using Ansible's command-line tool:
-#   ansible-playbook playbooks/infra/deploy-vm-bastion-libvirt.yml -i ./inventories/infra/deploy-bm-hypervisor.yml
+#   ansible-playbook playbooks/infra/deploy-vm-bastion-libvirt.yml -i ./inventories/infra/deploy-vm-bastion-libvirt.yml
 #
 
 ## Variables Used by Playbook

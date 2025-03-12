@@ -1,0 +1,238 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for CNF Configuration Deployment
+# -------------------------------------------------
+# This playbook automates the deployment of Containerized Network Function (CNF)
+# configurations in an OpenShift cluster. It performs the following key tasks:
+
+# - Gathers cluster network information and extracts OpenShift version details.
+# - Configures and applies additional network settings.
+# - Waits for the network operator to update and ensures its proper progression.
+# - Identifies worker and master nodes and applies appropriate labels.
+# - Configures machine settings and machine config pools (MCP).
+# - Deploys necessary resources and enables required kernel modules.
+# - Ensures MachineConfigPool synchronization after configuration changes.
+
+# Requirements:
+# - OpenShift cluster
+# - Bastion host
+# - Ansible and the kubernetes.core collection installed.
+# - A valid kubeconfig file for cluster authentication.
+
+# Usage:
+# Run this playbook using Ansible:
+# ansible-playbook ./playbooks/deploy-cnf-config.yaml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#  --extra-vars kubeconfig=/path/to/kubeconfig
+
+# Notes:
+# - The playbook conditionally applies configurations based on OpenShift versions.
+# - Some tasks require waiting for network updates to complete.
+# - Templates for machine configurations are expected to be present in the templates/ directory.
+
+- name: Deploy CNF Configuration
+  hosts: bastion
+  gather_facts: false
+  vars:
+    cnf_nodes_role: workercnf
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Gather cluster network information
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: cluster_info
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        ocp_major_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}"
+        ocp_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+        ocp_patch_version: "{{ cluster_info.resources[0].status.version.split('.')[2] }}"
+
+    - name: Define cluster network configuration
+      ansible.builtin.set_fact:
+        cluster_network_patch:
+          - op: add
+            path: /spec/additionalNetworks
+            value:
+              - name: dummy-dhcp-network
+                simpleMacvlanConfig:
+                  ipamConfig:
+                    type: dhcp
+                  master: eth0
+                  mode: bridge
+                  mtu: 1500
+                type: SimpleMacvlan
+          - op: add
+            path: /spec/defaultNetwork/ovnKubernetesConfig/gatewayConfig/routingViaHost
+            value: true
+          - op: add
+            path: /spec/useMultiNetworkPolicy
+            value: true
+
+    - name: Enable IP forwarding for OpenShift versions greater than 4.13
+      when: ocp_minor_version | int > 13
+      ansible.builtin.set_fact:
+        cluster_network_patch: "{{ cluster_network_patch +
+          [{'op': 'add', 'path': '/spec/defaultNetwork/ovnKubernetesConfig/gatewayConfig/ipForwarding', 'value': 'Global'}] }}"
+
+    - name: Apply network configuration changes
+      register: network_update_status
+      kubernetes.core.k8s_json_patch:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+        patch: "{{ cluster_network_patch }}"
+      tags:
+        - skip_ansible_lint
+
+    - name: Wait for network operator update to begin
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: update_progress
+      until: update_progress.resources[0].status.conditions[3].status | bool is true
+      retries: 30
+      delay: 10
+      ignore_errors: true
+      when: network_update_status.changed is true
+      tags:
+        - skip_ansible_lint
+
+    - name: Fail if network operator did not start updating
+      ansible.builtin.fail:
+        msg: "Cluster network operator failed to enter updating state."
+      when:
+        - update_progress is defined
+        - update_progress.failed is true
+
+    - name: Wait for network operator update to complete
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: update_complete
+      until: update_complete.resources[0].status.conditions[3].status | bool is false
+      retries: 60
+      delay: 20
+      ignore_errors: true
+
+    - name: Fail if network operator update is stuck
+      ansible.builtin.fail:
+        msg: "Cluster network operator update did not complete successfully."
+      when: update_complete.failed is true
+
+    - name: Retrieve worker nodes
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - node-role.kubernetes.io/worker
+      register: worker_nodes_info
+      failed_when: worker_nodes_info.resources | length == 0
+
+    - name: Store worker node names
+      ansible.builtin.set_fact:
+        worker_nodes: "{{ worker_nodes_info.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Label first worker node as PTP grandmaster
+      kubernetes.core.k8s:
+        kind: Node
+        name: "{{ worker_nodes[0] }}"
+        state: patched
+        definition:
+          metadata:
+            labels:
+              ptp/grandmaster: ""
+
+    - name: Label remaining worker nodes as PTP slaves
+      kubernetes.core.k8s:
+        kind: Node
+        name: "{{ item }}"
+        state: patched
+        definition:
+          metadata:
+            labels:
+              ptp/slave: ""
+      loop: "{{ worker_nodes[1:] }}"
+
+    - name: Configure machine settings for OpenShift versions < 4.13
+      when: ocp_minor_version | int < 13
+      block:
+        - name: Apply machine configuration for NIC renaming
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('template', 'templates/mc_rename_nic.j2') }}"
+
+        - name: Apply machine configuration for IP assignment
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('template', 'templates/mc_add_ip.j2') }}"
+
+        - name: Wait for MachineConfigPool update
+          ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
+          vars:
+            mcp_name: "{{ cnf_nodes_role }}"
+
+    - name: Deploy Kubernetes resource configuration
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/mc_fec_wa.j2') }}"
+
+    - name: Retrieve master nodes
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - node-role.kubernetes.io/master
+      register: master_nodes_info
+      failed_when: master_nodes_info.resources | length == 0
+
+    - name: Store master node names
+      ansible.builtin.set_fact:
+        master_nodes: "{{ master_nodes_info.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Label worker nodes for CNF role
+      kubernetes.core.k8s:
+        kind: Node
+        name: "{{ item }}"
+        state: patched
+        definition:
+          metadata:
+            labels:
+              node-role.kubernetes.io/workercnf: ""
+      loop: "{{ worker_nodes }}"
+
+    - name: Create CNF MachineConfigPool
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/worker_cnf_machine_config_pool.j2') }}"
+
+    - name: Wait for MachineConfigPool update
+      ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
+      vars:
+        mcp_name: "{{ cnf_nodes_role }}"
+
+    - name: Enable SCTP module
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/sctp_load_mc.j2') }}"
+
+    - name: Wait for MachineConfigPool update
+      ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
+      vars:
+        mcp_name: "{{ cnf_nodes_role }}"
+
+    - name: Enable xt-u32 module
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/xt-u32-load-module.j2') }}"
+
+    - name: Final MachineConfigPool synchronization
+      ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
+      vars:
+        mcp_name: "{{ cnf_nodes_role }}"

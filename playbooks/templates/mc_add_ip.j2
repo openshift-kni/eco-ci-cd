@@ -1,0 +1,25 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: "{{ cnf_nodes_role }}"
+  name: add-interface-ip
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+        - contents: |
+            [Unit]
+            Description=add to interface IP address
+            Wants=network-online.target
+            After=network.target network-online.target
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/bin/bash -c 'nmcli con add con-name STATIC type ethernet ifname con1 ipv4.addr $(/bin/awk \'BEGIN{FS=OFS="."}{$2=$2+1}1\' <<< $(hostname -I | awk \'{print $1}\'))/24 autoconnect true ipv4.method static'
+            [Install]
+            WantedBy=multi-user.target
+          enabled: true
+          name: add-interface-ip.service

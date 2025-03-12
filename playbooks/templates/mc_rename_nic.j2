@@ -1,0 +1,23 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: "{{ cnf_nodes_role }}"
+  name: rename-interface
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+        - contents: |
+            [Unit]
+            Description=rename interface
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/bin/bash -c 'ip link set ens8f1 down && ip link set ens8f1 name con1 && ip link set con1 up'
+            [Install]
+            WantedBy=multi-user.target
+          enabled: true
+          name: rename-interface.service

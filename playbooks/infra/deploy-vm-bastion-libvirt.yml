@@ -175,7 +175,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    ansible_user: "{{ initial_user }}"
+    ansible_user: "{{ ansible_user }}"
     system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
   tasks:
     - name: Wait 1200 seconds for target connection to become reachable/usable

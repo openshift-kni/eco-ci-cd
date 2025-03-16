@@ -352,6 +352,16 @@
         - java
         - podman
 
+    - name: Ensure CA certifications are updated
+      ansible.builtin.get_url:
+        url: https://certs.corp.redhat.com/certs/2022-IT-Root-CA.pem
+        dest: /etc/pki/tls/certs/certificate.crt
+        mode: '0644'
+
+    - name: Update certifications
+      ansible.builtin.command: update-ca-trust
+      changed_when: false
+
   handlers:
     - name: Remove installation ISO
       ansible.builtin.file:

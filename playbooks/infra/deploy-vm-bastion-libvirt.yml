@@ -178,6 +178,13 @@
     ansible_user: "{{ initial_user }}"
     system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
   tasks:
+
+    - name: Uninstall sshpass
+      become: true  
+      ansible.builtin.dnf:
+        name: sshpass
+        state: absent
+
     - name: Wait 1200 seconds for target connection to become reachable/usable
       ansible.builtin.wait_for_connection:
         delay: 30

@@ -171,10 +171,22 @@
             uuid: ""
             vcpu: "{{ hostvars['bastion'].vm_cpu }}"
 
+- name: Set ssh certificate
+  hosts: localhost
+  gather_facts: false
+  tasks:
+
+    - name: Write SSH key to a temporary file
+      ansible.builtin.copy:
+        content: "{{ ansible_ssh_private_key }}"
+        dest: "/tmp/private_key.pem"
+        mode: '0600'
+
 - name: Initial system setup
   hosts: bastion
   gather_facts: false
   vars:
+    ansible_ssh_private_key_file: "/tmp/private_key.pem"
     ansible_user: "{{ initial_user }}"
     system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
   tasks:
@@ -231,6 +243,16 @@
       ansible.builtin.command:
         cmd: partprobe
       changed_when: true
+      notify:
+        - Remove key file
+
+  handlers:
+
+    - name: Remove key file
+      delegate_to: localhost
+      ansible.builtin.file:
+        state: absent
+        path: "/tmp/private_key.pem"
 
 - name: Setup bastion host
   hosts: bastion

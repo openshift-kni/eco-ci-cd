@@ -91,6 +91,18 @@
     libvirtd_disk_path: /var/lib/libvirt/images
   tasks:
 
+    - name: Ensure VM does not already exists
+      become: true
+      ansible.builtin.import_role:
+        name: redhatci.ocp.destroy_vms
+      vars:
+        cluster_name: "dummy"
+        vm_bridge_interface: "dummy"
+        kvm_nodes:
+          - name: "{{ vm_name }}"
+            disks:
+              main: "1"
+
     - name: Render network configuration
       ansible.builtin.set_fact:
         vm_net_config:

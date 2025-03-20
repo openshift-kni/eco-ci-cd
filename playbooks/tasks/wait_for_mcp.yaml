@@ -1,0 +1,54 @@
+---
+- name: Wait until MachineConfigPool cluster gets updating state
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  kubernetes.core.k8s_info:
+    api: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ mcp_name }}"
+  register: mcp_updating_status
+  until: >
+    mcp_updating_status.resources[0].status.conditions
+    | selectattr('type', 'equalto', 'Updating')
+    | map(attribute='status')
+    | list
+    | first
+    | default(false)
+    | bool
+  retries: 2
+  delay: 60
+  ignore_errors: true
+
+- name: Fail if cluster mcp is not in progressing state
+  ansible.builtin.fail:
+    msg: Fail to wait until MachineConfig pool gets progressing state
+  when:
+    - mcp_updating_status is defined
+    - mcp_updating_status.failed is true
+
+- name: Wait until MachineConfigPool cluster gets updating state
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  kubernetes.core.k8s_info:
+    api: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ mcp_name }}"
+  register: mcp_updated_status
+  until: >
+    mcp_updated_status.resources[0].status.conditions
+    | selectattr('type', 'equalto', 'Updated')
+    | map(attribute='status')
+    | list
+    | first
+    | default(false)
+    | bool
+  retries: 30
+  delay: 60
+  ignore_errors: true
+
+- name: Fail if cluster mcp is not in updated state
+  ansible.builtin.fail:
+    msg: Fail to wait until MachineConfig pool gets updated state
+  when:
+    - mcp_updated_status is defined
+    - mcp_updated_status.failed is true

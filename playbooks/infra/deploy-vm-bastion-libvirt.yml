@@ -169,7 +169,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.create_vms
       vars:
-        additional_virt_install_options: "--cloud-init network-config=/tmp/{{ vm_name }}-network.yaml --wait=0"
+        additional_virt_install_options: "--cloud-init network-config=/tmp/{{ vm_name }}-network.yaml --wait=0 \\"
         cluster_name: "dummy"
         vm_bridge_name: default
         images_dir: "{{ libvirtd_disk_path }}"

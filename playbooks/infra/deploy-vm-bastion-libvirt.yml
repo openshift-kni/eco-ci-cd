@@ -328,7 +328,7 @@
         dest: /etc/pki/tls/certs/certificate.crt
         mode: '0644'
 
-    - name: Update certifications
+    - name: Update the CA trust files
       ansible.builtin.command: update-ca-trust
       changed_when: false
       become: true

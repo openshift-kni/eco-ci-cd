@@ -1,0 +1,193 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# ------------------------------------------------------------------------------
+# Ansible Playbook: Configure Jump Host and Switch for OCP Networking
+# ------------------------------------------------------------------------------
+# Description:
+#   This playbook sets up a jump host (bastion) for SSH access to a switch,
+#   then configures VLANs and interfaces on a Juniper switch for an OpenShift
+#   (OCP) cluster deployment.
+
+# Playbook Structure:
+#   1. Configure Jump Host:
+#      - Creates an SSH key for connecting through the bastion host.
+#      - Generates an SSH configuration file for jump host access.
+#   2. Configure Switch:
+#      - Validates required variables.
+#      - Flushes existing port configurations before applying new settings.
+#      - Sets up VLANs, interfaces, and external networking for OCP nodes.
+
+# Prerequisites:
+#   - The `cluster_config` variable must be defined in an inventory or extra vars.
+#     Var example:
+#       cluster_config:
+#         cluster_name:
+#           intel_710:
+#             - switch_interface: Gi-0/1
+#               node_interface: ens2f0
+#               node_mac: "aa:aa:aa:aa:aa:01"
+#               node_name: worker0
+#             - switch_interface: Gi-0/2
+#               node_interface: ens2f0
+#               node_mac: "aa:aa:aa:aa:aa:02"
+#               node_name: worker2
+#             - switch_interface: Gi-0/3
+#             - switch_interface: Gi-0/4
+#               node_interface: ens2f0
+#               node_mac: "aa:aa:aa:aa:aa:03"
+#               node_name: worker1
+#             - switch_interface: Gi-0/5
+#             - switch_interface: Gi-0/6
+#           mlx_cx_6:
+#             - switch_interface: Gi-0/7
+#             - switch_interface: Gi-0/8
+#             - switch_interface: Gi-0/9
+#               node_interface: ens1f0np0
+#               node_mac: "aa:aa:aa:aa:aa:04"
+#               node_name: worker0
+#             - switch_interface: Gi-0/10
+#               node_interface: ens1f0np0
+#               node_mac: "aa:aa:aa:aa:aa:05"
+#               node_name: worker1
+#             - switch_interface: Gi-0/11
+#               node_interface: ens1f0np0
+#               node_mac: "aa:aa:aa:aa:aa:06"
+#               node_name: worker2
+#             - switch_interface: Gi-0/12
+#           ocp_external:
+#             vlan: vlan1
+#           ocp_secondary:
+#             native_vlan: 2
+#             vlans: [vlan2, vlan3]
+#           bm_interface_list:
+#             intel_710: ens2f0,ens2f1
+#             mlx_cx_6: ens1f0np0,ens1f1np1
+#             intel_810: ens3f0,ens3f1
+#   - The `junipernetworks.junos` Ansible collection must be installed.
+#   - A valid SSH connection to the bastion host must be available.
+
+# Variables:
+#   - ocp_nic: Primary NIC type (e.g., intel_710)
+#   - secondary_nic: Secondary NIC type (e.g., intel_810)
+#   - cluster_name: Name of the OCP cluster
+#   - artifact_dest_dir: path to store env var file
+
+- name: Configure jump host for switch connection
+  hosts: localhost
+  tasks:
+
+    - name: Prepare key for bastion
+      ansible.builtin.copy:
+        content: "{{ ansible_ssh_private_key }}"
+        dest: "{{ ansible_env.HOME }}/jump-key"
+        mode: "0600"
+
+    - name: Prepare bastion SSH config file
+      vars:
+        ssh_jump_user: "{{ hostvars['bastion'].ansible_user }}"
+        ssh_jump_ip: "{{ hostvars['bastion'].ansible_host }}"
+        ssh_jump_key: "{{ ansible_env.HOME }}/jump-key"
+      ansible.builtin.template:
+        src: ./templates/ssh_jump/ssh_config.j2
+        dest: "{{ ansible_env.HOME }}/jump-ssh-config"
+        mode: "0600"
+
+- name: Configure switch
+  hosts: switch
+  gather_facts: false
+  vars:
+    switch_external_interface: []
+    shell_script: "#!/bin/bash"
+    artifact_dest_dir: /tmp
+  tasks:
+    - name: Assert required variables are defined
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+          - ocp_nic is defined
+          - secondary_nic is defined
+          - ocp_nic != secondary_nic
+
+    - name: Set cluster_config fact
+      ansible.builtin.set_fact:
+        cluster_config: "{{ cluster_config | from_yaml }}"
+
+    - name: Prepare OCP external interface
+      ansible.builtin.set_fact:
+        switch_external_interface: "{{ switch_external_interface + [item.switch_interface] }}"
+        shell_script: |
+          {{ shell_script }}
+          export {{ item.node_name }}_EXTERNAL_INTERFACE="{{ item.node_interface | quote }}"
+          export {{ item.node_name }}_MAC_ADDRESS="{{ item.node_mac | quote }}"
+      when: item.node_interface is defined
+      loop: "{{ cluster_config[cluster_name][ocp_nic] | default([]) }}"
+
+    - name: Set native VLAN
+      ansible.builtin.set_fact:
+        secondary_native_vlan: "vlan{{ cluster_config[cluster_name]['ocp_secondary']['native_vlan'] }}"
+
+    - name: Prepare external VLAN variables
+      ansible.builtin.set_fact:
+        shell_script: |
+          {{ shell_script }}
+          export VLAN="{{ item | replace('vlan', '') | quote }}"
+      when: item != secondary_native_vlan
+      loop: "{{ cluster_config[cluster_name]['ocp_secondary']['vlans'] | default([]) }}"
+
+    - name: Set INTERFACE_LIST env variable
+      ansible.builtin.set_fact:
+        shell_script: |
+          {{ shell_script }}
+          export INTERFACE_LIST="{{ cluster_config[cluster_name]['bm_interface_list'][secondary_nic] | quote }}"
+
+    - name: Write variable shell script
+      ansible.builtin.copy:
+        content: "{{ shell_script }}"
+        dest: "{{ artifact_dest_dir }}/set_ocp_net_vars.sh"
+        mode: "0770"
+
+    - name: Enable the NETCONF service
+      vars:
+        ansible_connection: ansible.netcommon.network_cli
+      junipernetworks.junos.junos_netconf:
+        netconf_port: 830
+        state: present
+
+    - name: Flush port configuration
+      vars:
+        interfaces: "{{
+          (cluster_config[cluster_name]['intel_710'] | default([]) | map(attribute='switch_interface') | list) +
+          (cluster_config[cluster_name]['intel_810'] | default([]) | map(attribute='switch_interface') | list) +
+          (cluster_config[cluster_name]['mlx_cx_6'] | default([]) | map(attribute='switch_interface') | list)
+          }}"
+      junipernetworks.junos.junos_config:
+        src: templates/switch/junos_reset_port.j2
+        confirm_commit: true
+
+    - name: Set up VLANs
+      vars:
+        vlans: "{{ cluster_config[cluster_name]['ocp_secondary']['vlans'] | default([]) + [cluster_config[cluster_name]['ocp_external']['vlan']] }}"
+      junipernetworks.junos.junos_config:
+        src: templates/switch/junos_configure_vlan.j2
+        confirm_commit: true
+
+    - name: Set up VLAN for external OCP interface
+      vars:
+        vlan_id: "{{ cluster_config[cluster_name]['ocp_external']['vlan'] }}"
+        interfaces: "{{ switch_external_interface }}"
+      junipernetworks.junos.junos_config:
+        src: templates/switch/junos_configure_external_port.j2
+        confirm_commit: true
+
+    - name: Set up VLAN for secondary OCP interface
+      vars:
+        vlans: "{{ cluster_config[cluster_name]['ocp_secondary']['vlans'] | default([]) }}"
+        interfaces: "{{ cluster_config[cluster_name][secondary_nic] | map(attribute='switch_interface') | list }}"
+        native_vlan: "{{ cluster_config[cluster_name]['ocp_secondary']['native_vlan'] }}"
+      junipernetworks.junos.junos_config:
+        src: templates/switch/junos_configure_secondary_port.j2
+        confirm_commit: true

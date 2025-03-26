@@ -1,0 +1,4 @@
+{% for interface in interfaces %}
+delete interfaces {{ interface }}
+set interfaces {{ interface }} disable
+{% endfor %}

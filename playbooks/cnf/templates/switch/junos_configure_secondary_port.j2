@@ -1,0 +1,6 @@
+{% for interface in interfaces %}
+delete interfaces {{ interface }} disable
+set interfaces {{ interface }} mtu 9192
+set interfaces {{ interface }}.0 family ethernet-switching interface-mode trunk vlan members [{{ vlans | join(" ") }}]
+set interfaces {{ interface }} native-vlan-id {{ native_vlan | replace("vlan", "") }}
+{% endfor %}

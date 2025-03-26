@@ -1,0 +1,3 @@
+{% for vlan in vlans %}
+set vlans {{ vlan }} vlan-id {{ vlan | replace("vlan", "") }}
+{% endfor %}

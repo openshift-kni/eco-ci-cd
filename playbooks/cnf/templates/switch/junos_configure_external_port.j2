@@ -1,0 +1,4 @@
+{% for interface in interfaces %}
+delete interfaces {{ interface }} disable
+set interfaces {{ interface }}.0 family ethernet-switching interface-mode access vlan members {{ vlan_id }}
+{% endfor %}

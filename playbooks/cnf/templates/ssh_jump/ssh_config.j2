@@ -1,0 +1,3 @@
+Host *
+    proxycommand ssh -o StrictHostKeyChecking=no -i {{ ssh_jump_key }} -W %h:%p {{ ssh_jump_user }}@{{ ssh_jump_ip }}
+    StrictHostKeyChecking no

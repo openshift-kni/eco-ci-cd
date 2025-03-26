@@ -322,13 +322,16 @@
         state: present
       become: true
 
-    - name: Ensure CA certifications are updated
-      ansible.builtin.get_url:
-        url: https://certs.corp.redhat.com/certs/2022-IT-Root-CA.pem
-        dest: /etc/pki/tls/certs/certificate.crt
-        mode: '0644'
+    - name: Install and update CA
+      when: install_ca_cert | default('true') | bool
+      block:
+        - name: Download CA certificate to pki directory
+          ansible.builtin.get_url:
+            url: "{{ ca_update_link }}"
+            dest: /etc/pki/tls/certs/certificate.crt
+            mode: '0644'
 
-    - name: Update the CA trust files
-      ansible.builtin.command: update-ca-trust
-      changed_when: false
-      become: true
+        - name: Update certificate
+          ansible.builtin.command: update-ca-trust
+          changed_when: false
+          become: true

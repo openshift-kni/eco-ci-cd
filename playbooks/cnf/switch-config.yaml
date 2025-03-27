@@ -79,7 +79,6 @@
 - name: Configure jump host for switch connection
   hosts: localhost
   tasks:
-
     - name: Prepare key for bastion
       ansible.builtin.copy:
         content: "{{ ansible_ssh_private_key }}"

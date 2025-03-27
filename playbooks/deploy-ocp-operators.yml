@@ -18,14 +18,13 @@
 
 ## Roles Requirements
 # The playbook uses role:
-# - redhatci.ocp.catalog_source
-# - redhatci.ocp.catalog_source
+# - redhatci.ocp.ocp_operator_deployment
 
 ## Usage:
 # - Ensure all required variables are defined in the inventory or host_vars/group_vars.
 # - Execute the playbook using Ansible's command-line tool:
 #
-# ansible-playbook ./playbooks/deploy-ocp-operators.yaml -i ./inventories/ocp-deployment/deploy-ocp-operators.yml \
+# ansible-playbook ./playbooks/deploy-ocp-operators.yaml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
 # --extra-vars 'kubeconfig="/path/to/kubeconfig" \
 # version="4.16" operators=[
 # {"name":"sriov-network-operator","catalog":"redhat-operators","nsname":"openshift-sriov-network-operator","deploy_default_config":"true"},\

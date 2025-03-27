@@ -17,8 +17,9 @@
 # - KUBECONFIG file
 
 ## Roles Requirements
-# The playbook uses role:
-# - redhatci.ocp.ocp_operator_deployment
+# The playbook uses the following roles:
+# - redhatci.ocp.olm_operator
+# - redhatci.ocp.catalog_source
 
 ## Usage:
 # - Ensure all required variables are defined in the inventory or host_vars/group_vars.

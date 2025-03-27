@@ -102,6 +102,7 @@
     switch_external_interface: []
     shell_script: "#!/bin/bash"
     artifact_dest_dir: /tmp
+    ansible_netconf_ssh_config: "{{ hostvars['localhost'].ansible_env.HOME }}/jump-ssh-config"
   tasks:
     - name: Assert required variables are defined
       ansible.builtin.assert:
@@ -152,6 +153,9 @@
     - name: Enable the NETCONF service
       vars:
         ansible_connection: ansible.netcommon.network_cli
+        ansible_paramiko_proxy_command: "ssh -i {{ hostvars['localhost'].ansible_env.HOME }}/jump-key
+          -W %h:%p -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+          {{ hostvars['bastion'].ansible_user }}@{{ hostvars['bastion'].ansible_host }}"
       junipernetworks.junos.junos_netconf:
         netconf_port: 830
         state: present

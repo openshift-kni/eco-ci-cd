@@ -14,7 +14,8 @@ RUN pip3 install --no-cache-dir \
     ansible-lint \
     netaddr \
     jmespath \
-    paramiko
+    paramiko \
+    ncclient
 
 # Copy application files to eco-ci-cd folder
 COPY . ./eco-ci-cd

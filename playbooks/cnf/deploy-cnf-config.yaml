@@ -38,6 +38,7 @@
   gather_facts: false
   vars:
     cnf_nodes_role: workercnf
+    trusted_ca_config_map_name: "external-registry"
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   tasks:
@@ -236,3 +237,29 @@
       ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
       vars:
         mcp_name: "{{ cnf_nodes_role }}"
+
+    - name: Store additiona CA cert in variable
+      ansible.builtin.uri:
+        url: "{{ ca_update_link }}"
+        method: GET
+        return_content: true
+      register: ca_cert
+
+    - name: Set up additional trusted CA for container repo using configmap
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/configmap_ca.j2') }}"
+      vars:
+        registry_tls_certificate: "{{ ca_cert.content }}"
+        config_map_name: "{{ trusted_ca_config_map_name }}"
+
+    - name: Apply image.config.openshift.io configuration change
+      kubernetes.core.k8s_json_patch:
+        api: config.openshift.io/v1
+        kind: Image
+        name: cluster
+        patch:
+          - op: add
+            path: /spec/additionalTrustedCA
+            value:
+              name: "{{ trusted_ca_config_map_name }}"

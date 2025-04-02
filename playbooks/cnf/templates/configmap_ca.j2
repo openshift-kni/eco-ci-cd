@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ config_map_name }}
+  namespace: openshift-config
+data:
+  {{ internal_container_registry_name }}: |
+    {{ registry_tls_certificate | indent(4) }}

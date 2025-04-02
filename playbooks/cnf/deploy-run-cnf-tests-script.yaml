@@ -1,0 +1,193 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook: Set up cnf-tests project
+# -------------------------------------------------
+# This playbook clones cnf-feature-deploy project and deploys all external dependencies
+# based on given parameters. The playbook uses following algorithm:
+
+# - Gathering cluster network information
+# - Extracting OpenShift version details
+# - Cloning the CNF test repository
+# - Installing dependencies (e.g., Ginkgo)
+# - Fetching branch details for required external components
+# - Updating submodules
+# - Listing CNF test image versions and extracts specific version
+# - Listing dpdk-base image versions and extracts specific version
+# - Preparing execution shell scripts
+
+# Requirements:
+# - OpenShift cluster
+# - Bastion host
+# - Ansible and the kubernetes.core collection installed.
+# - A valid kubeconfig file for cluster authentication.
+
+# Usage:
+# Run this playbook using Ansible:
+# ansible-playbook ./playbooks/cnf/deploy-run-cnf-tests-script.yaml -i ./inventories/cnf/run-tests.yaml \
+#  --extra-vars kubeconfig=/path/to/kubeconfig
+# Avaliable extra-vars(arguments)
+#
+# kubeconfig                        # string: Path to the kubeconfig file.
+# container_registry                # string: Path to the container registry containing dpdk-base and openshift4-cnf-tests containers
+# xt_u32test_host_non_cnf_workers   # bool: Whether to enable xt_u32test on non-CNF worker nodes
+# ginkgo_additional_params          # string: Additional Ginkgo parameters
+# features                          # string: List of features to test, separated by '|'
+# role_worker_cnf                   # string: CNF role label
+# cnf_test_dir                      # string: Path to the cnf-feature-deploy project
+# sctp_host_non_cnf_workers         # bool: Whether SCTP is enabled for non-CNF worker nodes
+# oo_install_ns                     # string: Namespace where MetalLB is deployed
+# cnf_interfaces                    # string: List of CNF SR-IOV interfaces to be tested, separated by ','
+# cnf_test_perf_test_profile        # string: Name of the pre-installed performance profile
+
+- name: Set up cnf-tests project
+  hosts: bastion
+  gather_facts: true
+  vars:
+    cnf_test_repo: "https://github.com/openshift-kni/cnf-features-deploy.git"
+    cnf_test_dir: /tmp/
+    cnftests_git_dest: cnf-features-deploy
+    container_registry: "{{ internal_container_registry_name }}/rh-osbs"
+    features: "sctp"
+    role_worker_cnf: "workercnf"
+  tasks:
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Ensure repository does not exist
+      ansible.builtin.file:
+        path: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+        state: absent
+
+    - name: Clone cnf-feature-deploy project
+      block:
+        - name: Git clone cnf-feature-deploy repo specific branch
+          ansible.builtin.git:
+            repo: "{{ cnf_test_repo }}"
+            dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+            force: true
+            update: true
+            depth: 1
+            recursive: true
+            version: "release-{{ version }}"
+          register: cnftests_git_clone
+          retries: 3
+          delay: 5
+          until: cnftests_git_clone is not failed
+
+      rescue:
+        - name: Git clone cnf-feature-deploy repo master branch
+          ansible.builtin.git:
+            repo: "{{ cnf_test_repo }}"
+            dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+            force: true
+            update: true
+            depth: 1
+            recursive: true
+            version: "master"
+          register: cnftests_master_git_clone
+          retries: 3
+          delay: 5
+          until: cnftests_master_git_clone is not failed
+
+    - name: Install Ginkgo v2
+      changed_when: false
+      ansible.builtin.shell: |
+        go install {{ ginkgo_link | default('github.com/onsi/ginkgo/v2/ginkgo@v2.23.3') }}
+      environment:
+        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+    - name: Get branch information from MetalLB project
+      ansible.builtin.uri:
+        url: "https://github.com/openshift/metallb-operator/tree/release-{{ version }}"
+        method: GET
+      register: metallb_github_response
+
+    - name: Set MetalLB branch variable based on existence
+      ansible.builtin.set_fact:
+        dynamic_metallb_branch: "{{ 'release-' + version if metallb_github_response.status == 200 else 'main' }}"
+
+    - name: Get branch information from SR-IOV project
+      ansible.builtin.uri:
+        url: "https://github.com/openshift/sriov-network-operator/tree/release-{{ version }}"
+        method: GET
+      register: sriov_github_response
+
+    - name: Set SR-IOV branch variable based on existence
+      ansible.builtin.set_fact:
+        dynamic_sriov_branch: "{{ 'release-' + version if sriov_github_response.status == 200 else 'master' }}"
+
+    - name: Get branch information from Node Tuning operator project
+      ansible.builtin.uri:
+        url: "https://github.com/openshift/cluster-node-tuning-operator/tree/release-{{ version }}"
+        method: GET
+      register: tuning_github_response
+
+    - name: Set Node Tuning operator branch variable based on existence
+      ansible.builtin.set_fact:
+        dynamic_tuning_branch: "{{ 'release-' + version if tuning_github_response.status == 200 else 'master' }}"
+
+    - name: Update all submodules
+      changed_when: false
+      environment:
+        METALLB_OPERATOR_TARGET_COMMIT: "{{ dynamic_metallb_branch }}"
+        SRIOV_NETWORK_OPERATOR_TARGET_COMMIT: "{{ dynamic_sriov_branch }}"
+        CLUSTER_NODE_TUNING_OPERATOR_TARGET_COMMIT: "{{ dynamic_tuning_branch }}"
+        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+      ansible.builtin.shell: |
+        make init-git-submodules
+      args:
+        chdir: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+
+    - name: List cnf test image versions
+      changed_when: false
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          brew list-builds --package=cnf-tests-container -r --state=COMPLETE | grep "v{{ version }}"
+      register: cnf_tests_output
+
+    - name: List dpdk-base image versions
+      changed_when: false
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          brew list-builds --package=dpdk-base-container -r --state=COMPLETE --owner=exd-cpaas-bot-prod | grep "v{{ version }}"
+      register: dpdk_base_output
+
+    - name: Set cnf_tests_version and dpdk_base_version facts
+      ansible.builtin.set_fact:
+        cnf_tests_version: "{{ cnf_tests_output.stdout_lines[0].split(' ')[0].split('-v')[-1] }}"
+        dpdk_base_version: "{{ dpdk_base_output.stdout_lines[0].split(' ')[0].split('-v')[-1] }}"
+
+    - name: Print dpdk-base image version
+      ansible.builtin.debug:
+        msg: dpdk-base:v{{ dpdk_base_version }}
+
+    - name: Print cnf_tests_version image version
+      ansible.builtin.debug:
+        msg: cnf_tests_version:v{{ cnf_tests_version }}
+
+    - name: Prepare execute shell script
+      ansible.builtin.template:
+        src: run_cnf_tests.j2
+        dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}/cnf-tests-run.sh"
+        mode: "0764"

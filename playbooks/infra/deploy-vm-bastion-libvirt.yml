@@ -61,6 +61,8 @@
 #   vm_disk_size: 100G                  # Disk size allocated to the VM (in gigabytes)
 #   vm_external_interface: eno0         # External network interface for the VM
 #   vm_ram: "16384"                     # Amount of RAM allocated to the VM (in megabytes)
+#   golang_pkg: go1.24.2.linux-amd64.tar.gz     # golang package version
+#   brew_repo: https://download.repo/brew.repo  # link to brew repo
 
 # Roles/Tasks Overview:
 # 1. **Deploy VM on Hypervisor**
@@ -169,7 +171,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.create_vms
       vars:
-        additional_virt_install_options: "--cloud-init network-config=/tmp/{{ vm_name }}-network.yaml --wait=0 \\"
+        additional_virt_install_options: "--events on_reboot=restart --autostart --cloud-init network-config=/tmp/{{ vm_name }}-network.yaml --wait=0 "
         cluster_name: "dummy"
         vm_bridge_name: default
         images_dir: "{{ libvirtd_disk_path }}"
@@ -310,7 +312,29 @@
         disable_gpg_check: true
       become: true
 
+    - name: Install and update CA
+      when: install_ca_cert | default('true') | bool
+      become: true
+      block:
+        - name: Download CA certificate to pki directory
+          ansible.builtin.get_url:
+            url: "{{ ca_update_link }}"
+            dest: /etc/pki/ca-trust/source/anchors/certificate.crt
+            mode: '0644'
+
+        - name: Update certificate
+          ansible.builtin.command: update-ca-trust
+          changed_when: false
+
+    - name: Ensure rcm-tools repo is present on host
+      become: true
+      ansible.builtin.get_url:
+        url: "{{ brew_repo }}"
+        dest: "/etc/yum.repos.d/repository.repo"
+        mode: '0644'
+
     - name: Install required packages
+      become: true
       ansible.builtin.dnf:
         name:
           - openconnect
@@ -319,19 +343,43 @@
           - podman
           - tmux
           - java
+          - brewkoji
+          - koji
+          - make
         state: present
-      become: true
 
-    - name: Install and update CA
-      when: install_ca_cert | default('true') | bool
-      become: true
-      block:
-        - name: Download CA certificate to pki directory
-          ansible.builtin.get_url:
-            url: "{{ ca_update_link }}"
-            dest: /etc/pki/tls/certs/certificate.crt
-            mode: '0644'
+    - name: Download GO archive
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/{{ golang_pkg }}"
+        dest: /tmp/
+        mode: '0640'
 
-        - name: Update certificate
-          ansible.builtin.command: update-ca-trust
-          changed_when: false
+    - name: Ensure destination GO directory exists
+      become: true
+      ansible.builtin.file:
+        path: /usr/local
+        state: directory
+        recurse: true
+
+    - name: Extract GO archive into /usr/local
+      notify:
+        - Remove golang archive
+      become: true
+      ansible.builtin.unarchive:
+        src: /tmp/{{ golang_pkg }}
+        dest: /usr/local
+        remote_src: true
+
+    - name: Add line to user's bash_profile
+      ansible.builtin.copy:
+        content: "PATH=$PATH:/usr/local/go/bin"
+        dest: /home/{{ ansible_user }}/.bash_profile
+        mode: "0640"
+
+  handlers:
+
+    - name: Remove golang archive
+      delegate_to: localhost
+      ansible.builtin.file:
+        state: absent
+        path: "/tmp/{{ golang_pkg }}"

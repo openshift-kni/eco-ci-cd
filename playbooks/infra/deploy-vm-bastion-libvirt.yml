@@ -346,6 +346,7 @@
           - brewkoji
           - koji
           - make
+          - pip
         state: present
 
     - name: Download GO archive
@@ -372,7 +373,7 @@
 
     - name: Add line to user's bash_profile
       ansible.builtin.copy:
-        content: "PATH=$PATH:/usr/local/go/bin"
+        content: "PATH=$PATH:$HOME/.local/bin:/usr/local/go/bin"
         dest: /home/{{ ansible_user }}/.bash_profile
         mode: "0640"
 

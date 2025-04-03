@@ -1,0 +1,25 @@
+#!/bin/bash
+
+export KUBECONFIG="{{ kubeconfig }}"
+export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
+export IMAGE_REGISTRY="{{ container_registry }}/"
+export CNF_TESTS_IMAGE="openshift4-cnf-tests:v{{ cnf_tests_version }}"
+export DPDK_TESTS_IMAGE="dpdk-base:v{{ dpdk_base_version }}"
+export XT_U32TEST_HAS_NON_CNF_WORKERS={{ xt_u32test_host_non_cnf_workers | default('false') }}
+export GINKGO_PARAMS="--timeout=24h -v{% if ginkgo_additional_params is defined and ginkgo_additional_params | length > 0 %} {{ ginkgo_additional_params }}{% endif %}"
+export FEATURES="{{ features }}"
+export ROLE_WORKER_CNF="{{ role_worker_cnf }}"
+export TESTS_REPORTS_PATH="{{ cnf_test_dir }}/junit"
+export NODES_SELECTOR="node-role.kubernetes.io/{{ role_worker_cnf }}="
+export SCTPTEST_HAS_NON_CNF_WORKERS="{{ sctp_host_non_cnf_workers | default('false') }}" 
+{% if oo_install_ns is defined and oo_install_ns | length > 0 %}
+export OO_INSTALL_NAMESPACE="{{ oo_install_ns }}"
+{% endif %}
+{% if cnf_interfaces is defined and cnf_interfaces | length > 0 %}
+export CNF_INTERFACE_FILTER="{{ cnf_interfaces }}"
+{% endif %}
+{% if cnf_test_perf_test_profile is defined and cnf_test_perf_test_profile | length > 0 %}
+export PERF_TEST_PROFILE="{{ cnf_test_perf_test_profile }}"
+{% endif %}
+
+make functests

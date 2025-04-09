@@ -90,6 +90,7 @@
     vm_qcow_url: "{{ vm_qcow_rdu_url if location == 'rdu' else vm_qcow_tlv_url }}"
     vm_name: "{{ hostvars['bastion'].vm_name }}"
     vm_disk_name: "{{ vm_name }}_main.qcow2"
+    vm_cpu: 8
     libvirtd_disk_path: /var/lib/libvirt/images
   tasks:
 
@@ -115,7 +116,7 @@
                 match:
                   name: "{{ hostvars['bastion'].vm_external_interface }}"
                 addresses:
-                  - "{{ hostvars['bastion'].ansible_host }}/{{ hostvars['bastion'].net_prefix }}"
+                  - "{{ hostvars['bastion'].ansible_host }}/{{ hostvars['bastion'].net_prefix | from_yaml }}"
                 gateway4: "{{ hostvars['bastion'].gateway }}"
                 gateway6: "{{ hostvars['bastion'].gateway6 | default(omit) }}"
                 dhcp4: false
@@ -183,7 +184,7 @@
             network_interfaces:
               "{{ {hostvars['bastion'].vm_bridge_name: ''} }}"
             uuid: ""
-            vcpu: "{{ hostvars['bastion'].vm_cpu }}"
+            vcpu: "{{ vm_cpu }}"
 
 - name: Set ssh certificate
   hosts: localhost

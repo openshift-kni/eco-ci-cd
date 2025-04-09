@@ -90,6 +90,7 @@
       delegate_to: bastion
       ansible.builtin.set_fact:
         extra_cluster_networks: "{{ extra_cluster_networks_string | from_yaml }}"
+        cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml }}"
         extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
         extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
         api_vips: "{{ api_vips_string | from_yaml }}"

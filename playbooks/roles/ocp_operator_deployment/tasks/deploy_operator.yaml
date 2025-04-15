@@ -21,6 +21,7 @@
       "{{ item.ns_labels | default(ocp_operator_deployment_default_label) }}"
     operator_group_spec: "{{ operator_group_spec_config }}"
     starting_csv: "{{ item.starting_csv | default(omit) }}"
+    subscription_name: "{{ item.subscription_name | default(undefined) }}"
     install_approval: "{{ item.install_approval | default('Automatic') }}"
 
 - name: Apply default operator configuration if exist

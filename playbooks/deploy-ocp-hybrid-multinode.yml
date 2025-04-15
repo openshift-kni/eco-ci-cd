@@ -234,3 +234,4 @@
       vars:
         agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
         mabi_retry_install_complete_check: true
+        cluster: "{{ cluster_name }}"

@@ -144,6 +144,16 @@
           {{ shell_script }}
           export INTERFACE_LIST="{{ cluster_config[cluster_name]['bm_interface_list'][secondary_nic] | quote }}"
 
+    - name: Set SWITCH_INTERFACES env variable
+      ansible.builtin.set_fact:
+        switch_interfaces: "{{ cluster_config[cluster_name][secondary_nic] | map(attribute='switch_interface') | list }}"
+
+    - name: Set SWITCH_INTERFACES env variable
+      ansible.builtin.set_fact:
+        shell_script: |
+          {{ shell_script }}
+          export SWITCH_INTERFACES="{{ switch_interfaces[:4] | join(",") }}"
+
     - name: Write variable shell script
       ansible.builtin.copy:
         content: "{{ shell_script }}"

@@ -1,0 +1,22 @@
+#!/bin/bash
+
+export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
+export KUBECONFIG="{{ kubeconfig }}"
+export POLARION_REPORT=true
+export REPORT_DIR_NAME="{{ downstream_test_report_path }}"
+export CNF_INTERFACES_LIST="{{ cnf_interfaces }}"
+export GOPROXY="{{ goproxy }}"
+export METALLB_ADDR_LIST="{{ tests_mlb_addr_list }}"
+export ROLE_WORKER_CNF="node-role.kubernetes.io/{{ role_worker_cnf }}"
+export CNF_GOTESTS_SRIOV_SMOKE="{{ cnf_gotests_sriov_smoke }}"
+export FRR_IMAGE="{{ frr_image_link }}"
+export NETWORK_TEST_CONTAINER_IMAGE="{{ network_test_container_link }}" 
+export METALLB_VLANS="{{ metallb_vlans }}"
+export FLAKE_ATTEMPTS=2
+export SWITCH_USER="{{ switch_user }}"
+export SWITCH_IP="{{ switch_address }}"
+export SWITCH_PASS="{{ switch_pass }}"
+export SWITCH_INTERFACES="{{ switch_interfaces }}"
+export NETWORK_SWITCH_LAG_NAMES="{{ switch_lag_names }}"
+
+make test-all

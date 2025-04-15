@@ -1,0 +1,134 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook: Set up downstream cnf-gotests project
+# -------------------------------------------------
+# This playbook clones cnf-gotests project and deploys all external dependencies
+# based on given parameters. The playbook uses following algorithm:
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Set up cnf-gotests project
+# Description  : This playbook prepares the environment on the bastion host
+#                to run CNF downstream tests. It ensures dependencies are
+#                installed, clones the appropriate test repository, and sets
+#                up the test execution script.
+#
+# Prerequisites:
+#   - Variables `metallb_vlans` and `switch_interfaces`,`kubeconfig` must be defined
+#   - The `kubeconfig` must be available to authenticate with the cluster
+#   - Go must be installed on the system where this playbook is run
+#
+# Key Tasks:
+#   - Gather cluster version from OpenShift
+#   - Clone the downstream test repository
+#   - Set up Ginkgo testing tool
+#   - Generate test execution script from a Jinja2 template using given parameters
+
+# Usage:
+# Run this playbook using Ansible:
+# ansible-playbook ./playbooks/cnf/deploy-run-downstream-tests-script.yaml -i ./inventories/cnf/switch-config.yaml \
+# --extra-vars "kubeconfig=/path/to/kubeconfig cnf_interfaces=ens1f0np0,ens1f1np1, switch_interfaces=et-0/0/1,et-0/0/2,et-0/0/3,et-0/0/4 metallb_vlans=100"
+# Avaliable extra-vars(arguments)
+#
+# kubeconfig                        # string: Path to the kubeconfig file.
+# downstream_test_report_path       # string: Directory path for the test report output.
+# cnf_interfaces                    # string: Comma-separated list of CNF SR-IOV interfaces to be tested.
+# goproxy                           # string: Value for the GOPROXY environment variable.
+# tests_mlb_addr_list               # string: IPv4 and IPv6 addresses used for MetalLB test cases.
+# role_worker_cnf                   # string: Label for the CNF worker role.
+# cnf_gotests_sriov_smoke           # bool: Whether to run SR-IOV test cases in smoke mode.
+# frr_image_link                    # string: URL of the FRR container image.
+# network_test_container_link       # string: URL of the network test container image.
+# metallb_vlans                     # int: VLAN ID used for MetalLB test cases.
+# switch_user                       # string: Username for accessing the intermediate switch.
+# switch_pass                       # string: Password for accessing the intermediate switch.
+# switch_interfaces                 # string: Interfaces on the switch used for testing.
+# switch_lag_names                  # string: Names of LAG (Link Aggregation Group) interfaces.
+- name: Set up cnf-gotests project
+  hosts: bastion
+  gather_facts: true
+  vars:
+    downstream_test_dir: /tmp/
+    downstream_git_dest: cnf-gotests
+    goproxy: "https://proxy.golang.org,direct"
+    role_worker_cnf: "workercnf"
+    downstream_test_report_path: /tmp/downstream_report
+    cnf_gotests_sriov_smoke: true
+    switch_user: "{{ hostvars['switch'].ansible_user }}"
+    switch_address: "{{ hostvars['switch'].ansible_host }}"
+    switch_pass: "{{ hostvars['switch'].ansible_password }}"
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - metallb_vlans is defined
+          - switch_interfaces is defined
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Ensure repository does not exist
+      ansible.builtin.file:
+        path: "{{ downstream_test_dir }}/{{ downstream_git_dest }}"
+        state: absent
+
+    - name: Clone downstream test project
+      block:
+        - name: Git clone downstream repo specific branch
+          ansible.builtin.git:
+            repo: "{{ downstream_test_repo }}"
+            dest: "{{ downstream_test_dir }}/{{ downstream_git_dest }}"
+            force: true
+            update: true
+            depth: 1
+            recursive: true
+            version: "release-{{ version }}"
+          register: downstream_git_clone
+          retries: 3
+          delay: 5
+          until: downstream_git_clone is not failed
+
+      rescue:
+        - name: Git clone downstream repo master branch
+          ansible.builtin.git:
+            repo: "{{ downstream_test_repo }}"
+            dest: "{{ downstream_test_dir }}/{{ downstream_git_dest }}"
+            force: true
+            update: true
+            depth: 1
+            recursive: true
+            version: "master"
+          register: downstream_master_git_clone
+          retries: 3
+          delay: 5
+          until: downstream_master_git_clone is not failed
+
+    - name: Install Ginkgo v2
+      changed_when: false
+      ansible.builtin.shell: |
+        go install {{ ginkgo_link | default('github.com/onsi/ginkgo/v2/ginkgo@v2.23.3') }}
+      environment:
+        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+    - name: Prepare execute shell script
+      ansible.builtin.template:
+        src: run_downstream_tests.j2
+        dest: "{{ downstream_test_dir }}/{{ downstream_git_dest }}/downstream-tests-run.sh"
+        mode: "0764"

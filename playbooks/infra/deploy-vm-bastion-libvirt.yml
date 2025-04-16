@@ -92,6 +92,7 @@
     vm_disk_name: "{{ vm_name }}_main.qcow2"
     vm_cpu: 8
     libvirtd_disk_path: /var/lib/libvirt/images
+    cloud_init_iso_path: "/tmp/cloud-init.iso"
   tasks:
 
     - name: Ensure VM does not already exists
@@ -155,11 +156,44 @@
       register: resize_output
       changed_when: resize_output.rc == 0
 
-    - name: Copy network configuration to cloud-init file
+    - name: Create user-data file
       ansible.builtin.copy:
-        content: "{{ vm_net_config }}"
-        dest: "/tmp/{{ vm_name }}-network.yaml"
-        mode: "0644"
+        dest: "/tmp/user-data"
+        content: |
+          #cloud-config
+          hostname: {{ vm_name }}
+          create_hostname_file: true
+        mode: '0664'
+
+    - name: Create meta-data file
+      ansible.builtin.copy:
+        dest: "/tmp/meta-data"
+        content: ""
+        mode: '0664'
+
+    - name: Create network-config file
+      ansible.builtin.copy:
+        dest: "/tmp/network-config"
+        content: "{{ vm_net_config | to_yaml }}"
+        mode: '0664'
+
+    - name: Ensure ISO tools are installed
+      ansible.builtin.dnf:
+        name:
+          - genisoimage
+        state: present
+      become: true
+
+    - name: Remove Cloud-Init ISO
+      ansible.builtin.file:
+        path: "{{ cloud_init_iso_path }}"
+        state: absent
+
+    - name: Generate Cloud-Init ISO
+      ansible.builtin.command: genisoimage -output {{ cloud_init_iso_path }} -volid CIDATA -joliet -rock /tmp/user-data /tmp/meta-data /tmp/network-config
+      become: true
+      register: create_iso
+      changed_when: create_iso.rc == 0
 
     - name: Customize qcow2 VM image
       ansible.builtin.command:
@@ -172,7 +206,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.create_vms
       vars:
-        additional_virt_install_options: "--events on_reboot=restart --autostart --cloud-init network-config=/tmp/{{ vm_name }}-network.yaml --wait=0 "
+        additional_virt_install_options: "--events on_reboot=restart --disk {{ cloud_init_iso_path }},device=cdrom --install no_install=yes --wait=0 \\"
         cluster_name: "dummy"
         vm_bridge_name: default
         images_dir: "{{ libvirtd_disk_path }}"
@@ -185,6 +219,11 @@
               "{{ {hostvars['bastion'].vm_bridge_name: ''} }}"
             uuid: ""
             vcpu: "{{ vm_cpu }}"
+
+    - name: Start a bastion
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        state: running
 
 - name: Set ssh certificate
   hosts: localhost

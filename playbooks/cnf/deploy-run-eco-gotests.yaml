@@ -1,0 +1,121 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook: Set up downstream eco-gotests project
+# -------------------------------------------------
+# This playbook clones eco-gotests container project and deploys all external dependencies
+# based on given parameters. The playbook uses following algorithm:
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Set up eco-gotests
+# Description  : This playbook prepares the environment on the bastion host
+#                to run CNF eco-gotests. It ensures dependencies are
+#                installed, clones the appropriate test container, and sets
+#                up the test execution script.
+#
+# Prerequisites:
+#   - Variables `metallb_vlans` and `switch_interfaces`,`features`,`labels`,`kubeconfig` must be defined
+#   - The `kubeconfig` must be available to authenticate with the cluster
+#   - Go must be installed on the system where this playbook is run
+#
+# Key Tasks:
+#   - Cleanup previously created working directory
+#   - Ensure required variables are configured
+#   - Gather cluster version from OpenShift
+#   - Clone eco-gotests container from repository
+#   - Generate test execution script from a Jinja2 template using given parameters
+
+# Usage:
+# Run this playbook using Ansible:
+# ansible-playbook ./playbooks/cnf/deploy-run-eco-gotests.yaml -i ./inventories/cnf/switch-config.yaml \
+#   --extra-vars 'kubeconfig=/home/telcov10n/project/generated/kni-qe-92/auth/kubeconfig features=core labels=net \
+#     additional_test_env_variables="\
+#       -e ECO_CNF_CORE_NET_VLAN=10 \
+#       -e ECO_CNF_CORE_NET_SRIOV_INTERFACE_LIST=ens1f0,ens1f1 \
+#       -e ECO_CNF_CORE_NET_TEST_CONTAINER=quay.io/ocp-edge-qe/eco-gotests-network-client:v4.17 \
+#       -e ECO_CNF_CORE_NET_DPDK_TEST_CONTAINER=quay.io/ocp-edge-qe/eco-gotests-rootless-dpdk:v4.16.0 \
+#       -e ECO_CNF_CORE_NET_SWITCH_INTERFACES=et-0/0/1,et-0/0/2,et-0/0/3,et-0/0/4"'
+# Avaliable extra-vars(arguments)
+#
+# kubeconfig                        # string: Path to the kubeconfig file.
+# features                          # string: Features to test
+# labels                            # string: List of test labels
+# eco_gotests_report_path           # string: Directory path for the test report output.
+# test_timeout                      # string: Timeout example 12h
+# eco_cnf_core_net_frr_image        # string: Link to frr image
+# eco_cnf_core_net_mlb_addr_list    # string: List of mlb addresses
+# eco_cnf_core_net_switch_ip:       # string: switch ip address
+# eco_cnf_core_net_switch_user      # string: Username for accessing the intermediate switch.
+# eco_cnf_core_net_switch_pass      # string: Password for accessing the intermediate switch.
+# eco_worker_label                  # string: Label for the CNF worker role.
+# additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
+- name: Set up eco-gotests
+  hosts: bastion
+  gather_facts: true
+  vars:
+    eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests
+    eco_gotest_dir: /tmp/eco_gotests
+    eco_gotests_report_path: "{{ eco_gotest_dir}}/report"
+    test_timeout: "12h"
+    eco_cnf_core_net_frr_image: "{{ frr_image_link | default(undefined) }}"
+    eco_cnf_core_net_mlb_addr_list: "{{ tests_mlb_addr_list | default(undefined) }}"
+    eco_cnf_core_net_switch_ip: "{{ hostvars['switch'].ansible_host | default(undefined) }}"
+    eco_cnf_core_net_switch_user: "{{ hostvars['switch'].ansible_user | default(undefined) }}"
+    eco_cnf_core_net_switch_pass: "{{ hostvars['switch'].ansible_password | default(undefined) }}"
+    eco_worker_label: workercnf
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - features is defined
+          - labels is defined
+
+    - name: Ensure test directory does not exist
+      ansible.builtin.file:
+        path: "{{ eco_gotest_dir }}"
+        state: absent
+
+    - name: Ensure test directory is present
+      ansible.builtin.file:
+        mode: "0760"
+        path: "{{ eco_gotests_report_path }}"
+        state: directory
+        recurse: true
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Remove eco-gotests image
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        state: absent
+        tag: "v{{ version }}.0"
+
+    - name: Pull a specific version of eco-gotests image
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        tag: "v{{ version }}.0"
+
+    - name: Prepare execute shell script
+      ansible.builtin.template:
+        src: run_eco_gotests.j2
+        dest: "{{ eco_gotest_dir }}/eco-gotests-run.sh"
+        mode: "0764"

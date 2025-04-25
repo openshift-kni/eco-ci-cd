@@ -1,0 +1,32 @@
+#!/bin/bash
+
+podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001:1001:64536 --gidmap 0:1:1000 --gidmap 1000:0:1 --gidmap 1001:1001:64536 \
+  -e KUBECONFIG=/kubeconfig/kubeconfig \
+  -e ECO_REPORTS_DUMP_DIR=/tmp/reports \
+  -e ECO_VERBOSE_LEVEL=100 \
+  -e ECO_TEST_VERBOSE=true \
+  -e ECO_DUMP_FAILED_TESTS=true \
+  -e REPORT_CASE_TAG={{ report_test_case_tag }} \
+  -e REPORT_PARAMETER_TAG={{ report_parameter_tag }} \
+  -e ECO_TC_PREFIX={{ report_tc_prefix }} \
+  -e ECO_TEST_FEATURES={{ features }} \
+  -e ECO_TEST_LABELS={{ labels }} \
+  {% if eco_worker_label is defined and eco_worker_label | length > 0 %}-e ECO_WORKER_LABEL={{ eco_worker_label }} \
+  {% endif %}
+  {% if eco_cnf_core_net_mlb_addr_list is defined and eco_cnf_core_net_mlb_addr_list | length > 0 %}-e ECO_CNF_CORE_NET_MLB_ADDR_LIST={{ eco_cnf_core_net_mlb_addr_list }} \
+  {% endif %}
+  {% if eco_cnf_core_net_frr_image is defined and eco_cnf_core_net_frr_image | length > 0 %}-e ECO_CNF_CORE_NET_FRR_IMAGE={{ eco_cnf_core_net_frr_image }} \
+  {% endif %}
+  {% if eco_cnf_core_net_switch_ip is defined and eco_cnf_core_net_switch_ip | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_IP={{ eco_cnf_core_net_switch_ip }} \
+  {% endif %}
+  {% if eco_cnf_core_net_switch_user is defined and eco_cnf_core_net_switch_user | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_USER={{ eco_cnf_core_net_switch_user }} \
+  {% endif %}
+  {% if eco_cnf_core_net_switch_pass is defined and eco_cnf_core_net_switch_pass | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_PASS='{{ eco_cnf_core_net_switch_pass }}' \
+  {% endif %}
+  {% if additional_test_env_variables is defined and additional_test_env_variables | length > 0 %}{{ additional_test_env_variables }} \
+  {% endif %}
+  -v {{ kubeconfig }}:/kubeconfig/kubeconfig:Z \
+  -v {{ eco_gotests_report_path }}:/tmp/reports:Z \
+  {{ eco_gotests_image }}:v{{ version }}.0 \
+  --timeout={{ test_timeout }} \
+  --keep-going

@@ -55,7 +55,14 @@
 #       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.15.44-x86_64'
 #   Deploy specific version:
 #     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml --extra-vars 'release=4.17.9'
-#
+
+## Optional Environment Variables (for each worker node):
+# - <inventory_hostname>_EXTERNAL_INTERFACE:   Name of the external network interface. Example worker0_EXTERNAL_INTERFACE=eth2
+# - <inventory_hostname>_MAC_ADDRESS:          MAC address of the external network interface. Example worker0_MAC_ADDRESS=aa:bb:cc:aa:bb:cc
+# If these environment variables are set and non-empty:
+# - Update 'network_config' to use the provided external interface name and MAC address.
+# - Update 'mac_interface_map' accordingly.
+
 # Notes:
 # - This playbook assumes the hypervisor and bastion hosts are pre-installed and ready.
 # - Test in a non-production environment before deploying.
@@ -69,6 +76,61 @@
       ansible.builtin.set_fact:
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
+
+# Process optional environment Variables if present
+- name: Mutate worker network configuration if env variables are present
+  hosts: workers
+  gather_facts: false
+  tasks:
+
+    - name: Set env EXTERNAL_INTERFACE variable name
+      ansible.builtin.set_fact:
+        iface_env_var_name: "{{ inventory_hostname + '_EXTERNAL_INTERFACE' }}"
+
+    - name: Set env MAC_ADDRESS variable name
+      ansible.builtin.set_fact:
+        mac_addr_env_var_name: "{{ inventory_hostname + '_MAC_ADDRESS' }}"
+
+    - name: Set fact from environment variable
+      ansible.builtin.set_fact:
+        external_interface_name: "{{ lookup('env', iface_env_var_name) }}"
+        external_interface_mac: "{{ lookup('env', mac_addr_env_var_name) }}"
+
+    - name: Mutate ocp deployment network settings if env variables are present
+      when:
+        - external_interface_name is defined
+        - external_interface_name | length > 0
+        - external_interface_mac is defined
+        - external_interface_mac | length > 0
+      block:
+        - name: Mutate network config using env variables
+          ansible.builtin.set_fact:
+            network_config: >-
+              {{
+                network_config | combine({
+                  'raw': network_config.raw | combine({
+                    'interfaces': network_config.raw.interfaces | map('combine', {
+                      'name': external_interface_name,
+                      'mac-address': external_interface_mac
+                    }) | list,
+                    'routes': {
+                      'config': network_config.raw.routes.config | map('combine', {
+                        'next-hop-interface': external_interface_name
+                      }) | list
+                    }
+                  })
+                })
+              }}
+
+        - name: Mutate mac interface map config using env variables
+          ansible.builtin.set_fact:
+            mac_interface_map: >-
+              {{
+                mac_interface_map | map('combine', {
+                  'logical_nic_name': external_interface_name,
+                  'mac_address': external_interface_mac
+                }) | list
+              }}
 
 - name: Render masters variables
   hosts: masters

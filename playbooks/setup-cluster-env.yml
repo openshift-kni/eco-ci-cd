@@ -1,0 +1,111 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you thoroughly test it in your environment
+# before deploying to production.
+#
+# Playbook: Setup pipeline environment — cluster_name, ocp_primary_nic, and ocp_secondary_nic
+#
+# Description:
+#   This playbook configures pipeline parameters based on the provided OCP version:
+#     - Determines and sets network interface cards (NICs) for the cluster (primary OCP NIC and secondary SR-IOV NIC)
+#     - Selects a cluster name based on the OpenShift Container Platform (OCP) version
+#     - Writes the selected NICs and cluster name to files for later use
+#
+# Usage:
+#   This playbook is intended to run locally on the localhost.
+#
+# Variables:
+#   - dest_directory: Directory where output files will be saved (default: /tmp/)
+#   - ocp_secondary_nic_file_name: Filename for the secondary NIC
+#   - ocp_primary_nic_file_name: Filename for the primary NIC
+#   - cluster_name_file_name: Filename for the cluster name
+#   - cluster_release_map: Mapping of OCP versions to cluster names and NICs
+#
+# Tasks:
+#   - Gather the latest OCP version for the given minor release
+#   - Select a secondary NIC based on the OCP z-stream version (each z-stream uses a unique NIC)
+#   - Select a primary NIC (different from the secondary NIC)
+#   - Set and write the cluster name, primary NIC, and secondary NIC to files
+#
+# Command Example:
+#     ansible-playbook ./playbooks/setup-cluster-env.yml --extra-vars 'release=4.17'
+#
+# Notes:
+#   - This playbook assumes the `release` variable is provided externally before execution.
+#   - The `ocp_version_facts` role must be available for this playbook to function correctly.
+---
+- name: Setup pipeline environment
+  hosts: localhost
+  gather_facts: false
+  vars:
+    dest_directory: /tmp/
+    ocp_secondary_nic_file_name: "secondary_nic"
+    ocp_primary_nic_file_name: "ocp_nic"
+    cluster_name_file_name: "cluster_name"
+    cluster_release_map:
+      "4.17":
+        cluster_name: kni-qe-92
+        nics:
+          - mlx
+          - intel_710
+          - intel_810
+      "4.16":
+        cluster_name: hlx-cl3
+        nics:
+          - mlx
+          - intel_710
+          - intel_810
+  tasks:
+    - name: Ensure release variable is set
+      ansible.builtin.assert:
+        that:
+          - release is defined
+        fail_msg: "Please provide release variable to playbook"
+
+    - name: Set OCP version facts
+      ansible.builtin.import_role:
+        name: ocp_version_facts
+      vars:
+        ocp_version_facts_release: "{{ release }}"
+
+    - name: Set cluster name
+      ansible.builtin.set_fact:
+        cluster_name: "{{ cluster_release_map[release].cluster_name }}"
+
+    - name: Print cluster name
+      ansible.builtin.debug:
+        msg: "Cluster name is: {{ cluster_name }}"
+
+    - name: Write cluster name to file
+      ansible.builtin.copy:
+        content: "{{ cluster_name_file_name }}"
+        dest: "{{ dest_directory }}/{{ cluster_name_file_name }}"
+        mode: "0660"
+
+    - name: Set OCP secondary NIC
+      ansible.builtin.set_fact:
+        ocp_secondary_nic: "{{ cluster_release_map[release].nics[ocp_version_facts_z_stream | int % (cluster_release_map[release].nics | length)] }}"
+
+    - name: Print OCP secondary NIC
+      ansible.builtin.debug:
+        msg: "Secondary OCP NIC is: {{ ocp_secondary_nic }}"
+
+    - name: Write OCP secondary NIC parameter to file
+      ansible.builtin.copy:
+        content: "{{ ocp_secondary_nic }}"
+        dest: "{{ dest_directory }}/{{ ocp_secondary_nic_file_name }}"
+        mode: "0660"
+
+    - name: Set OCP primary NIC
+      ansible.builtin.set_fact:
+        ocp_primary_nic: "{{ (cluster_release_map[release].nics | reject('equalto', ocp_secondary_nic) | list)[0] }}"
+
+    - name: Print OCP primary NIC
+      ansible.builtin.debug:
+        msg: "Primary OCP NIC is: {{ ocp_primary_nic }}"
+
+    - name: Write OCP secondary NIC parameter to file
+      ansible.builtin.copy:
+        content: "{{ ocp_primary_nic }}"
+        dest: "{{ dest_directory }}/{{ ocp_primary_nic_file_name }}"
+        mode: "0660"

@@ -66,32 +66,47 @@
   become: true
   ansible.builtin.template:
     src: templates/kickstart.j2
-    dest: "{{ kickstart_iso_os_install_path }}/anaconda-ks.cfg"
+    dest: "{{ kickstart_iso_os_install_path }}/ks.cfg"
     mode: "0644"
     owner: root
     group: root
 
-- name: Add new entry to boot menu
+- name: Replace grub timeout to 10 seconds (Legacy)
+  become: true
+  ansible.builtin.replace:
+    path: "{{ kickstart_iso_os_install_path }}/isolinux/isolinux.cfg"
+    regexp: 'timeout 600'
+    replace: 'timeout 10'
+
+- name: Remove default menu entry (Legacy)
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ kickstart_iso_os_install_path }}/isolinux/isolinux.cfg"
+    regexp: 'menu default'
+    state: absent
+
+- name: Add new entry to boot menu entry (Legacy)
   become: true
   ansible.builtin.blockinfile:
     state: present
     path: "{{ kickstart_iso_os_install_path }}/isolinux/isolinux.cfg"
-    insertbefore: 'menu end'
+    insertbefore: 'label check'
     content: |
       label kickstart
-      menu label ^Kickstart Installation
-      kernel vmlinuz
+        menu label ^Kickstart Installation
+        menu default
+        kernel vmlinuz
 
-      append initrd=initrd.img inst.stage2=hd:LABEL={{ volume_name.stdout }} inst.ks=hd:LABEL={{ volume_name.stdout }}:/anaconda-ks.cfg
+        append initrd=initrd.img inst.stage2=hd:LABEL={{ volume_name.stdout }} inst.ks=hd:LABEL={{ volume_name.stdout }}:/ks.cfg
 
-- name: Replace grub timeout to 10 seconds
+- name: Replace grub timeout to 10 seconds (UEFI)
   become: true
   ansible.builtin.replace:
     path: "{{ kickstart_iso_os_install_path }}/EFI/BOOT/grub.cfg"
     regexp: 'set timeout=60'
     replace: 'set timeout=10'
 
-- name: Add new entry to boot menu
+- name: Add new entry to boot menu (UEFI)
   become: true
   ansible.builtin.blockinfile:
     state: present
@@ -99,7 +114,7 @@
     path: "{{ kickstart_iso_os_install_path }}/EFI/BOOT/grub.cfg"
     content: |
       menuentry 'Kickstart Installation' --class fedora --class gnu-linux --class gnu --class os {
-              linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL={{ volume_name.stdout }} inst.ks=hd:LABEL={{ volume_name.stdout }}:/anaconda-ks.cfg
+              linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL={{ volume_name.stdout }} inst.ks=hd:LABEL={{ volume_name.stdout }}:/ks.cfg
               initrdefi /images/pxeboot/initrd.img
       }
 

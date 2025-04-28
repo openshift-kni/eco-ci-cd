@@ -78,7 +78,7 @@
 
     - name: Write cluster name to file
       ansible.builtin.copy:
-        content: "{{ cluster_name_file_name }}"
+        content: "{{ cluster_name }}"
         dest: "{{ dest_directory }}/{{ cluster_name_file_name }}"
         mode: "0660"
 

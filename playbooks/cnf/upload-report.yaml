@@ -1,0 +1,174 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Be sure to test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook: Upload Report to Server
+# -------------------------------------------------
+# This playbook uploads test reports to a server based on the provided parameters.
+# The process follows this sequence:
+
+# - Remove the existing reporter image from the bastion host
+# - Pull the latest reporter image
+# - Clone the reporter project repository
+# - Re-create the reporter directory
+# - Copy reports into the reporter directory
+# - Gather cluster information
+# - Set required variables
+# - Upload reports using the reporter project
+
+# Requirements:
+# - OpenShift cluster
+# - Bastion host
+# - Ansible and the `kubernetes.core` collection installed
+# - A valid kubeconfig file for cluster authentication
+
+# Usage:
+# Run this playbook using Ansible:
+# ansible-playbook ./playbooks/cnf/upload-report.yaml \
+#   -i ./inventories/cnf/switch-config.yaml \
+#   --extra-vars "kubeconfig=/path/to/kubeconfig \
+#   reporter_template_name='Cluster regression' \
+#   processed_report_dir=/tmp/reports \
+#   junit_report_dir=/tmp/junit \
+#   reports_directory=/tmp/myreports"
+
+# Available Extra Vars (Arguments):
+
+# kubeconfig                            Path to the kubeconfig file used for authenticating with the OpenShift cluster. Example: /home/user/.kube/config
+# reporter_template_name                The template name used for generating the report.Example: "Cluster ipv6 report"
+# processed_report_dir                  Path to the locahost directory containing the report XML files to be uploaded. Example: /mnt/shared/report
+# junit_report_dir                      Path to the locahost directory containing JUnit XML report files. Example: /mnt/shared/junit
+# reports_directory                     Bastion local working directory where reports will be aggregated before uploading. Default:/tmp/reports
+# reporter_image                        Name of the container image used for the reporter tool. Example: quay.io/myorg/reporter
+# reporter_image_tag                    Tag/version of the reporter container image. Example: latest
+# reporter_project_git                  Git repository URL of the reporter project. Example: https://github.com/myorg/reporter.git
+# reporter_user/reporter_pass           Credentials for authenticating with the reporter system.
+# report_router_user/report_router_pass Credentials for the service used during the upload.
+
+- name: Upload report to server
+  hosts: bastion
+  gather_facts: false
+  vars:
+    reporter_project_root_dir: /tmp
+    reporter_project_dest_dir: reporter_project
+    reports_directory: /tmp/reports
+  tasks:
+    - name: Remove existing reporter image
+      containers.podman.podman_image:
+        name: "{{ reporter_image }}"
+        tag: "{{ reporter_image_tag }}"
+        state: absent
+        force: true
+
+    - name: Pull reporter image
+      containers.podman.podman_image:
+        name: "{{ reporter_image }}"
+        tag: "{{ reporter_image_tag }}"
+        state: present
+
+    - name: Git clone reporter project  # noqa: latest[git]
+      ansible.builtin.git:
+        repo: "{{ reporter_project_git }}"
+        dest: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}"
+        force: true
+        update: true
+        depth: 1
+        recursive: true
+      register: reporter_git_clone
+      retries: 3
+      delay: 5
+      until: reporter_git_clone is not failed
+
+    - name: Remove report directory if exists
+      ansible.builtin.file:
+        path: "{{ reports_directory }}"
+        state: absent
+
+    - name: Ensure report directory exists
+      ansible.builtin.file:
+        recurse: true
+        path: "{{ reports_directory }}"
+        state: directory
+        mode: "0777"
+
+    - name: Copy reports to report directory
+      ansible.builtin.copy:
+        src: "{{ processed_report_dir }}/"
+        dest: "{{ reports_directory }}/"
+        mode: "0777"
+
+    - name: List report files
+      ansible.builtin.find:
+        paths: "{{ reports_directory }}/"
+        patterns: "*.xml"
+        recurse: false
+      register: found_files
+
+    - name: Set array of report file paths
+      ansible.builtin.set_fact:
+        report_files: "{{ found_files.files | map(attribute='path') | list }}"
+
+    - name: Copy junit reports to report directory
+      ansible.builtin.copy:
+        src: "{{ junit_report_dir }}/"
+        dest: "{{ reports_directory }}/"
+        mode: "0777"
+
+    - name: List junit report files
+      ansible.builtin.find:
+        paths: "{{ reports_directory }}/"
+        patterns: "*.xml"
+        recurse: false
+      register: found_files
+
+    - name: Set array of junit report file paths
+      ansible.builtin.set_fact:
+        report_junit_files: "{{ found_files.files | map(attribute='path') | list | difference(report_files) }}"
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Run make convert-upload
+      community.general.make:
+        target: "convert-upload"
+        chdir: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}"
+        params:
+          PATH: "{{ lookup('ansible.builtin.env', 'PATH') }}"
+      environment:
+        POLARION_USERNAME: "{{ reporter_user }}"
+        POLARION_PASSWORD: "{{ reporter_pass }}"
+        DATAROUTER_USERNAME: "{{ report_router_user }}"
+        DATAROUTER_PASSWORD: "{{ report_router_pass }}"
+        PYLARION_TR_VERSION: "{{ cluster_info.resources[0].status.version }}"
+        PYLARION_TR_BUILD: "v{{ cluster_info.resources[0].status.version }}"
+        PYLARION_TEMPLATE_NAME: "{{ reporter_template_name }}"
+        POLARION_REPORT_PATH: "{{ report_files | join(';') }}"
+        JUNIT_REPORT_PATH: "{{ report_junit_files | join(';') }}"
+      notify:
+        - Remove reports dir
+        - Remove stopped containers
+        - Remove reporter project dir
+
+  handlers:
+
+    - name: Remove reports dir
+      ansible.builtin.file:
+        path: "{{ reports_directory }}"
+        state: absent
+
+    - name: Remove stopped containers
+      containers.podman.podman_prune:
+        container: true
+
+    - name: Remove reporter project dir
+      ansible.builtin.file:
+        path: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}"
+        state: absent

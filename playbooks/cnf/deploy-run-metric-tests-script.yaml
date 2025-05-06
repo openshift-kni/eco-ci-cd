@@ -1,0 +1,116 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Ansible Playbook: Run Metric Tests
+# -------------------------------------------------
+# This playbook clones network-metric-daemon  project and deploys all external dependencies
+# based on given parameters.
+# -----------------------------------------------------------------------------
+
+# Purpose:
+#   - Gather OpenShift cluster network and version information
+#   - Clone the appropriate version of the network-metrics-daemon test suite
+#   - Install Ginkgo v1 (required for the legacy test suite)
+#   - Generate and deploy a shell script to run the tests
+#
+# Target Host:
+#   - bastion
+#
+# Variables:
+#   - metrictests_dir: Directory to hold cloned repository and test scripts
+#   - metrictests_dir_git_dest: Subdirectory for cloned repo
+#   - metric_git_repo: Git repository URL for the metric test suite
+#   - network_metric_daemon_image: Container image used during testing
+#   - network_metric_daemon_report_path: Path where the test report (XML) is stored
+#
+# Task Summary:
+#   1. Fetch cluster network configuration using OpenShift API
+#   2. Extract and log the OpenShift version (major.minor)
+#   3. Remove any pre-existing cloned repository directory
+#   4. Clone the repo using a version-specific branch, or fallback to main
+#   5. Install Ginkgo v1.16.5 (required by the test suite)
+#   6. Deploy an executable shell script to run the metric tests
+#
+# Requirements:
+#   - 'kubeconfig' environment variable must be defined for OpenShift access
+#   - 'run_network_metrics_daemon_tests.j2' Jinja2 template must be available
+# -----------------------------------------------------------------------------
+- name: Run metric tests
+  hosts: bastion
+  gather_facts: true
+  vars:
+    metrictests_dir: /tmp
+    metrictests_dir_git_dest: network-metrics-daemon
+    metric_git_repo: "https://github.com/openshift/network-metrics-daemon.git"
+    network_metric_daemon_image: quay.io/centos/centos:7
+    network_metric_daemon_report_path: /tmp/nmd_report/nmd_report.xml
+  tasks:
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Ensure repository does not exist
+      ansible.builtin.file:
+        path: "{{ metrictests_dir }}/{{ metrictests_dir_git_dest }}"
+        state: absent
+
+    - name: Clone network-metrics-daemon repo
+      block:
+        - name: Git clone network-metrics-daemon repo specific branch
+          ansible.builtin.git:
+            repo: "{{ metric_git_repo }}"
+            dest: "{{ metrictests_dir }}/{{ metrictests_dir_git_dest }}"
+            force: true
+            update: true
+            recursive: true
+            version: "release-{{ version }}"
+          register: metric_git_clone
+          retries: 3
+          delay: 5
+          until: metric_git_clone is not failed
+
+      rescue:
+        - name: Git clone network-metrics-daemon repo main branch
+          ansible.builtin.git:
+            repo: "{{ metric_git_repo }}"
+            dest: "{{ metrictests_dir }}/{{ metrictests_dir_git_dest }}"
+            force: true
+            update: true
+            recursive: true
+            version: "main"
+          register: metric_master_git_clone
+          retries: 3
+          delay: 5
+          until: metric_master_git_clone is not failed
+
+    # Project uses unsupported ginkgo v1 version
+    - name: "Deploy Ginkgo v1"
+      ansible.builtin.shell: |
+        go install github.com/onsi/ginkgo/ginkgo@v1.16.5
+      changed_when: true
+      environment:
+        GOPATH: "{{ ansible_env.HOME }}/go/ginkgo1"
+        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+    - name: Prepare execute shell script
+      ansible.builtin.template:
+        src: run_network_metrics_daemon_tests.j2
+        dest: "{{ metrictests_dir }}/{{ metrictests_dir_git_dest }}/network-metrics-daemon-run.sh"
+        mode: "0764"

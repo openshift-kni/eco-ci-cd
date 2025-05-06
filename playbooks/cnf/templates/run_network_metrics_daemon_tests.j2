@@ -1,0 +1,9 @@
+#!/bin/bash
+
+export KUBECONFIG="{{ kubeconfig }}"
+export METRIC_TEST_IMAGE="{{ network_metric_daemon_image }}"
+export JUNIT_OUTPUT="{{ network_metric_daemon_report_path }}"
+export GOPATH="{{ ansible_env.HOME }}/go/ginkgo1"
+export PATH="/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+make run-test

@@ -188,6 +188,7 @@
       ansible.builtin.file:
         path: "{{ cloud_init_iso_path }}"
         state: absent
+      become: true
 
     - name: Generate Cloud-Init ISO
       ansible.builtin.command: genisoimage -output {{ cloud_init_iso_path }} -volid CIDATA -joliet -rock /tmp/user-data /tmp/meta-data /tmp/network-config

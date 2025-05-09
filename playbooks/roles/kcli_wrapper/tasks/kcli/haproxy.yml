@@ -1,0 +1,58 @@
+---
+- name: Delete HAProxy config files
+  become: true
+  when: kcli_wrp_haproxy.drop_in_files is defined and
+        ('rollback' in ansible_run_tags)
+  tags:
+    - rollback
+  block:
+
+    - name: Deleting HAProxy drop-in files
+      when: drop_in.path is defined
+      ansible.builtin.file:
+        path: "{{ drop_in.path }}"
+        state: absent
+      loop: "{{ kcli_wrp_haproxy.drop_in_files }}"
+      loop_control:
+        loop_var: drop_in
+
+    - name: Disallow HAProxy to use any port
+      ansible.builtin.command: |-
+        setsebool haproxy_connect_any=off
+
+    - name: Restart HAProxy
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: haproxy.service
+        enabled: true
+
+- name: Create HAProxy config files
+  when: kcli_wrp_haproxy.drop_in_files is defined and
+        ('rollback' not in ansible_run_tags)
+  become: true
+  block:
+
+    - name: Creating HAProxy dropin file
+      ansible.builtin.copy:
+        dest: "{{ drop_in.path }}"
+        content: "{{ drop_in.content }}"
+      loop: "{{ kcli_wrp_haproxy.drop_in_files }}"
+      loop_control:
+        loop_var: drop_in
+
+    - name: Check HAProxy dropin file
+      ansible.builtin.command: |-
+        haproxy -f "{{ drop_in.path }}" -c
+      loop: "{{ kcli_wrp_haproxy.drop_in_files }}"
+      loop_control:
+        loop_var: drop_in
+
+    - name: Allow HAProxy to use any port
+      ansible.builtin.command: |-
+        setsebool haproxy_connect_any=on
+
+    - name: Restart HAProxy
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: haproxy.service
+        enabled: true

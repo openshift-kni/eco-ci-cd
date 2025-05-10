@@ -72,6 +72,24 @@
       ansible.builtin.debug:
         msg: "Cluster version: {{ version }}"
 
+    - name: Set SRIOV_NODE_AND_DEVICE_NAME_FILTER env variable
+      when: cnf_interfaces is defined and cnf_interfaces | length > 0
+      block:
+        - name: Get all worker nodes
+          environment:
+            K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+            label_selectors:
+              - "node-role.kubernetes.io/worker"
+          register: all_worker_nodes
+
+        - name: Extract first worker node name and repalce digits by *
+          ansible.builtin.set_fact:
+            cnf_worker_name: >-
+              {{ (all_worker_nodes.resources | list)[0].metadata.name | regex_replace('[0-9]', '*') }}
+
     - name: Ensure repository does not exist
       ansible.builtin.file:
         path: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"

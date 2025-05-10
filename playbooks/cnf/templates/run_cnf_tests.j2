@@ -16,7 +16,7 @@ export SCTPTEST_HAS_NON_CNF_WORKERS="{{ sctp_host_non_cnf_workers | default('fal
 export OO_INSTALL_NAMESPACE="{{ oo_install_ns }}"
 {% endif %}
 {% if cnf_interfaces is defined and cnf_interfaces | length > 0 %}
-export CNF_INTERFACE_FILTER="{{ cnf_interfaces }}"
+export SRIOV_NODE_AND_DEVICE_NAME_FILTER="{{ cnf_worker_name }}:{{ (cnf_interfaces | split(','))[0][0:4] }}*"
 {% endif %}
 {% if cnf_test_perf_test_profile is defined and cnf_test_perf_test_profile | length > 0 %}
 export PERF_TEST_PROFILE="{{ cnf_test_perf_test_profile }}"

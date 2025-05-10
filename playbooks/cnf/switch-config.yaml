@@ -102,6 +102,7 @@
     switch_external_interface: []
     shell_script: "#!/bin/bash"
     artifact_dest_dir: /tmp
+    vlan_list: []
     ansible_netconf_ssh_config: "{{ hostvars['localhost'].ansible_env.HOME }}/jump-ssh-config"
   tasks:
     - name: Assert required variables are defined
@@ -130,13 +131,21 @@
       ansible.builtin.set_fact:
         secondary_native_vlan: "vlan{{ cluster_config[cluster_name]['ocp_secondary']['native_vlan'] }}"
 
+    - name: Append VLANs to env variable
+      ansible.builtin.set_fact:
+        vlan_list: "{{ vlan_list + [item | regex_replace('^vlan', '') | int] }}"
+      when: item != secondary_native_vlan
+      loop: "{{ cluster_config[cluster_name]['ocp_secondary']['vlans'] | default([]) }}"
+
+    - name: Join VLAN list into comma-separated string
+      ansible.builtin.set_fact:
+        env_var_vlans: "{{ vlan_list | join(',') }}"
+
     - name: Prepare external VLAN variables
       ansible.builtin.set_fact:
         shell_script: |
           {{ shell_script }}
-          export VLAN="{{ item | replace('vlan', '') | quote }}"
-      when: item != secondary_native_vlan
-      loop: "{{ cluster_config[cluster_name]['ocp_secondary']['vlans'] | default([]) }}"
+          export VLAN="{{ env_var_vlans }}"
 
     - name: Set INTERFACE_LIST env variable
       ansible.builtin.set_fact:

@@ -88,7 +88,7 @@
         - name: Extract first worker node name and repalce digits by *
           ansible.builtin.set_fact:
             cnf_worker_name: >-
-              {{ (all_worker_nodes.resources | list)[0].metadata.name | regex_replace('[0-9]', '*') }}
+              {{ (all_worker_nodes.resources | list)[0].metadata.name | regex_replace('[0-9]', '.*') }}
 
     - name: Ensure repository does not exist
       ansible.builtin.file:

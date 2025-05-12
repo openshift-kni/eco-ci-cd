@@ -42,6 +42,7 @@
 # oo_install_ns                     # string: Namespace where MetalLB is deployed
 # cnf_interfaces                    # string: List of CNF SR-IOV interfaces to be tested, separated by ','
 # cnf_test_perf_test_profile        # string: Name of the pre-installed performance profile
+# cnf_tests_skip                    # string: List of tests cases to be skiped
 
 - name: Set up cnf-tests project
   hosts: bastion
@@ -50,6 +51,7 @@
     cnf_test_repo: "https://github.com/openshift-kni/cnf-features-deploy.git"
     cnf_test_dir: /tmp/
     cnftests_git_dest: cnf-features-deploy
+    cnf_tests_skip: ""
     container_registry: "{{ internal_container_registry_name }}/rh-osbs"
     features: "sctp"
     role_worker_cnf: "workercnf"

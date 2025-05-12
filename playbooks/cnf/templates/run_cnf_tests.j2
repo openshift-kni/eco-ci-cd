@@ -12,6 +12,9 @@ export ROLE_WORKER_CNF="{{ role_worker_cnf }}"
 export TESTS_REPORTS_PATH="{{ cnf_test_dir }}/junit"
 export NODES_SELECTOR="node-role.kubernetes.io/{{ role_worker_cnf }}="
 export SCTPTEST_HAS_NON_CNF_WORKERS="{{ sctp_host_non_cnf_workers | default('false') }}" 
+{% if cnf_tests_skip is defined and cnf_tests_skip | length > 0 %}
+export SKIP_TESTS="{{ cnf_tests_skip }}"
+{% endif %}
 {% if oo_install_ns is defined and oo_install_ns | length > 0 %}
 export OO_INSTALL_NAMESPACE="{{ oo_install_ns }}"
 {% endif %}

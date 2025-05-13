@@ -1,0 +1,94 @@
+---
+- name: Delete libvirt networks
+  when: kcli_wrp.networks is defined and
+        ('rollback' in ansible_run_tags)
+  tags:
+    - rollback
+  block:
+
+    - name: Deleting libvirt networks
+      ansible.builtin.command: |-
+        kcli delete network {{ network.name }} --yes
+      register: _del_net_ret
+      changed_when: _del_net_ret.stdout != ''
+      failed_when: |-
+        'is being used by' in _del_net_ret.stderr
+      loop: "{{ kcli_wrp.networks }}"
+      loop_control:
+        loop_var: network
+
+    - name: Delete libvirt bridges
+      ansible.builtin.include_tasks: ./nmcli.yml
+      loop: "{{ kcli_wrp.networks }}"
+      loop_control:
+        loop_var: network
+
+- name: Create libvirt networks
+  when: kcli_wrp.networks is defined
+  block:
+
+    - name: Setup Linux kernel to support IPv6 and IP forwarding
+      become: true
+      block:
+
+        - name: Accept RA packets to configure IPv6
+          ansible.posix.sysctl:
+            name: net.ipv6.conf.all.accept_ra
+            value: '2'
+            state: present
+
+        - name: Enable IPv6 forwarding in all interfaces
+          ansible.posix.sysctl:
+            name: net.ipv6.conf.all.forwarding
+            value: '1'
+            state: present
+
+        - name: Disable IPv6 address in loopback interface
+          ansible.posix.sysctl:
+            name: net.ipv6.conf.lo.disable_ipv6
+            value: '0'
+            state: present
+
+        - name: Enable IPv4 forwarding in all interfaces
+          ansible.posix.sysctl:
+            name: net.ipv4.conf.all.forwarding
+            value: '1'
+            state: present
+
+    - name: Create temporary kcli network parameter file
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: kcli_networks_
+      register: _kcli_networks
+
+    - name: Create libvirt bridges
+      ansible.builtin.include_tasks: ./nmcli.yml
+      loop: "{{ kcli_wrp.networks }}"
+      loop_control:
+        loop_var: network
+
+    - name: Create libvirt networks
+      when: not (network.bridge is defined and network.bridge and
+            network.nic is defined)
+      ansible.builtin.shell: |-
+        cat << EOF > {{ _kcli_networks.path }}/{{ network.name }}.yml
+        {{ network | to_nice_yaml }}
+        EOF
+        kcli create network --paramfile {{ _kcli_networks.path }}/{{ network.name }}.yml {{ network.name }}
+      loop: "{{ kcli_wrp.networks }}"
+      loop_control:
+        loop_var: network
+
+    - name: Show networks
+      changed_when: false
+      ansible.builtin.command: |-
+        kcli list networks
+
+  always:
+
+    - name: Remove temporaty kcli network parameter file
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ _kcli_networks.path }}"

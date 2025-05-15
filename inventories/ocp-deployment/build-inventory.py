@@ -4,7 +4,7 @@ import os
 import yaml
 import sys
 
-hostvars_dir = sys.argv[0] # path to the host_vars dir
+hostvars_dir = sys.argv[1] # path to the host_vars dir
 dest_file = "deploy-ocp-hybrid-multinode.yml"
 masters = []
 workers = []

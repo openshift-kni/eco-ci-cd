@@ -4,6 +4,13 @@ import os
 import yaml
 import sys
 
+if len(sys.args) < 2:
+    print(f"""
+        ERROR: please add host_vars path as argument to the script
+        
+        Usage: {sys.args[0]} < host_vars path> 
+        """)
+    os.exit(1)
 hostvars_dir = sys.argv[1] # path to the host_vars dir
 dest_file = "deploy-ocp-hybrid-multinode.yml"
 masters = []

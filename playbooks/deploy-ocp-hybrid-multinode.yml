@@ -67,6 +67,34 @@
 # - This playbook assumes the hypervisor and bastion hosts are pre-installed and ready.
 # - Test in a non-production environment before deploying.
 ---
+- name: build inventory
+  hosts: localhost
+  connection: local
+  vars:
+    inventory_path: "/eco-ci-cd/inventories/ocp-deployment"
+
+  tasks:
+    #! TODO: backward compatibility
+    #  remove after migration and testing  of dynamic inventory
+    - name: check if dynamic script is available
+      ansible.builtin.stat:
+        path: "{{ inventory_path }}/build-inventory.py"
+      register: dynamic_inventory_script
+
+    - name: Running dynamic inventory
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - build-inventory.py 
+          - "{{ inventory_path }}/host_vars"
+      args:
+        chdir: "{{ inventory_path }}"
+      when: dynamic_inventory_script.stat.exists 
+
+    - ansible.builtin.debug:
+        var: lookup('ansible.builtin.file', "{{ inventory_path }}/deploy-ocp-hybrid-multinode.yml")
+      when: dynamic_inventory_script.stat.exists 
+
 - name: Render nodes variables
   hosts: nodes
   gather_facts: false

@@ -8,7 +8,7 @@ if len(sys.argv) < 2:
     print(f"""
         ERROR: please add host_vars path as argument to the script
         
-        Usage: {sys.args[0]} < host_vars path> 
+        Usage: {sys.argv[0]} < host_vars path> 
         """)
     os.exit(1)
     

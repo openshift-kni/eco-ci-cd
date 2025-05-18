@@ -4,7 +4,7 @@ import os
 import yaml
 import sys
 
-if len(sys.args) < 2:
+if len(sys.argv) < 2:
     print(f"""
         ERROR: please add host_vars path as argument to the script
         

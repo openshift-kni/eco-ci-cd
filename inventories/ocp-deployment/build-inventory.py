@@ -25,19 +25,14 @@ if os.path.exists(hostvars_dir) and os.path.isdir(hostvars_dir):
             workers.append(filename)
 
 masters.sort()
-workers.sort()
 
 output_yaml = {
     'nodes': {
         'children': {
             'masters': {},
-            'workers': {}
         }
     },
     'masters': {
-        'hosts': {}
-    },
-    'workers': {
         'hosts': {}
     },
     'bastions': {
@@ -58,8 +53,13 @@ output_yaml = {
 }
 
 output_yaml['masters']['hosts'] = {node: {} for node in masters}
-output_yaml['workers']['hosts'] = {node: {} for node in workers}
 
+if workers: # Check if there are worker nodes
+    workers.sort() 
+    output_yaml['nodes']['children']['workers'] = {}
+    output_yaml['workers'] = {
+        'hosts': {node: {} for node in workers}
+    }
 
 with open(dest_file, 'w') as outfile:
     yaml.dump(output_yaml, outfile, sort_keys=False)

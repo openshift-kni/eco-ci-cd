@@ -1,0 +1,10 @@
+- name: Deploy NTO configuration
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Configure NTO cluster
+      ansible.builtin.include_role:
+        name: configurecluster

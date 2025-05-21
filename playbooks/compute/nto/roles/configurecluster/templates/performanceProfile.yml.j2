@@ -1,0 +1,39 @@
+apiVersion: performance.openshift.io/v2
+kind: PerformanceProfile
+metadata:
+    name: performance
+    annotations:
+        performance.openshift.io/ignore-cgroups-version: "{{ ignore_cgroups_version }}"
+{% if annotations is defined %}
+{{ annotations }}
+{% endif %}
+spec:
+    cpu:
+        isolated: "{{ generated_ppc_cpu['isolated'] }}"
+        reserved: "{{ generated_ppc_cpu['reserved'] }}"
+{% if hugepages is defined %}
+    hugepages:
+        defaultHugepagesSize: {{ hugepages['size'] | default('1G') }}
+{% if hugepages['pages'] is defined %}
+        pages: 
+{% for page in hugepages['pages'] %}
+        - count: {{ page['count']}}
+          node:  {{ loop.index0 }}
+          size:  {{ page['size'] }}
+{% endfor %}        
+{% endif %}
+{% endif %}
+    machineConfigPoolSelector:
+        machineconfiguration.openshift.io/role: worker-cnf
+    net:
+        userLevelNetworking: true
+    nodeSelector:
+        node-role.kubernetes.io/worker-cnf: ""
+    numa:
+        topologyPolicy: single-numa-node
+    realTimeKernel:
+        enabled:  {{ rt_kernel }}
+    workloadHints:
+        highPowerConsumption: true
+        perPodPowerManagement: false
+        realTime: {{ rt_kernel }}

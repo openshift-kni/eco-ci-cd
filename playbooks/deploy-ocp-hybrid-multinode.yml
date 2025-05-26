@@ -77,6 +77,16 @@
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
 
+    - name: Render VM spec from YAML string
+      ansible.builtin.set_fact:
+        vm_spec: "{{ vm_spec_string | from_yaml }}"
+        network_interfaces: "{{ network_interfaces_string | from_yaml }}"
+      when: vendor | lower == 'kvm'
+
+    - name: Process KVM nodes to set facts
+      ansible.builtin.import_role:
+        name: redhatci.ocp.process_kvm_nodes
+
 # Process optional environment Variables if present
 - name: Mutate worker network configuration if env variables are present
   hosts: workers
@@ -231,10 +241,6 @@
         gai_discovery_iso_name: "agent.iso"
         gai_remote_http_src: true
         gai_http_delegate_host: "{{ inventory_hostname }}"
-
-    - name: Process KVM nodes to set facts
-      ansible.builtin.import_role:
-        name: redhatci.ocp.process_kvm_nodes
 
 - name: Setup Virtual Control Plane
   hosts: vm_hosts

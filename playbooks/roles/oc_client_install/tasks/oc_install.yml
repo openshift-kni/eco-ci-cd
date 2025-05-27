@@ -106,10 +106,12 @@
     - "kubectl"
 
 - name: Verify 'oc' binary by running 'oc version'
-  ansible.builtin.command: oc version
+  ansible.builtin.command: oc version --client=false
   register: oc_check
   ignore_errors: true
   changed_when: false
+  environment:
+    KUBECONFIG: ""
 
 - name: Fail if 'oc' binary is missing or not executable
   when: oc_check.rc != 0

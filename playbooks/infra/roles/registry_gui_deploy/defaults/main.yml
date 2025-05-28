@@ -2,6 +2,7 @@ registry_gui_cert_dir: /opt/registry/certs
 registry_gui_registry_image: quay.io/redhat-partner-solutions/registry:2
 registry_gui_name: disconnected.registry.local
 registry_gui_port: 5000
+registry_gui_web_port: 80
 registry_gui_secret: "dummy"
 registry_gui_local_pull_secret_path: /tmp/htpasswd
 registry_gui_registry_ui_image: docker.io/joxit/docker-registry-ui:2.5.7

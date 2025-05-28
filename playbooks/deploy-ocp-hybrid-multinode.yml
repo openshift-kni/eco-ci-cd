@@ -16,6 +16,7 @@
 # - Virtual control plane setup: Enables necessary repositories and configures sushy tools.
 # - VM and BM booting: Deploys instances and boots nodes using an agent-based installer.
 # - Installation monitoring: Ensures the installation process completes successfully.
+# - Deploying additional cluster-wide trusted registries.
 
 ## Prerequisites:
 # - Ansible 2.10+ installed on the control node.
@@ -303,3 +304,23 @@
         agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
         mabi_retry_install_complete_check: true
         cluster: "{{ cluster_name }}"
+
+    - name: Get OpenShift pull-secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+      register: pull_secret_raw
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Update default pull-secret with additional trusted registries
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', 'templates/pull_secret.j2') }}"
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      vars:
+        pull_secret: "{{ pull_secret_raw }}"
+        trusted_registries: "{{ additional_trusted_registries }}"

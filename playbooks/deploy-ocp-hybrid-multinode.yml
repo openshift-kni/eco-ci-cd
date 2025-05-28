@@ -210,6 +210,8 @@
     - name: Setup HTTP storage
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
+      vars:
+        http_port: "{{ share_http_iso_port }}"
 
     - name: Deploy/Redeploy OCP client
       ansible.builtin.import_role:
@@ -279,7 +281,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.boot_iso
       vars:
-        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}/{{ agent_iso_name }}"
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
 
 - name: Boot Virtual Machines
   hosts: masters
@@ -290,7 +292,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.boot_iso
       vars:
-        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}/{{ agent_iso_name }}"
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
 
 - name: Monitor installation process of agent-based installer
   hosts: bastion

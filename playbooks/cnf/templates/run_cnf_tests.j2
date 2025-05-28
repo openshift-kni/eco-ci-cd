@@ -3,8 +3,8 @@
 export KUBECONFIG="{{ kubeconfig }}"
 export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
 export IMAGE_REGISTRY="{{ container_registry }}/"
-export CNF_TESTS_IMAGE="openshift4-cnf-tests:v{{ cnf_tests_version }}"
-export DPDK_TESTS_IMAGE="dpdk-base:v{{ dpdk_base_version }}"
+export CNF_TESTS_IMAGE="cnf-tests-rhel8:v{{ containers_version }}"
+export DPDK_TESTS_IMAGE="dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}"
 export XT_U32TEST_HAS_NON_CNF_WORKERS={{ xt_u32test_host_non_cnf_workers | default('false') }}
 export GINKGO_PARAMS="--timeout=24h -v{% if ginkgo_additional_params is defined and ginkgo_additional_params | length > 0 %} {{ ginkgo_additional_params }}{% endif %}"
 export FEATURES="{{ features }}"

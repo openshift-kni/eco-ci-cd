@@ -36,6 +36,7 @@ The following variables must be defined by the user:
 |----------|-------------|
 | `registry_gui_name` | Container name for the registry |
 | `registry_gui_port` | Port number for the registry (default: `5000`) |
+| `registry_gui_web_port` | NGINX frontend port (default: `80`) |
 | `registry_gui_user` | Registry username |
 | `registry_gui_pass` | Registry password |
 | `registry_gui_registry_image` | Image for the registry container (e.g., `registry:2`) |

@@ -1,0 +1,91 @@
+---
+- name: Push CI JUnit XML report data to collector
+  hosts: all
+  vars:
+    collection_roles: "collections/ansible_collections/redhatci/ocp/roles"
+    target_path: "{{ playbook_dir }}/upload"
+  pre_tasks:
+
+    - name: Catch splunk_url from command line
+      ansible.builtin.set_fact:
+        trs_collector_url: "{{ splunk_url }}"
+      when:
+        - splunk_url | default("") | length > 0
+      tags:
+        - inproc
+
+    - name: Catch splunk_token from command line
+      ansible.builtin.set_fact:
+        trs_collector_auth_headers: "{{ trs_collector_auth_headers | default({}) | combine({'Authorization': 'Splunk ' + splunk_token}) }}"
+      when:
+        - splunk_token | default("") | length > 0
+      tags:
+        - inproc
+
+    - name: Catch splunk_channel from command line
+      ansible.builtin.set_fact:
+        trs_collector_auth_headers: "{{ trs_collector_auth_headers | combine({'X-Splunk-Request-Channel': splunk_channel}) }}"
+      when:
+        - splunk_channel | default("") | length > 0
+      tags:
+        - inproc
+
+    - name: Catch splunk_source from command line
+      ansible.builtin.set_fact:
+        trs_collector_source: "{{ splunk_source | default('unknown') }}"
+      when:
+        - splunk_source | default("") | length > 0
+      tags:
+        - inproc
+
+    - name: Ensure trs_metadata_path is set
+      ansible.builtin.set_fact:
+        trs_metadata_path: "{{ trs_metadata_path | default('') }}"
+      tags:
+        - inproc
+
+    - name: Include role to expose defaults (but don't run tasks)
+      ansible.builtin.include_role:
+        name: redhatci.ocp.test_report_send
+        public: true
+      when: false # This prevents the tasks in my_role from executing
+
+    - name: Validate legal trs_ci_system value
+      ansible.builtin.assert:
+        that:
+          - trs_ci_system in trs_supported_ci_systems
+        fail_msg:
+          - "CI system: '{{ trs_ci_system }}' is not supported. (REASON: not in (\"{{ trs_supported_ci_systems | join('\", \"') }}\"])"
+
+    - name: Validate junit2json variables are defined
+      ansible.builtin.assert:
+        that:
+          - junit2_input_reports_list | default([]) | length > 0
+          - junit2_output_dir | default("") | length > 0
+        fail_msg:
+          - "Variable trs_collector_auth_headers contains incorrect data or misses required keys"
+      tags:
+        - inproc
+        - validation
+  tasks:
+    - name: Convert JUnit reports convert to json without merging
+      ansible.builtin.include_role:
+        name: redhatci.ocp.junit2json
+      vars:
+        junit2_do_merge: true
+
+    - name: Upload reports to splunk
+      ansible.builtin.include_role:
+        name: redhatci.ocp.test_report_send
+      vars:
+        trs_do_send: false
+        trs_ci_detect_skip: true
+        trs_ci_system: "{{ trs_ci_system }}"
+        trs_report_path: "{{ global_json_reports_list[0] }}"
+        trs_metadata_path: "{{ trs_metadata_path }}"
+        trs_collector_target: "{{ splunk_channel }}"
+        trs_collector_source: "https://fake-distributed-ci.io"
+      when:
+        - global_json_reports_list | default([]) | length > 0
+      tags:
+        - send

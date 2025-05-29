@@ -43,8 +43,25 @@
         trs_metadata_path: "{{ trs_metadata_path | default('') }}"
       tags:
         - inproc
+    - name: Set trs_do_send if unset
+      ansible.builtin.set_fact:
+        trs_do_send: false
+      when:
+        - trs_do_send is not defined
 
-    - name: Include role to expose defaults (but don't run tasks)
+    - name: Set trs_ci_detect_skip if unset
+      ansible.builtin.set_fact:
+        trs_ci_detect_skip: false
+      when:
+        - trs_ci_detect_skip is not defined
+
+    - name: Set trs_collector_source if unset
+      ansible.builtin.set_fact:
+        trs_collector_source: "" # "https://fake-distributed-ci.io"
+      when:
+        - trs_collector_source is not defined
+
+    - name: Load role to expose its defaults (but don't run tasks)
       ansible.builtin.include_role:
         name: redhatci.ocp.test_report_send
         public: true
@@ -78,13 +95,10 @@
       ansible.builtin.include_role:
         name: redhatci.ocp.test_report_send
       vars:
-        trs_do_send: false
-        trs_ci_detect_skip: true
-        trs_ci_system: "{{ trs_ci_system }}"
+        # trs_ci_system: "{{ trs_ci_system }}"
+        # trs_metadata_path: "{{ trs_metadata_path }}"
         trs_report_path: "{{ global_json_reports_list[0] }}"
-        trs_metadata_path: "{{ trs_metadata_path }}"
         trs_collector_target: "{{ splunk_channel }}"
-        trs_collector_source: "https://fake-distributed-ci.io"
       when:
         - global_json_reports_list | default([]) | length > 0
       tags:

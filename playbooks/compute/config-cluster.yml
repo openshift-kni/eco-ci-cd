@@ -1,0 +1,12 @@
+- name: Deploy NTO configuration
+  hosts: bastion
+  gather_facts: false
+  vars:
+    kubeconfig: "/home/telcov10n/project/generated/hlxcl15/auth/kubeconfig" # TODO: for testing only should be removed
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Configure NTO cluster
+      ansible.builtin.include_role:
+        name: ./nto/roles/configurecluster

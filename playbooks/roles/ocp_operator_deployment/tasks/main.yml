@@ -22,6 +22,13 @@
   loop: "{{ ocp_operator_deployment_operators }}"
   when: item.catalog  == stage
 
+- name: Deploy stage ImageDigestMirrorSet if needed
+  when: item.catalog  == stage
+  loop: "{{ ocp_operator_deployment_operators }}"
+  kubernetes.core.k8s:
+    template: "{{ role_path }}/templates/imagedigestmirrorset.j2"
+    state: present
+
 - name: Deploy pre-ga CatalogSource
   ansible.builtin.include_tasks: deploy_pre_ga.yaml
   loop: "{{ ocp_operator_deployment_operators }}"

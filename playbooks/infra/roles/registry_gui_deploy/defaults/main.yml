@@ -1,0 +1,11 @@
+registry_gui_cert_dir: /opt/registry/certs
+registry_gui_registry_image: quay.io/redhat-partner-solutions/registry:2
+registry_gui_name: disconnected.registry.local
+registry_gui_port: 5000
+registry_gui_secret: "dummy"
+registry_gui_local_pull_secret_path: /tmp/htpasswd
+registry_gui_registry_ui_image: docker.io/joxit/docker-registry-ui:2.5.7
+registry_gui_registry_ui_container_name: ocpdiscon-registry-ui
+registry_gui_nginx_lb_container_name: ocpdiscon-nginx-lb
+registry_gui_nginx_config_dir: /opt/registry/nginx
+registry_gui_nginx_lb_image: docker.io/library/nginx:latest

@@ -1,0 +1,12 @@
+---
+- name: Deploy registry container
+  become: true
+  ansible.builtin.import_tasks: deploy_registry.yml
+
+- name: Deploy Registry UI container
+  become: true
+  ansible.builtin.import_tasks: deploy_registry_gui.yml
+
+- name: Deploy Registry Nginx Load Balancer
+  become: true
+  ansible.builtin.import_tasks: deploy_registry_nginx_lb.yml

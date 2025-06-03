@@ -312,6 +312,8 @@
 - name: Setup bastion host
   hosts: bastion
   gather_facts: true
+  environment:
+    REGISTRY_AUTH_FILE: /etc/containers/auth.json
   tasks:
 
     - name: Set up authorized_keys
@@ -417,6 +419,35 @@
         content: "PATH=$PATH:$HOME/.local/bin:/usr/local/go/bin"
         dest: /home/{{ ansible_user }}/.bash_profile
         mode: "0640"
+
+    - name: Set podman auth env variable system-wide
+      become: true
+      ansible.builtin.copy:
+        content: "export REGISTRY_AUTH_FILE=/etc/containers/auth.json"
+        dest: /etc/profile.d/podman-auth-var.sh
+        mode: "0755"
+
+    # TODO: Uncomment once rehdatci bump completed
+    # - name: Add auth credentials for container registres
+    #   ansible.builtin.set_fact:
+    #     pull_secret: |
+    #       {
+    #         "auths": {{ podman_registry_credentials }}
+    #         }
+    #       }
+
+    # - name: Setup Internal registry
+    #   ansible.builtin.import_role:
+    #     name: registry_gui_deploy
+    #   vars:
+    #     registry_gui_tls_cert: "{{ disconnected_registry_cert }}"
+    #     registry_gui_tls_cert_key: "{{ disconnected_registry_cert_key }}"
+    #     registry_gui_user: "{{ ansible_user }}"
+    #     registry_gui_pass: "{{ ansible_password }}"
+    #     registry_gui_htpasswd_content: "{{ disconnected_registry_htpasswd_string }}"
+    #     registry_gui_registry_ui_image: "quay.io/telcov10n-ci/docker-registry-ui:latest"
+    #     registry_gui_pull_secret: "{{ pull_secret }}"
+    #     registry_gui_nginx_lb_image: "quay.io/telcov10n-ci/nginx:1.24.0-alpine"
 
   handlers:
 

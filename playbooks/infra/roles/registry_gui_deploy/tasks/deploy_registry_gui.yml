@@ -1,0 +1,33 @@
+---
+- name: Run Registry UI container
+  containers.podman.podman_container:
+    name: "{{ registry_gui_registry_ui_container_name }}"
+    image: "{{ registry_gui_registry_ui_image }}"
+    state: stopped
+    restart_policy: always
+    ports:
+      - "8080:80"
+    env:
+      REGISTRY_URL: "http://{{ ansible_host }}/v2"
+      NGINX_PROXY_PASS_URL: "http://{{ ansible_host }}/v2"
+      PULL_URL: "{{ ansible_host }}:5000"
+      DELETE_IMAGES: "true"
+      SINGLE_REGISTRY: "true"
+
+- name: Setup Registry UI systemd service
+  block:
+    - name: Deploy registry UI systemd unit
+      ansible.builtin.template:
+        src: registry-ui.systemd.j2
+        dest: "/etc/systemd/system/container-registry-ui.service"
+        mode: "0644"
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start Registry UI service
+      ansible.builtin.systemd:
+        name: container-registry-ui.service
+        enabled: true
+        state: started

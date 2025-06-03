@@ -38,23 +38,6 @@
       tags:
         - inproc
 
-    - name: Ensure trs_metadata_path is set
-      ansible.builtin.set_fact:
-        trs_metadata_path: "{{ trs_metadata_path | default('') }}"
-      tags:
-        - inproc
-    - name: Set trs_do_send if unset
-      ansible.builtin.set_fact:
-        trs_do_send: false
-      when:
-        - trs_do_send is not defined
-
-    - name: Set trs_ci_detect_skip if unset
-      ansible.builtin.set_fact:
-        trs_ci_detect_skip: false
-      when:
-        - trs_ci_detect_skip is not defined
-
     - name: Set trs_collector_source if unset
       ansible.builtin.set_fact:
         trs_collector_source: "" # "https://fake-distributed-ci.io"
@@ -76,11 +59,14 @@
 
     - name: Validate junit2json variables are defined
       ansible.builtin.assert:
-        that:
-          - junit2_input_reports_list | default([]) | length > 0
-          - junit2_output_dir | default("") | length > 0
+        that: "{{ condition }}"
         fail_msg:
-          - "Variable trs_collector_auth_headers contains incorrect data or misses required keys"
+          - "The condition {{ condition }} failed"
+      loop:
+        - 'junit2_input_reports_list | default([]) | length > 0'
+        - 'junit2_output_dir | default("") | length > 0'
+      loop_control:
+        loop_var: condition
       tags:
         - inproc
         - validation
@@ -91,12 +77,10 @@
       vars:
         junit2_do_merge: true
 
-    - name: Upload reports to splunk
+    - name: Upload reports to Splunk
       ansible.builtin.include_role:
         name: redhatci.ocp.test_report_send
       vars:
-        # trs_ci_system: "{{ trs_ci_system }}"
-        # trs_metadata_path: "{{ trs_metadata_path }}"
         trs_report_path: "{{ global_json_reports_list[0] }}"
         trs_collector_target: "{{ splunk_channel }}"
       when:

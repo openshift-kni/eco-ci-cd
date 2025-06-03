@@ -1,16 +1,33 @@
-PY ?= python3
-VENV_DIR ?= .venv
-RECREATE ?= 0
-VARS_DIR ?= vars
-DATA_FILE ?= data.yml
-TPL_DIR ?= templates
-PLAYBOOK ?= playbooks/infra/reporting/test_report_send.yml
-GENERATOR ?= tools/gen_playbook_data.py
+# whether we shall not send data and set specific CI
+DEV_MODE   ?= 0
+# do not recreate by default
+RECREATE   ?= 0
+# use the default python3.
+PY         ?= python3
+# where to install current venv directory
+VENV_DIR   ?= $(PWD)/.venv
+# ansible vars/ directory
+VAR_DIR    ?= $(PWD)/vars
+# jinja data file path
+OUT_DIR    ?= $(PWD)/output
+# jinja templates directory
+TPL_DIR    ?= $(PWD)/templates
+# jinja intermediate data file
+DATA_FILE  ?= $(OUT_DIR)/data.yml
+# ansible playbook file
+PLAYBOOK   ?= playbooks/infra/reporting/test_report_send.yml
+# extra data generator script
+GENERATOR  ?= tools/gen_playbook_data.py
+# extra data file template
+TPL_FILE    = $(TPL_DIR)/$(notdir $(PLAYBOOK)).j2
+# extra vars for the playbook
+EXTRA_VARS  = $(VAR_DIR)/$(notdir $(PLAYBOOK))
+SHELL       = /bin/bash
 
 .DEFAULT_TARGETS: bootstrap
 
 bootstrap:
-	@printf -- "---- STARTED: $$(date -u) ----\n"
+	@printf -- "---- STARTING $@: $(shell date -u) ----\n"
 	@function venv_inst() { \
 		local venv="$${1?cannot continue without venv}"; \
 		local py="$${2:-"$(PY)"}"; \
@@ -34,20 +51,46 @@ bootstrap:
 	else \
 		venv_inst "$(VENV_DIR)" "$(PY)"; \
 	fi
-	@printf -- "---- FINISHED: $$(date -u) ----\n"
+	@printf -- "---- FINISHED $@: $$(date -u) ----\n"
 
-setup:
-	TPL=$(TPL_DIR)/$(notdir $(PLAYBOOK)).j2; \
-	EXTRA_VAR=$(VARS_DIR)/$(notdir $(PLAYBOOK)); \
-	source "$(VENV_DIR)/bin/activate"; \
-	if [ ! -r "$(DATA_FILE)" ]; then \
-		echo "Running $(GENERATOR) script to generate $(DATA_FILE). [REASON: the file is missing]"; \
-		python3 $(GENERATOR) --output=$(DATA_FILE); \
+gendata:
+	@printf -- "---- STARTING $@: $(shell date -u) ----\n"
+	@function datagen() { \
+		local generator data venv; \
+		local -a cmd; \
+		generator="$${1:-"$(GENERATOR)"}"; \
+		data="$${2:-"$(DATA_FILE)"}"; \
+		venv="$${3:-"$(VENV_DIR)"}"; \
+		echo "Running $${generator} script to generate $${data}. [REASON: the file is missing]"; \
+		cmd=("python3" "$${generator}" "--output=$${data}"); \
+		if [[ "$(DEV_MODE)" -gt 0 ]]; then \
+			cmd+=("--skip-ci-detect" "--skip-send"); \
+		fi; \
+		source "$${venv}"/bin/activate; \
+		"$${cmd[@]}" || exit 1; \
+	}; \
+	source $(VENV_DIR)/bin/activate; \
+	if [ "$(RECREATE)" -gt 0 ]; then \
+		datagen $(GENERATOR) $(DATA_FILE) || exit $$?; \
 	fi; \
-	echo "Generating extra variables file $${EXTRA_VAR} for playbook $(PLAYBOOK)"; \
-	jinja --format=yaml --data=$(DATA_FILE) --output=$${EXTRA_VAR} $${TPL}
+	if ! [ -r "$(DATA_FILE)" ]; then \
+		datagen "$(GENERATOR)" "$(DATA_FILE)" || exit $$?; \
+	fi
+	@printf -- "---- FINISHED $@: $$(date -u) ----\n"
+
+render:	gendata
+	@printf -- "---- STARTING $@: $$(date -u) ----\n"
+	echo "Generating extra variables file $(EXTRA_VAR) for playbook $(PLAYBOOK)"; \
+	source $(VENV_DIR)/bin/activate; \
+	jinja \
+		--format=yaml \
+		--data="$(DATA_FILE)" \
+		--output="$(EXTRA_VAR)" "$(TPL_FILE)" || exit $$?; \
 	echo "Now you can invoke the playbook via: make run PLAYBOOK=$(PLAYBOOK)"
+	@printf -- "---- FINISHED $@: $$(date -u) ----\n"
 
 run:
-	source "$(VENV_DIR)/bin/activate"; \
-	ansible-playbook -e @$(DATA_FILE) $(PLAYBOOK) -v
+	@printf -- "---- STARTING $@: $$(date -u) ----\n"
+	source $(VENV_DIR)/bin/activate; \
+	ansible-playbook -e @$(EXTRA_VAR) $(PLAYBOOK) -v
+	@printf -- "---- FINISHED $@: $$(date -u) ----\n"

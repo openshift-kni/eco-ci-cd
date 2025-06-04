@@ -1,0 +1,46 @@
+---
+- name: Allow HTTP (port 80) through firewalld
+  ansible.posix.firewalld:
+    port: 80/tcp
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Reload firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: reloaded
+
+- name: Deploy Nginx config
+  ansible.builtin.template:
+    src: nginx-config.j2
+    dest: "{{ registry_gui_nginx_config_dir }}/nginx.conf"
+    mode: "0644"
+
+- name: Deploy Nginx Load Balancer container
+  containers.podman.podman_container:
+    name: "{{ registry_gui_nginx_lb_container_name }}"
+    image: "{{ registry_gui_nginx_lb_image }}"
+    state: stopped
+    detach: true
+    network: host
+    volumes:
+      - "{{ registry_gui_nginx_config_dir }}/nginx.conf:/etc/nginx/nginx.conf:z"
+
+- name: Setup Nginx Load Balancer systemd service
+  block:
+    - name: Deploy Nginx systemd unit
+      ansible.builtin.template:
+        src: nginx-systemd.j2
+        dest: "/etc/systemd/system/container-registry-lb.service"
+        mode: "0644"
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start Nginx Load Balancer service
+      ansible.builtin.systemd:
+        name: container-registry-lb.service
+        enabled: true
+        state: started

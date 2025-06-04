@@ -1,0 +1,77 @@
+---
+- name: Ensure required directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    recurse: true
+  loop:
+    - "{{ registry_gui_cert_dir }}"
+    - "/etc/containers/certs.d/{{ registry_gui_name }}:{{ registry_gui_port }}"
+    - "{{ registry_gui_nginx_config_dir }}"
+
+- name: Deploy TLS certificate
+  ansible.builtin.copy:
+    content: "{{ registry_gui_tls_cert }}"
+    dest: "{{ item }}"
+    mode: "0644"
+  loop:
+    - "{{ registry_gui_cert_dir }}/registry.crt"
+    - "/etc/containers/certs.d/{{ registry_gui_name }}:{{ registry_gui_port }}/ca.crt"
+  no_log: true
+
+- name: Deploy TLS key
+  ansible.builtin.copy:
+    content: "{{ registry_gui_tls_cert_key }}"
+    dest: "{{ registry_gui_cert_dir }}/registry.key"
+    mode: "0640"
+  no_log: true
+
+- name: Deploy htpasswd file
+  ansible.builtin.copy:
+    content: "{{ registry_gui_htpasswd_content }}"
+    dest: "{{ registry_gui_local_pull_secret_path }}"
+    mode: "0640"
+  no_log: true
+
+- name: Install firewalld
+  ansible.builtin.package:
+    name: firewalld
+    state: present
+
+- name: Ensure firewalld is started and enabled
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Add registry hostname to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "127.0.0.1 {{ registry_gui_name }}"
+    state: present
+    create: true
+    mode: "0644"
+
+- name: Setup internal registry using redhatci.ocp.setup_mirror_registry role
+  ansible.builtin.import_role:
+    name: redhatci.ocp.setup_mirror_registry
+  tags:
+    - skip_ansible_lint
+  vars:
+    REGISTRY_HTTP_SECRET: "{{ registry_gui_secret }}"
+    disconnected_registry_user: "{{ registry_gui_user }}"
+    disconnected_registry_password: "{{ registry_gui_pass }}"
+    config_file_path: "/etc/containers"
+    pull_secret_file_name: "auth.json"
+    local_pull_secret_path: "{{ registry_gui_local_pull_secret_path }}"
+    pull_secret: "{{ registry_gui_pull_secret }}"
+    local_registry: "{{ registry_gui_name }}:{{ registry_gui_port }}"
+    registry_container_image: "{{ registry_gui_registry_image }}"
+    registry_optional_env_vars:
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Origin: '["https://{{ registry_gui_name }}"]'
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Methods: '[GET,HEAD,OPTIONS,PUT,POST,DELETE]'
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Credentials: '[true]'
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Headers: '[Authorization,Accept,Cache-Control,Content-Type]'
+      REGISTRY_HTTP_HEADERS_Access-Control-Expose-Headers: '[Docker-Content-Digest]'
+      REGISTRY_STORAGE_DELETE_ENABLED: 'true'

@@ -1,0 +1,51 @@
+events {}
+
+http {
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+    access_log /var/log/nginx/access.log main;
+    error_log /var/log/nginx/error.log warn;
+
+    server {
+        listen 80;
+
+        location / {
+            proxy_pass http://127.0.0.1:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto http;
+        }
+
+        location /v2/ {
+            if ($request_method = OPTIONS) {
+                add_header 'Access-Control-Allow-Origin' 'http:/{{ ansible_host }}/v2' always;
+                add_header 'Access-Control-Allow-Credentials' 'true' always;
+                add_header 'Access-Control-Allow-Methods' 'GET, HEAD, OPTIONS, PUT, POST, DELETE' always;
+                add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, Cache-Control' always;
+                add_header 'Access-Control-Max-Age' 1728000 always;
+                add_header 'Content-Length' 0;
+                add_header 'Content-Type' 'text/plain; charset=UTF-8';
+                return 204;
+            }
+
+            proxy_pass https://127.0.0.1:5000/;
+            proxy_ssl_verify off;  # disable SSL verification if registry uses self-signed cert
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto http;
+
+            proxy_set_header Authorization $http_authorization;
+
+            add_header 'Access-Control-Allow-Origin' 'http://{{ ansible_host }}' always;
+            add_header 'Access-Control-Allow-Credentials' 'true' always;
+            add_header 'Access-Control-Expose-Headers' 'Docker-Content-Digest' always;
+        }
+
+        client_max_body_size 0;
+        proxy_request_buffering off;
+    }
+}

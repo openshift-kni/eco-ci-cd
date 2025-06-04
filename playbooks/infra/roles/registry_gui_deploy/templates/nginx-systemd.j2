@@ -1,0 +1,14 @@
+[Unit]
+Description=NGINX Proxy Container
+After=network.target
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/podman start {{ registry_gui_nginx_lb_container_name }}
+ExecStop=/usr/bin/podman stop -t 10 {{ registry_gui_nginx_lb_container_name }}
+KillMode=none
+Type=forking
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

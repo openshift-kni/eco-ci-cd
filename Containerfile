@@ -17,7 +17,8 @@ RUN pip3 install --no-cache-dir \
     netaddr \
     jmespath \
     paramiko \
-    ncclient
+    ncclient \
+    requests
 
 # Copy application files to eco-ci-cd folder
 COPY . .

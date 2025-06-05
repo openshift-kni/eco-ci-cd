@@ -4,6 +4,7 @@ from jira import JIRA
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
+JIRA_ISSUE = "CNF-3244"
 
 # Initialize JIRA client with Bearer token
 def init_jira_client(server_url, bearer_token) -> JIRA:
@@ -42,7 +43,7 @@ def init_jira_client(server_url, bearer_token) -> JIRA:
         exit(1)
 
 def get_env(env_var_name: str) -> str:
-    value = getenv(env_var_name)
+    value = os.environ.get(env_var_name)
     if not value:
         logging.error(f"Environment variable {env_var_name} is required.")
         exit(1)
@@ -58,7 +59,7 @@ def main():
     jira_token = get_env("JIRA_TOKEN")
 
     jira_client = init_jira_client("https://issues.redhat.com", jira_token)
-    issue_to_clone = jira_client.issue("CNF-3244")
+    issue_to_clone = jira_client.issue(JIRA_ISSUE)
     
     new_issue_fields = {
         'project': {'key': issue_to_clone.fields.project.key},
@@ -67,12 +68,18 @@ def main():
         'summary': f'QE Zstream Verification Release {z_stream_version}'
     }
     
-    cloned_issue = jira_client.create_issue(fields=new_issue_fields)
+    try: 
+        cloned_issue = jira_client.create_issue(fields=new_issue_fields)
+        
+        logging.info(f"\nSuccessfully cloned issue '{issue_to_clone.key}'")
+        logging.info(f"New cloned issue key: {cloned_issue.key}")
+        logging.info(f"New cloned issue summary: {cloned_issue.fields.summary}")
+        logging.info(f"View new issue at: {cloned_issue.permalink()}")
     
-    logging.info(f"\nSuccessfully cloned issue '{issue_to_clone.key}'")
-    logging.info(f"New cloned issue key: {cloned_issue.key}")
-    logging.info(f"New cloned issue summary: {cloned_issue.fields.summary}")
-    logging.info(f"View new issue at: {cloned_issue.permalink()}")
+    except Exception as e:
+        logging.error(f"Unable to create issue: {e}.")
+        exit(1)
+   
 
 if __name__ == "__main__":
     main()

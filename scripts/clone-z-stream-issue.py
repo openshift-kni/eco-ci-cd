@@ -6,7 +6,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 
 # Initialize JIRA client with Bearer token
-def init_jira_client(server_url, bearer_token):
+def init_jira_client(server_url, bearer_token) -> JIRA:
     """
     Create JIRA client with Bearer authentication.
     

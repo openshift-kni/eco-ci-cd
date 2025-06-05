@@ -1,0 +1,4 @@
+pyyaml
+ansible
+pytest
+jinja-cli

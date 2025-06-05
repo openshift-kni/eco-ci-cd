@@ -18,7 +18,8 @@ RUN pip3 install --no-cache-dir \
     jmespath \
     paramiko \
     ncclient \
-    requests
+    requests \
+    jira
 
 # Copy application files to eco-ci-cd folder
 COPY . .

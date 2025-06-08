@@ -5,3 +5,6 @@
 inventory*
 *__pycache__*
 collections
+# emacs config files
+.projectile
+.dir-locals.el

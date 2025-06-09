@@ -19,7 +19,8 @@ RUN pip3 install --no-cache-dir \
     paramiko \
     ncclient \
     requests \
-    jira
+    jira \
+    junitparser
 
 # Copy application files to eco-ci-cd folder
 COPY . .

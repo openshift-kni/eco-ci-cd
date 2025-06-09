@@ -52,7 +52,7 @@
     cnf_test_dir: /tmp/
     cnftests_git_dest: cnf-features-deploy
     cnf_tests_skip: ""
-    container_registry: "{{ internal_container_registry_name }}/rh-osbs"
+    container_registry: "{{ internal_container_registry_name }}/openshift4"
     features: "sctp"
     role_worker_cnf: "workercnf"
   tasks:
@@ -177,34 +177,17 @@
       args:
         chdir: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
 
-    - name: List cnf test image versions
-      changed_when: false
-      ansible.builtin.shell:
-        cmd: |
-          set -o pipefail
-          brew list-builds --package=cnf-tests-container -r --state=COMPLETE | grep "v{{ version }}"
-      register: cnf_tests_output
-
-    - name: List dpdk-base image versions
-      changed_when: false
-      ansible.builtin.shell:
-        cmd: |
-          set -o pipefail
-          brew list-builds --package=dpdk-base-container -r --state=COMPLETE --owner=exd-cpaas-bot-prod | grep "v{{ version }}"
-      register: dpdk_base_output
-
-    - name: Set cnf_tests_version and dpdk_base_version facts
+    - name: Set containers version
       ansible.builtin.set_fact:
-        cnf_tests_version: "{{ cnf_tests_output.stdout_lines[0].split(' ')[0].split('-v')[-1] }}"
-        dpdk_base_version: "{{ dpdk_base_output.stdout_lines[0].split(' ')[0].split('-v')[-1] }}"
+        containers_version: "{{ version }}"
 
     - name: Print dpdk-base image version
       ansible.builtin.debug:
-        msg: dpdk-base:v{{ dpdk_base_version }}
+        msg: dpdk-base-rhel9:v{{ containers_version }}
 
     - name: Print cnf_tests_version image version
       ansible.builtin.debug:
-        msg: cnf_tests_version:v{{ cnf_tests_version }}
+        msg: cnf_tests_version:v{{ containers_version }}
 
     - name: Prepare execute shell script
       ansible.builtin.template:

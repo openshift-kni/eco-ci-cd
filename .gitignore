@@ -4,4 +4,5 @@
 .vscode
 inventory*
 *__pycache__*
-collections
+**/collections
+**/.ansible

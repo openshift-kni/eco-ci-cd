@@ -1,0 +1,21 @@
+---
+- name: Check if folder exists
+  ansible.builtin.stat:
+    path: "{{ dir_path }}"
+  register: directory_status
+
+- name: Delete old folder
+  ansible.builtin.file:
+    state: absent
+    path: "{{ dir_path }}"
+  when: directory_status.stat.exists
+  become: true
+
+- name: Create new directory
+  ansible.builtin.file:
+    state: directory
+    path: "{{ dir_path }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '775'
+  become: true

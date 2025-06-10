@@ -49,12 +49,12 @@
           - mlx_cx_6
           - intel_710
           - intel_810
-      "4.16":
-        cluster_name: hlx-cl3
+      "4.18":
+        cluster_name: hlxcl2
         nics:
-          - mlx_cx_6
           - intel_710
           - intel_810
+          - mlx_cx_6
   tasks:
     - name: Ensure release variable is set
       ansible.builtin.assert:

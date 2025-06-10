@@ -57,7 +57,7 @@ def main():
     
     z_stream_version = get_env("Z_STREAM_VERSION")
     jira_token = get_env("JIRA_TOKEN")
-
+        
     jira_client = init_jira_client("https://issues.redhat.com", jira_token)
     issue_to_clone = jira_client.issue(JIRA_ISSUE)
     
@@ -65,7 +65,8 @@ def main():
         'project': {'key': issue_to_clone.fields.project.key},
         'issuetype': {'name': issue_to_clone.fields.issuetype.name},
         'description': issue_to_clone.fields.description,
-        'summary': f'QE Zstream Verification Release {z_stream_version}'
+        'summary': f'QE Zstream Verification Release {z_stream_version}',
+        'assignee': jira_client.myself()
     }
     
     try: 

@@ -16,11 +16,11 @@
     source: "{{ item.catalog }}"
     namespace: "{{ item.nsname }}"
     operator_group_name: "{{ item.og_name | default(item.name) }}"
-    channel: "{{ item.channel | default(omit) }}"
+    channel: "{{ item.channel | default('') }}"
     ns_labels:
       "{{ item.ns_labels | default(ocp_operator_deployment_default_label) }}"
     operator_group_spec: "{{ operator_group_spec_config }}"
-    starting_csv: "{{ item.starting_csv | default(omit) }}"
+    starting_csv: "{{ item.starting_csv | default('') }}"
     subscription_name: "{{ item.subscription_name | default(undefined) }}"
     install_approval: "{{ item.install_approval | default('Automatic') }}"
 

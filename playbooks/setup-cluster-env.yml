@@ -41,6 +41,7 @@
     dest_directory: /tmp/
     ocp_secondary_nic_file_name: "secondary_nic"
     ocp_primary_nic_file_name: "ocp_nic"
+    ocp_release_version_file_name: "cluster_version"
     cluster_name_file_name: "cluster_name"
     cluster_release_map:
       "4.17":
@@ -108,4 +109,14 @@
       ansible.builtin.copy:
         content: "{{ ocp_primary_nic }}"
         dest: "{{ dest_directory }}/{{ ocp_primary_nic_file_name }}"
+        mode: "0660"
+
+    - name: Print OCP release
+      ansible.builtin.debug:
+        msg: "OCP release is: {{ ocp_version_facts_parsed_release }}"
+
+    - name: Write OCP release version to file
+      ansible.builtin.copy:
+        content: "{{ ocp_version_facts_parsed_release }}"
+        dest: "{{ dest_directory }}/{{ ocp_release_version_file_name }}"
         mode: "0660"

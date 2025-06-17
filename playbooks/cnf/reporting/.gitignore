@@ -1,0 +1,7 @@
+output
+results
+.markdownlint.json
+requirements.yml
+*requirements.local.yml
+vars.local.mk
+*event.json

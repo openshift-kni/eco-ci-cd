@@ -1,0 +1,5 @@
+COLLECTION_ROOT = {{ collection_src_root | default("\$(HOME)/src/github.com/mvk/ocp") }}
+COLLECTIONS_REQS_LOCAL = {{ collections_reqs_local | default("requirements.local.yml") }}
+COLLECTION_REQ_FILES_TXT = requirements.yml,$(COLLECTIONS_REQS_LOCAL)
+DEL_COLLECTIONS = {{ del_collections | default(["redhatci.ocp"]) | join(" ") }}
+# $(warning DEBUG: Inside vars.local.mk - COLLECTION_REQ_FILES_TXT = "$(COLLECTION_REQ_FILES_TXT)")

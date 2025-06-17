@@ -1,0 +1,5 @@
+ansible
+ansible-lint
+jinja-cli
+pytest
+ruamel.yaml>=0.18.0

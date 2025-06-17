@@ -1,0 +1,227 @@
+{
+  "event": {
+    "metadata": {
+      "ci": {
+        "type": "dci",
+        "url": "https://distributed-ci.blueredhat.com"
+      },
+      "is_ci": true,
+      "job": {
+        "created_at": "2024-12-17T16:40:37.843936",
+        "duration": 5843,
+        "id": "8d872420-198a-48a0-9285-fae789a71979",
+        "name": "op-deploy-cloudran-site-new-version",
+        "status": "success",
+        "status_reason": "",
+        "tags": [
+          "stage:deploy_sno",
+          "inventory:tb3slcm3",
+          "agent:openshift-app",
+          "op",
+          "ztp",
+          "deploy",
+          "gitlab-193801",
+          "cluster:hubmgmt3"
+        ],
+        "team_id": "713ecb86-0157-4445-ad90-c7aa7d0306a0",
+        "topic_id": "9be2a178-c9e5-4921-8d9d-d929851d658a"
+      },
+      "pipeline": {
+        "created_at": "2024-12-17T16:33:28.494976",
+        "id": "5e4ea1de-a2c9-4f1e-847e-da4c8bb3e2ab",
+        "name": "pipeline"
+      }
+    },
+    "test": {
+      "errors": 0,
+      "failures": 0,
+      "schema_version": "1.0.0",
+      "skipped": 0,
+      "test_suites": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "Workload Compatibility with OCP Versions",
+          "properties": {},
+          "skipped": 0,
+          "test_cases": [
+            {
+              "classname": "Workload Compatibility with OCP-4.18",
+              "name": "Check compatibility with OCP-4.18",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            },
+            {
+              "classname": "Workload Compatibility with OCP-4.19",
+              "name": "Check compatibility with OCP-4.19",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            },
+            {
+              "classname": "Workload Compatibility with OCP-4.18",
+              "name": "Check compatibility with OCP-4.18",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            },
+            {
+              "classname": "Workload Compatibility with OCP-4.19",
+              "name": "Check compatibility with OCP-4.19",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            },
+            {
+              "classname": "Workload Compatibility with OCP-4.18",
+              "name": "Check compatibility with OCP-4.18",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            },
+            {
+              "classname": "Workload Compatibility with OCP-4.19",
+              "name": "Check compatibility with OCP-4.19",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.0
+            }
+          ],
+          "tests": 6,
+          "time": 0.0,
+          "timestamp": "1970-01-01T00:00:00"
+        },
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "du_op_deploy_cloudran_site_new_version",
+          "properties": {},
+          "skipped": 0,
+          "test_cases": [
+            {
+              "classname": "",
+              "name": "test_file_namespace_creation",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.164
+            },
+            {
+              "classname": "",
+              "name": "test_cluster_deployment_creation",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 150.933
+            },
+            {
+              "classname": "",
+              "name": "test_agent_cluster_creation",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.155
+            },
+            {
+              "classname": "",
+              "name": "test_managedcluster_creation",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 0.153
+            },
+            {
+              "classname": "",
+              "name": "test_sites_deployment_time",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 2767.333
+            },
+            {
+              "classname": "",
+              "name": "test_managedcluster_ztp_done_label",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 1203.247
+            },
+            {
+              "classname": "",
+              "name": "test_policies_number",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 1.424
+            },
+            {
+              "classname": "",
+              "name": "test_policies_compliant",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "time": 301.795
+            }
+          ],
+          "tests": 8,
+          "time": 4425.204,
+          "timestamp": "2024-12-17T17:02:16.918141+00:00"
+        }
+      ],
+      "tests": 14,
+      "time": 4425.204
+    }
+  },
+  "host": "https://httpbingo.org/status/403",
+  "source": "https://distributed-ci.blueredhat.com",
+  "sourcetype": "_json"
+}

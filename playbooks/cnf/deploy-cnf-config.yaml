@@ -89,8 +89,6 @@
         kind: Network
         name: cluster
         patch: "{{ cluster_network_patch }}"
-      tags:
-        - skip_ansible_lint
 
     - name: Wait for network operator update to begin
       kubernetes.core.k8s_info:
@@ -175,7 +173,7 @@
             state: present
             definition: "{{ lookup('template', 'templates/mc_add_ip.j2') }}"
 
-        - name: Wait for MachineConfigPool update
+        - name: Wait for MachineConfigPool update (post IP assignment)
           ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
           vars:
             mcp_name: "{{ cnf_nodes_role }}"
@@ -213,7 +211,7 @@
         state: present
         definition: "{{ lookup('template', 'templates/worker_cnf_machine_config_pool.j2') }}"
 
-    - name: Wait for MachineConfigPool update
+    - name: Wait for MachineConfigPool update (post CNF MachineConfigPool creation)
       ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
       vars:
         mcp_name: "{{ cnf_nodes_role }}"
@@ -223,7 +221,7 @@
         state: present
         definition: "{{ lookup('template', 'templates/sctp_load_mc.j2') }}"
 
-    - name: Wait for MachineConfigPool update
+    - name: Wait for MachineConfigPool update (post SCTP module enablement)
       ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
       vars:
         mcp_name: "{{ cnf_nodes_role }}"
@@ -233,12 +231,12 @@
         state: present
         definition: "{{ lookup('template', 'templates/xt-u32-load-module.j2') }}"
 
-    - name: Final MachineConfigPool synchronization
+    - name: Wait for MachineConfigPool update (post xt-u32 module enablement)
       ansible.builtin.import_tasks: tasks/wait_for_mcp.yaml
       vars:
         mcp_name: "{{ cnf_nodes_role }}"
 
-    - name: Store additiona CA cert in variable
+    - name: Store additional CA cert in variable
       ansible.builtin.uri:
         url: "{{ ca_update_link }}"
         method: GET

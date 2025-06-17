@@ -105,7 +105,7 @@
       ansible.builtin.debug:
         msg: "Primary OCP NIC is: {{ ocp_primary_nic }}"
 
-    - name: Write OCP secondary NIC parameter to file
+    - name: Write OCP primary NIC parameter to file
       ansible.builtin.copy:
         content: "{{ ocp_primary_nic }}"
         dest: "{{ dest_directory }}/{{ ocp_primary_nic_file_name }}"

@@ -50,7 +50,7 @@
           - mlx_cx_6
           - intel_710
           - intel_810
-      "4.18":
+      "4.16":
         cluster_name: hlxcl2
         nics:
           - intel_710

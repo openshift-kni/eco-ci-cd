@@ -57,7 +57,9 @@ def main():
     
     z_stream_version = get_env("Z_STREAM_VERSION")
     jira_token = get_env("JIRA_TOKEN")
-        
+    shared_dir = get_env("SHARED_DIR")
+    jira_link_path = os.path.join(shared_dir, "jira_link")
+
     jira_client = init_jira_client("https://issues.redhat.com", jira_token)
     issue_to_clone = jira_client.issue(JIRA_ISSUE)
     
@@ -71,6 +73,10 @@ def main():
     
     try: 
         cloned_issue = jira_client.create_issue(fields=new_issue_fields)
+        
+        # Save the jira link to a file to be used in the slack notification
+        with open(jira_link_path, "w") as f:
+            f.write(cloned_issue.permalink())
         
         logging.info(f"\nSuccessfully cloned issue '{issue_to_clone.key}'")
         logging.info(f"New cloned issue key: {cloned_issue.key}")

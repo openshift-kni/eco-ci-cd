@@ -1,0 +1,96 @@
+---
+- name: Push CI JUnit XML report data to collector
+  hosts: localhost
+  vars:
+    collection_roles: "collections/ansible_collections/redhatci/ocp/roles"
+    target_path: "{{ playbook_dir }}/upload"
+    global_json_reports_list: []
+  pre_tasks:
+    - name: Print CI detection variables' values
+      block:
+        - name: Print detection variable {{ item }}
+          ansible.builtin.debug:
+            msg: "{{ item }}: '{{ lookup('env', item, default='unset') }}'"
+          loop:
+            - DCI_CS_URL
+            - GITHUB_API_URL
+            - GITLAB_CI
+            - JENKINS_URL
+            - PROW_JOB_ID
+      when:
+        - trs_debug is defined and trs_debug
+    - name: Initialize trs_collector_url
+      ansible.builtin.set_fact:
+        trs_collector_url: "{{ trs_collector_url | default('') }}"
+    - name: Update trs_collector_url from splunk_url
+      ansible.builtin.set_fact:
+        trs_collector_url: "{{ splunk_url }}"
+      when:
+        - trs_collector_url | length == 0
+        - splunk_url | default("") | length > 0
+    - name: Initialize trs_collector_auth_headers
+      ansible.builtin.set_fact:
+        trs_collector_auth_headers: "{{ trs_collector_auth_headers | default({}) }}"
+    - name: Update trs_collector_auth_headers from splunk_channel
+      ansible.builtin.set_fact:
+        trs_collector_auth_headers: "{{ trs_collector_auth_headers | combine({'X-Splunk-Request-Channel': splunk_channel}) }}"
+      when:
+        - splunk_channel | default("") | length > 0
+    - name: Initialize trs_collector_auth_token
+      ansible.builtin.set_fact:
+        trs_collector_auth_token: "{{ trs_collector_auth_token | default('') }}"
+    - name: Update trs_collector_auth_token
+      ansible.builtin.set_fact:
+        trs_collector_auth_token: "{{ splunk_token }}"
+      when:
+        - trs_collector_auth_token | length == 0
+        - splunk_token | default("") | length > 0
+    - name: Initialize trs_collector_source
+      ansible.builtin.set_fact:
+        trs_collector_source: "{{ trs_collector_source | default('') }}"
+    - name: Update trs_collector_source from splunk_source
+      ansible.builtin.set_fact:
+        trs_collector_source: "{{ splunk_source }}"
+      when:
+        - trs_collector_source | length == 0
+        - splunk_source | default("") | length > 0
+
+    - name: Load role redhatci.ocp.test_report_send only for its defaults (not tasks)
+      ansible.builtin.import_role:
+        name: redhatci.ocp.test_report_send
+        defaults_from: main.yml
+        tasks_from: empty.yml
+        public: true
+    - name: Validate legal trs_ci_system value
+      ansible.builtin.assert:
+        that:
+          - trs_ci_system in trs_ci_systems_supported
+        fail_msg: |
+          CI system '{{ trs_ci_system }}' is not supported. Supported trs_ci_system values:
+          {%- for item in trs_ci_systems_supported -%}
+          "  - '{{ item }}'"
+          {%- endfor -%}
+      when:
+        - trs_ci_system | default("") | length > 0
+    - name: Validate junit2json variables are defined
+      ansible.builtin.assert:
+        that: "{{ condition }}"
+        fail_msg:
+          - "The condition {{ condition }} failed"
+      loop:
+        - 'junit2_input_reports_list | default([]) | length > 0'
+        - 'junit2_output_dir | default("") | length > 0'
+      loop_control:
+        loop_var: condition
+  tasks:
+    - name: Convert JUnit reports convert to json without merging
+      ansible.builtin.include_role:
+        name: redhatci.ocp.junit2json
+    - name: Upload reports to Splunk
+      ansible.builtin.include_role:
+        name: redhatci.ocp.test_report_send
+      vars:
+        trs_report_path: "{{ global_json_reports_list[0] }}"
+        trs_collector_target: "{{ splunk_channel }}"
+      when:
+        - global_json_reports_list | default([]) | length > 0

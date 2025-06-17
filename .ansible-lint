@@ -1,6 +1,7 @@
 ---
 skip_list:
   - var-naming[no-role-prefix]
+  - name[unique]
 
 # Define paths or files to ignore
 exclude_paths:

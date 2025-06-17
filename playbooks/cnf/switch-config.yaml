@@ -141,23 +141,23 @@
       ansible.builtin.set_fact:
         env_var_vlans: "{{ vlan_list | join(',') }}"
 
-    - name: Prepare external VLAN variables
+    - name: Update shell_script code with VLAN env variable
       ansible.builtin.set_fact:
         shell_script: |
           {{ shell_script }}
           export VLAN="{{ env_var_vlans }}"
 
-    - name: Set INTERFACE_LIST env variable
+    - name: Update shell_script code with INTERFACE_LIST env variable
       ansible.builtin.set_fact:
         shell_script: |
           {{ shell_script }}
           export INTERFACE_LIST="{{ cluster_config[cluster_name]['bm_interface_list'][secondary_nic] | quote }}"
 
-    - name: Set SWITCH_INTERFACES env variable
+    - name: Set switch_interfaces fact (for SWITCH_INTERFACES env variable)
       ansible.builtin.set_fact:
         switch_interfaces: "{{ cluster_config[cluster_name][secondary_nic] | map(attribute='switch_interface') | list }}"
 
-    - name: Set SWITCH_INTERFACES env variable
+    - name: Update shell_script code with SWITCH_INTERFACES env variable
       ansible.builtin.set_fact:
         shell_script: |
           {{ shell_script }}

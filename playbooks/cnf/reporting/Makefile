@@ -12,6 +12,7 @@ SRC_REQS = $(shell git rev-parse --show-toplevel)/$(DST_REQS)
 
 APPS = $(PY) ansible-playbook ansible-galaxy yq diff
 APPS_DEV := $(APPS) pylint ansible-lint shellcheck
+KEEP_ARTIFACTS ?= false
 
 CLEANUP_LIST := $(ANSIBLE_COLLECTIONS_PATH) $(CACHE_PATHS)	$(HOME)/.ansible/collections
 
@@ -108,7 +109,12 @@ test:
 		echo "ACTION ITEMS: review the formatted event $${ACTUAL_EVENT} and compare it to $${EXPECTED_EVENT}"
 		exit "$${rc}"
 	fi
-	@echo "test for $(TEST) passed. Deleting intermediate files"
+	@echo "test for $(TEST) passed."
+	if [[ "$${KEEP_ARTIFACTS}" -gt 0 ]]; then
+		echo "Keeping artifacts. [REASON: KEEP_ARTIFACTS=$${KEEP_ARTIFACTS}]"
+		exit 0
+	fi
+	@echo "Deleting artifacts. [REASON: KEEP_ARTIFACTS=$${KEEP_ARTIFACTS}]"
 	rm $(PWD)/*event.json
 
 retest:

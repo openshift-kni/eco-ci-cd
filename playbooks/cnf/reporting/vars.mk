@@ -33,5 +33,6 @@ CACHE_PATHS		?= $(PWD)/.ansible
 COLLECTION_ROOT ?= $(HOME)/src/github.com/mvk/ocp
 COLLECTIONS_REQS_LOCAL 		?= requirements.local.yml
 COLLECTION_REQ_FILES_TXT 	?= requirements.yml
+DEL_COLLECTIONS 			?= redhatci.ocp
 
 # $(warning DEBUG: Inside vars.mk - COLLECTION_REQ_FILES_TXT = "$(COLLECTION_REQ_FILES_TXT)")

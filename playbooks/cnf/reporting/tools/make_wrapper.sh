@@ -55,10 +55,12 @@ fi
 declare -a SUPPORTED_ACTIONS
 SUPPORTED_ACTIONS=(
   bootstrap
-  gendata
   buildpkg
+  check-requirements
+  gendata
   render
-  run_playbook
+  reset-collections-reqs
+  run-playbook
   test
 )
 
@@ -709,13 +711,11 @@ function gen_local_reqs_yaml() {
     rc
   prolog "${@}"
   collection_pkg_path="${1?cannot continue without collection_pkg_path}"
-  shift 1
-  reqs_local="${1:-"${COLLECTIONS_REQS_LOCAL}"}"
-  shift 1
-  collection_name="${1:-""}"
+  reqs_local="${2:-"${COLLECTIONS_REQS_LOCAL}"}"
+  collection_name="${3:-""}"
   if [[ -z "${collection_name}" ]]; then
     # take last path item: transform path/to/${ns}-${col}-${version}.tar.gz -> ${ns}-${col}-${version}.tar.gz
-    collection_name="${pkg_path##*/}"
+    collection_name="${collection_pkg_path##*/}"
     # remove last -* component: transform ${ns}-${col}-${version}.tar.gz -> ${ns}-${col}
     collection_name="${collection_name%-*}"
     # replace '-' with '.'
@@ -820,6 +820,14 @@ function action.buildpkg() {
   cd "${collection_root}" || die 1 "failed to chdir to collection_root=${collection_root}"
   log.info "Rebuilding a collection at ${collection_root}"
   venv_activate "${venv_dir}"
+  vars=("${PWD}/.ansible" "${PWD}/collections")
+  log.debug "Removing cache folders: ${vars[*]}"
+  for var in "${vars[@]}"; do
+    if [[ -d "${var}" ]]; then
+      rm -fr "${var}"
+      log.debug "Removed folder: '${var}'"
+    fi
+  done
   pkg_path="$(ansible-galaxy collection build --force || true)"
   # take the last word
   pkg_path="${pkg_path##* }"
@@ -990,6 +998,63 @@ function action.test() {
   return "${rc}"
 }
 
+function action.check_requirements() {
+  local \
+    rc \
+    tmp_var \
+    app
+  local -a \
+    apps
+  apps=("${@}")
+  if [[ "${#apps[@]}" -eq 0 ]]; then
+    rc=0
+    log.debug "Prematurely exiting. [REASON: nothing to check]."
+    return "${rc}"
+  fi
+  rc=0
+  for app in "${apps[@]}"; do
+    log.debug "==> testing ${app}"
+    if ! command -v "${app}" >/dev/null 2>&1; then
+      rc=$?
+      die "${rc}" "Application ${app} is not found on PATH. Please install it"
+    fi
+    tmp_var="$(command -v "${app}" || true)"
+    log.debug "${app} location: '${tmp_var}'"
+    tmp_var="$("${app}" --version || true)"
+    log.debug "<== ${app} is installed"
+    log.debug "version info: ${tmp_var}"
+  done
+  return "${rc}"
+}
+
+function action.reset_collections_reqs() {
+  local \
+    rc \
+    src_reqs \
+    dst_reqs
+  local -a \
+    del_collections
+  src_reqs="${1?cannot continue without src_reqs}"
+  del_collections="${2?cannot continue without del_collections}"
+  dst_reqs="${3:-"${src_reqs##*/}"}"
+  log.debug "Copying ${src_reqs} ==> ${dst_reqs}"
+  cp -p "${src_reqs}" "${dst_reqs}"
+  log.debug "del_collections: ${del_collections}"
+  if [[ "${del_collections}" != "" ]]; then
+    log.debug "Collections to remove: ${del_collections}"
+    run_cmd 0 "${PY}" ./tools/yaml_filter.py \
+      --in-file="${src_reqs}" \
+      --out-file="${dst_reqs}" \
+      --del-names="${del_collections}"
+    rc=$?
+    if [[ "${rc}" -ne 0 ]]; then
+      die "${rc}" "Failed to cleanup ${dst_reqs}"
+    fi
+    diff --color --unified "${src_reqs}" "${dst_reqs}" || true
+  fi
+
+}
+
 function main() {
   local \
     action \
@@ -1047,14 +1112,19 @@ function main() {
     time action.bootstrap "${args[@]}"
     rc=$?
     ;;
-  "gendata")
-    args+=("${DATA_FILE}" "${GENERATOR}" "${RECREATE}")
-    time action.gendata "${args[@]}"
-    rc=$?
-    ;;
   "buildpkg")
     args+=("${RECREATE}" "${COLLECTION_ROOT}" "${COLLECTIONS_REQS_LOCAL}")
     time action.buildpkg "${args[@]}"
+    rc=$?
+    ;;
+  "check-requirements")
+    shift 1
+    time action.check_requirements "${@}"
+    rc=$?
+    ;;
+  "gendata")
+    args+=("${DATA_FILE}" "${GENERATOR}" "${RECREATE}")
+    time action.gendata "${args[@]}"
     rc=$?
     ;;
   "render")
@@ -1062,7 +1132,12 @@ function main() {
     time action.render "${args[@]}"
     rc=$?
     ;;
-  "run_playbook")
+  "reset-collections-reqs")
+    shift 1
+    time action.reset_collections_reqs "${@}"
+    rc=$?
+    ;;
+  "run-playbook")
     args+=("${PLAYBOOK}")
     time action.run_playbook "${args[@]}"
     rc=$?

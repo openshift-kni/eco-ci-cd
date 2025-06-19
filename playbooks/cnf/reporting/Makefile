@@ -25,34 +25,13 @@ check-requirements:
 	@if [[ "$${DEV_MODE}" -gt 0 ]]; then
 		@APPS=($(APPS_DEV))
 	@fi
-	@for app in "$${APPS[@]}"; do
-		@echo "==> testing $${app}"
-		@echo "location: $$( command -v "$${app}")"
-		@"$${app}" --version
-		@RC=$$?
-		@if [[ "$${RC}" -ne 0 ]]; then
-			@echo "Application $${app} is not found on PATH. Please install it"
-			@exit "$${RC}"
-		@fi
-		@echo "<== $${app} is installed"
-	@done
+	@$(WRAPPER) "$@" "$${APPS[@]}"
 
 
 reset-collections-reqs:
 	$(MAKE) check-requirements
-	@echo "Copying the file $(SRC_REQS) -> $(DST_REQS)"
-	@cp -p $(SRC_REQS) $(DST_REQS)
-	echo "DEL_COLLECTIONS: $(DEL_COLLECTIONS)"
-	@if [[ "$(DEL_COLLECTIONS)" != "" ]]; then
-		@echo "Collections to remove (Make variable): $(DEL_COLLECTIONS)"
-		@$(PY) ./tools/yaml_filter.py --in-file=$(SRC_REQS) --out-file=$(DST_REQS) --del-names=$(DEL_COLLECTIONS)
-		rc=$$?
-		if [[ "$${rc}" -ne 0 ]]; then
-			echo "Failed to cleanup $(DST_REQS)"
-			exit "$${rc}"
-		fi
-		@diff --color --unified "$(SRC_REQS)" "$(DST_REQS)" || true
-	@fi
+	@echo "DEL_COLLECTIONS: $(DEL_COLLECTIONS)"
+	$(WRAPPER) "$@" $(SRC_REQS) $(DEL_COLLECTIONS) $(DST_REQS)
 
 clean-caches:	$(CLEANUP_LIST)
 	@rm -fr "$^"
@@ -80,7 +59,7 @@ gendata:
 render:
 	@$(WRAPPER) $@
 
-run_ap:
+run-playbook:
 	@$(WRAPPER) $@
 
 pylint: $(GENERATOR)

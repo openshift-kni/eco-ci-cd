@@ -8,16 +8,21 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
   ansible.builtin.shell: |
-    oc adm must-gather --dest-dir={{ must_gather_dir }}
+    oc adm must-gather --dest-dir="{{ must_gather_dir }}"
   register: must_gather
   changed_when: must_gather.rc == 0
 
-- name: Save must gather to artifacts
+- name: Archive Must Gather
   community.general.archive:
     path: "{{ must_gather_dir }}"
-    dest: "{{ artifacts_folder }}/pre-mustgather.tar.gz"
+    dest: "{{ must_gather_dir }}/pre-mustgather.tar.gz"
     mode: 775
     format: gz
+
+- name: Copy must-gather to artifacts folder
+  ansible.builtin.fetch:
+    src: "{{ must_gather_dir }}/pre-mustgather.tar.gz"
+    dest: "{{ artifacts_folder }}/pre-mustgather.tar.gz"
 
 - name: Get NTO deployment
   kubernetes.core.k8s_info:
@@ -55,8 +60,47 @@
     dest: "{{ artifacts_folder }}/performanceProfile.yml"
     content: "{{ performance_profile }}"
     mode: '775'
+  delegate_to: localhost
 
 - name: Apply performance Profile
   kubernetes.core.k8s:
     state: present
     definition: "{{ performance_profile }}"
+    wait: true
+    wait_condition:
+      type: "Available"
+      status: "True"
+
+- name: Wait for MCP to restart
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker-cnf
+  register: mcp_restart
+  until: >
+    mcp_restart.resources is defined and
+    mcp_restart.resources | length > 0 and
+    mcp_restart.resources[0].status.updatedMachineCount != mcp_restart.resources[0].status.machineCount
+  retries: 6
+  delay: 10
+  vars:
+    ansible_failed_result:
+      retries: 0
+  ignore_errors: true
+
+- name: Wait until the MCP is fully updated
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker-cnf
+  register: mcp_status
+  until: >
+    mcp_status.resources is defined and
+    mcp_status.resources | length > 0 and
+    mcp_status.resources[0].status.updatedMachineCount == mcp_status.resources[0].status.machineCount and
+    mcp_status.resources[0].status.degradedMachineCount == 0
+  retries: "{{ mcp_wait_retries }}"
+  delay: "{{ mcp_wait_delay }}"
+  vars:
+    ansible_failed_result:
+      retries: 0

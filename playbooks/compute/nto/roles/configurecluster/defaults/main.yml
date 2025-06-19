@@ -1,6 +1,10 @@
 ---
+mcp_timeout: 10m
 artifacts_folder: /artifacts
 ignore_cgroups_version: "true"
 rt_kernel: false
-must_gather_dir: "/tmp/mustgather"
+must_gather_dir: "/mustgather"
 nto_image: registry-proxy.engineering.redhat.com/rh-osbs/openshift-ose-cluster-node-tuning-rhel9-operator
+
+mcp_wait_retries: 180
+mcp_wait_delay: 30

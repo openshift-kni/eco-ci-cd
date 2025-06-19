@@ -61,6 +61,7 @@ def main():
         logging.error("❌ Error: Could not read version from cluster_version file.")
         sys.exit(1)
 
+    majorMinor = version.rsplit('.', 1)[0]
     release_info = {
         "version": version,
         "jira_card_link": read_file_content(os.path.join(shared_dir, "jira_link")),
@@ -68,8 +69,8 @@ def main():
             "cluster_name": read_file_content(os.path.join(shared_dir, "cluster_name")),
             "nic": read_file_content(os.path.join(shared_dir, "ocp_nic")),
             "secondary_nic": read_file_content(os.path.join(shared_dir, "secondary_nic")),
-            "cnf_image_version": f"{registry_url}/dpdk-base-rhel9:{version}",
-            "dpdk_image_version": f"{registry_url}/cnf-rhel9:{version}"
+            "cnf_image_version": f"{registry_url}/dpdk-base-rhel9:{majorMinor}",
+            "dpdk_image_version": f"{registry_url}/cnf-rhel9:{majorMinor}"
         }
     }
     

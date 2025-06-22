@@ -7,6 +7,8 @@
     global_json_reports_list: []
   pre_tasks:
     - name: Print CI detection variables' values
+      when:
+        - trs_debug is defined and trs_debug
       block:
         - name: Print detection variable {{ item }}
           ansible.builtin.debug:
@@ -17,8 +19,6 @@
             - GITLAB_CI
             - JENKINS_URL
             - PROW_JOB_ID
-      when:
-        - trs_debug is defined and trs_debug
     - name: Initialize trs_collector_url
       ansible.builtin.set_fact:
         trs_collector_url: "{{ trs_collector_url | default('') }}"

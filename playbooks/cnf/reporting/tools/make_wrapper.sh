@@ -54,7 +54,7 @@ fi
 declare -a SUPPORTED_ACTIONS
 SUPPORTED_ACTIONS=(
   bootstrap
-  buildpkg
+  # buildpkg
   check-requirements
   gendata
   render
@@ -664,42 +664,42 @@ function print_ci_type_detection_var() {
   print_debug_var_name "${var_name}"
 }
 
-function gen_local_reqs_yaml() {
-  local \
-    collection_pkg_path \
-    reqs_local \
-    reqs_local_backup \
-    collection_name \
-    rc
-  prolog "${@}"
-  collection_pkg_path="${1?cannot continue without collection_pkg_path}"
-  reqs_local="${2:-"${COLLECTIONS_REQS_LOCAL}"}"
-  collection_name="${3:-""}"
-  if [[ -z "${collection_name}" ]]; then
-    # take last path item: transform path/to/${ns}-${col}-${version}.tar.gz -> ${ns}-${col}-${version}.tar.gz
-    collection_name="${collection_pkg_path##*/}"
-    # remove last -* component: transform ${ns}-${col}-${version}.tar.gz -> ${ns}-${col}
-    collection_name="${collection_name%-*}"
-    # replace '-' with '.'
-    collection_name="${collection_name//-/.}"
-  fi
-  if [[ -r "${reqs_local}" ]]; then
-    reqs_local_backup="backup.$(date +%s || true).${reqs_local}"
-    cp -p "${reqs_local}" "${reqs_local_backup}"
-    log.warn "Backed up pre-existing local requirements yaml (${reqs_local} ==> ${reqs_local_backup})"
-  fi
-  log.info "Creating ${reqs_local} file for collection: ${collection_name} at path: ${collection_pkg_path}"
-  cat >"${reqs_local}" <<-_EOF_
-	---
-	collections:
-	  - source: file://${collection_pkg_path}
-	    name: ${collection_name}
-	_EOF_
-  rc=$?
-  log.info "created up-to-date ${reqs_local} file."
-  epilog "${rc}"
-  return "${rc}"
-}
+# function gen_local_reqs_yaml() {
+#   local \
+#     collection_pkg_path \
+#     reqs_local \
+#     reqs_local_backup \
+#     collection_name \
+#     rc
+#   prolog "${@}"
+#   collection_pkg_path="${1?cannot continue without collection_pkg_path}"
+#   reqs_local="${2:-"${COLLECTIONS_REQS_LOCAL}"}"
+#   collection_name="${3:-""}"
+#   if [[ -z "${collection_name}" ]]; then
+#     # take last path item: transform path/to/${ns}-${col}-${version}.tar.gz -> ${ns}-${col}-${version}.tar.gz
+#     collection_name="${collection_pkg_path##*/}"
+#     # remove last -* component: transform ${ns}-${col}-${version}.tar.gz -> ${ns}-${col}
+#     collection_name="${collection_name%-*}"
+#     # replace '-' with '.'
+#     collection_name="${collection_name//-/.}"
+#   fi
+#   if [[ -r "${reqs_local}" ]]; then
+#     reqs_local_backup="backup.$(date +%s || true).${reqs_local}"
+#     cp -p "${reqs_local}" "${reqs_local_backup}"
+#     log.warn "Backed up pre-existing local requirements yaml (${reqs_local} ==> ${reqs_local_backup})"
+#   fi
+#   log.info "Creating ${reqs_local} file for collection: ${collection_name} at path: ${collection_pkg_path}"
+#   cat >"${reqs_local}" <<-_EOF_
+# 	---
+# 	collections:
+# 	  - source: file://${collection_pkg_path}
+# 	    name: ${collection_name}
+# 	_EOF_
+#   rc=$?
+#   log.info "created up-to-date ${reqs_local} file."
+#   epilog "${rc}"
+#   return "${rc}"
+# }
 
 function action.gendata() {
   local \
@@ -744,63 +744,63 @@ function action.gendata() {
   return "${rc}"
 }
 
-function action.buildpkg() {
-  local \
-    venv_dir \
-    recreate \
-    collection_root \
-    collections_path \
-    reqs_local \
-    item \
-    rc
-  local -a \
-    vars
-  prolog "${@}"
-  venv_dir="${1?cannot continue without venv_dir}"
-  vars+=(venv_dir)
-  shift 1
-  recreate="${1:-"${RECREATE}"}"
-  vars+=(recreate)
-  shift 1
-  collection_root="${1:-"${COLLECTION_ROOT}"}"
-  vars+=(collection_root)
-  shift 1
-  reqs_local="${1:-"${COLLECTIONS_REQS_LOCAL}"}"
-  vars+=(reqs_local)
-  shift 1
-  for var in "${vars[@]}"; do
-    val="$(eval "echo \$${var}" || true)"
-    test -n "${val}" && log.debug "updated: ${var}='${val}'"
-  done
-
-  if [[ -z "${collection_root}" ]]; then
-    log.warn "Skip installations. [REASON: collection root unset or missing]"
-    return 0
-  fi
-  log.info "jumping into ${collection_root} folder"
-  pushd "${PWD}" 2>/dev/null 1>/dev/null || die 1 "failed to pushd ${PWD}"
-  cd "${collection_root}" || die 1 "failed to chdir to collection_root=${collection_root}"
-  log.info "Rebuilding a collection at ${collection_root}"
-  venv_activate "${venv_dir}"
-  vars=("${PWD}/.ansible" "${PWD}/collections")
-  log.debug "Removing cache folders: ${vars[*]}"
-  for var in "${vars[@]}"; do
-    if [[ -d "${var}" ]]; then
-      rm -fr "${var}"
-      log.debug "Removed folder: '${var}'"
-    fi
-  done
-  pkg_path="$(ansible-galaxy collection build --force || true)"
-  # take the last word
-  pkg_path="${pkg_path##* }"
-  popd 2>/dev/null >/dev/null || die 1 "failed to popd"
-  log.info "Isolated package path: ${pkg_path}"
-  gen_local_reqs_yaml "${pkg_path}" "${reqs_local}"
-  log.info "Created requirements file: ${reqs_local}"
-  rc=$?
-  epilog "${rc}" "installed the collection"
-  return "${rc}"
-}
+# function action.buildpkg() {
+#   local \
+#     venv_dir \
+#     recreate \
+#     collection_root \
+#     collections_path \
+#     reqs_local \
+#     item \
+#     rc
+#   local -a \
+#     vars
+#   prolog "${@}"
+#   venv_dir="${1?cannot continue without venv_dir}"
+#   vars+=(venv_dir)
+#   shift 1
+#   recreate="${1:-"${RECREATE}"}"
+#   vars+=(recreate)
+#   shift 1
+#   collection_root="${1:-"${COLLECTION_ROOT}"}"
+#   vars+=(collection_root)
+#   shift 1
+#   reqs_local="${1:-"${COLLECTIONS_REQS_LOCAL}"}"
+#   vars+=(reqs_local)
+#   shift 1
+#   for var in "${vars[@]}"; do
+#     val="$(eval "echo \$${var}" || true)"
+#     test -n "${val}" && log.debug "updated: ${var}='${val}'"
+#   done
+#
+#   if [[ -z "${collection_root}" ]]; then
+#     log.warn "Skip installations. [REASON: collection root unset or missing]"
+#     return 0
+#   fi
+#   log.info "jumping into ${collection_root} folder"
+#   pushd "${PWD}" 2>/dev/null 1>/dev/null || die 1 "failed to pushd ${PWD}"
+#   cd "${collection_root}" || die 1 "failed to chdir to collection_root=${collection_root}"
+#   log.info "Rebuilding a collection at ${collection_root}"
+#   venv_activate "${venv_dir}"
+#   vars=("${PWD}/.ansible" "${PWD}/collections")
+#   log.debug "Removing cache folders: ${vars[*]}"
+#   for var in "${vars[@]}"; do
+#     if [[ -d "${var}" ]]; then
+#       rm -fr "${var}"
+#       log.debug "Removed folder: '${var}'"
+#     fi
+#   done
+#   pkg_path="$(ansible-galaxy collection build --force || true)"
+#   # take the last word
+#   pkg_path="${pkg_path##* }"
+#   popd 2>/dev/null >/dev/null || die 1 "failed to popd"
+#   log.info "Isolated package path: ${pkg_path}"
+#   gen_local_reqs_yaml "${pkg_path}" "${reqs_local}"
+#   log.info "Created requirements file: ${reqs_local}"
+#   rc=$?
+#   epilog "${rc}" "installed the collection"
+#   return "${rc}"
+# }
 
 function action.render() {
   local \
@@ -826,9 +826,6 @@ function action.render() {
   data_file="${1:-"${DATA_FILE}"}"
   vars+=(data_file)
   shift 1
-  playbook="${1:-"${PLAYBOOK}"}"
-  vars+=(playbook)
-  shift 1
   tpl_file="${1:-"${TPL_FILE}"}"
   vars+=(tpl_file)
   shift 1
@@ -840,6 +837,19 @@ function action.render() {
     test -n "${val}" && log.debug "updated: ${var}='${val}'"
   done
   venv_activate "${venv_dir}"
+  val="$(dirname "${output_file}")"
+  log.debug "Ensuring folder containing output_file exists: ${val}"
+  mkdir -p "${val}"
+  if [[ -r "${output_file}" ]]; then
+    log.warn "Skip rendering. [REASON: Output file ${output_file} already exists]."
+    return 1
+  fi
+  for var in "${data_file}" "${tpl_file}"; do
+    if ! [[ -r "${var}" ]]; then
+      log.error "Skip rendering. [REASON: ${var} file is not readable or missing]."
+      return 1
+    fi
+  done
   cmd=(jinja "--format=yaml")
   cmd+=("--data=${data_file}")
   cmd+=("--output=${output_file}")
@@ -847,7 +857,8 @@ function action.render() {
   run_cmd 0 "${cmd[@]}"
   rc=$?
   log.info "Extra variables file ${output_file} has been created successfully."
-  log.info "Now you can invoke the playbook via make targets: 'run' or 'test_source'"
+  log.info "Assuming your CI type is CI_TYPE=${CI_TYPE} (for full list see ))"
+  log.info "you can run: 'make test CI_TYPE=${CI_TYPE}' (Assuming this is your CI type)"
   epilog "${rc}"
   return "${rc}"
 }
@@ -1072,11 +1083,11 @@ function main() {
     time action.bootstrap "${args[@]}"
     rc=$?
     ;;
-  "buildpkg")
-    args+=("${RECREATE}" "${COLLECTION_ROOT}" "${COLLECTIONS_REQS_LOCAL}")
-    time action.buildpkg "${args[@]}"
-    rc=$?
-    ;;
+  # "buildpkg")
+  #   args+=("${RECREATE}" "${COLLECTION_ROOT}" "${COLLECTIONS_REQS_LOCAL}")
+  #   time action.buildpkg "${args[@]}"
+  #   rc=$?
+  #   ;;
   "check-requirements")
     shift 1
     time action.check_requirements "${@}"
@@ -1088,7 +1099,7 @@ function main() {
     rc=$?
     ;;
   "render")
-    args+=("${DATA_FILE}" "${PLAYBOOK}" "${TPL_FILE}" "${VARS_DIR}/${PLAYBOOK##*/}")
+    args+=("${DATA_FILE}" "${TPL_FILE}" "${EXTRA_VARS}")
     time action.render "${args[@]}"
     rc=$?
     ;;

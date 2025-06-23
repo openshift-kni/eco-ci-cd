@@ -7,27 +7,18 @@ Tries to get everything via the command line, but if it can't, it will ask for t
 """
 
 import argparse
+import getpass
+import json
+import os
 import socket
-from typing import Any, Callable
-import urllib.parse
+import sys
 import uuid
 from datetime import datetime, timezone
-import getpass
-import os
-import sys
 from pathlib import Path
+from typing import Any
+import urllib.parse
 import xml.etree.ElementTree as ET
-
-# try:
-#     from ruamel.yaml import YAML
-# except ImportError:
-#     print(
-#         "ruamel.yaml library is not installed. Please install it with 'pip install ruamel.yaml'",
-#         file=sys.stderr,
-#     )
-#     sys.exit(1)
-
-import yaml_filter
+from . import yaml_filter
 
 SUPPORTED_CI_NAMES = [
     "dci",
@@ -66,18 +57,6 @@ DEFAULTS = {
     "splunk_index": None,
     "trs_metadata_path": None,
 }
-# Custom representer for booleans to ensure lowercase 'true'/'false'
-def represent_bool_lowercase(dumper, data):
-    if data:
-        return dumper.represent_scalar("tag:yaml.org,2002:bool", "true")
-    return dumper.represent_scalar("tag:yaml.org,2002:bool", "false")
-
-
-# Add this representer to the Dumper you are using (e.g., SafeDumper)
-# PyYAML's default dumper is often SafeDumper, but it's good to be explicit.
-yaml.add_representer(bool, represent_bool_lowercase, Dumper=yaml.SafeDumper)
-# Also for the base Dumper if used
-yaml.add_representer(bool, represent_bool_lowercase, Dumper=yaml.Dumper)
 
 
 def tpl2pb(filename: str = TEMPLATE_DEFAULT) -> str:
@@ -249,11 +228,10 @@ def validate_json(path: str) -> str:
     path_object = Path(path)
     if not path_object.is_file():
         raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
-    import json
     try:
-        json.load(path_object.open())
-    except json.JSONDecodeError:
-        raise argparse.ArgumentTypeError(f"File '{path}' is not a valid JSON file.")
+        json.loads(path_object.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as jde:
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a valid JSON file: {jde}")
     return path
 
 def validate_xml(path: str) -> str:
@@ -263,13 +241,12 @@ def validate_xml(path: str) -> str:
     path_object = Path(path)
     if not path_object.is_file():
         raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
-    import xml.etree.ElementTree as ET
     try:
-        tree = ET.parse(path_object)
-    except ET.ParseError as e:
-        raise argparse.ArgumentTypeError(f"File {path} is not a parsable XML: {e}")
+        ET.parse(path_object)
+    except ET.ParseError as pe:
+        raise argparse.ArgumentTypeError(f"File {path} is not a parsable XML: {pe}")
     except Exception as e:
-        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing.")
+        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing: {e}.")
     return path
 
 def validate_yaml(path: str) -> str:
@@ -282,10 +259,8 @@ def validate_yaml(path: str) -> str:
 
     try:
         yaml_filter.read_yaml(path)
-    except ParserError as e:
-        raise argparse.ArgumentTypeError(f"File '{path}' is not a valid YAML file: {e}")
     except Exception as e:
-        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing.")
+        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing: {e}")
     return path
 
 
@@ -293,7 +268,7 @@ def validate_txt(path: str) -> str:
     path_object = Path(path)
     if not path_object.is_file():
         raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
-    if path_object.read_text().strip() == "":
+    if path_object.read_text(encoding="utf-8").strip() == "":
         raise argparse.ArgumentTypeError(f"File '{path}' is empty.")
     return path
 
@@ -322,7 +297,7 @@ def str_path_validator(path: str, comment: str = "", is_dir: bool = False, data_
     if is_dir:
         return path
     if data_format is None:
-       data_format = SUPPORTED_DATA_FORMATS[-1]
+        data_format = SUPPORTED_DATA_FORMATS[-1]
     if data_format == "json":
         path = validate_json(path)
     elif data_format == "xml":

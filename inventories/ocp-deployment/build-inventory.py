@@ -111,6 +111,9 @@ if __name__ == "__main__":
     parser.add_argument('--list', action='store_true', help="List all groups and hosts")
     parser.add_argument('--host', help="Get all the variables about a specific host")
     args = parser.parse_args()
+    
+    if os.environ.get("HOSTVAR_DIR"):
+        args.hostvars_dir = os.environ.get("HOSTVAR_DIR")
 
     if os.path.exists(args.hostvars_dir) and os.path.isdir(args.hostvars_dir):
         pass

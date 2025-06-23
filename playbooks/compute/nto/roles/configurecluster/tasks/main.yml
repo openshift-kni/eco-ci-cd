@@ -5,11 +5,6 @@
       - kubernetes >= 24.2.0
       - PyYAML >= 3.11
 
-- name: Create artifact directory
-  ansible.builtin.include_tasks: create_directory.yml
-  vars:
-    dir_path: "{{ artifacts_folder }}"
-
 - name: Retrieve worker nodes
   kubernetes.core.k8s_info:
     kind: Node
@@ -37,6 +32,7 @@
     dest: "{{ artifacts_folder }}/machineConfigPool.yml"
     content: "{{ machine_config_pool }}"
     mode: '775'
+  delegate_to: localhost
 
 - name: Apply MCP configuration
   kubernetes.core.k8s:

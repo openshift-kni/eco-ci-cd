@@ -7,6 +7,7 @@ Tries to get everything via the command line, but if it can't, it will ask for t
 """
 
 import argparse
+import io
 import os
 import subprocess
 import sys
@@ -71,7 +72,7 @@ def comma_separated_list(arg) -> list[str]:
     for item in arg.split(PARAMS_LIST_SEPARATOR):
         if item.strip() != '':
             result.append(item)
-    if result == []:
+    if not result:
         raise argparse.ArgumentTypeError(f"Failed converting {arg} into non-empty list of non-empty strings")
     return result
 
@@ -110,7 +111,7 @@ def get_git_root() -> str:
     if rc != 0:
         raise RuntimeError(f"failed to run {command}, rc: {rc}, stdout: {stdout}, stderr: {stderr}")
     return stdout
-    
+
 
 def dict_filter(
     data: dict,
@@ -185,9 +186,8 @@ def yaml2str(data: dict[str, Any], config: dict[str, Any] | None = None, width: 
         width = YAML_LINE_WIDTH
     yaml = YAML()
     yaml.indent(**config)
-    yaml.width = width  # Or any desired width    
+    yaml.width = width  # Or any desired width
     yaml.explicit_start = True
-    import io
     string_stream = io.StringIO()
     yaml.dump(data, string_stream)
     return string_stream.getvalue()
@@ -232,7 +232,7 @@ def parse_cli_args(args: list[str] = sys.argv[1:]):
         "--del-names",
         default=[""],
         type=comma_separated_list,
-        help=f"Comma separated list of names to clean up",
+        help="Comma-separated list of names to clean up",
     )
     parser.add_argument(
         "--out-file",

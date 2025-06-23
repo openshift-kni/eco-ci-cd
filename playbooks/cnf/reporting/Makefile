@@ -48,7 +48,7 @@ gendata:
 	@$(WRAPPER) $@ || ""
 
 render:
-	@$(WRAPPER) $@
+	@$(WRAPPER) $@ EXTRA_VARS=$(EXTRA_VARS)
 
 run-playbook:
 	@$(WRAPPER) $@

@@ -16,15 +16,18 @@ import getpass
 import os
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
-try:
-    import yaml
-except ImportError:
-    print(
-        "PyYAML library is not installed. Please install it with 'pip install PyYAML'",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+# try:
+#     from ruamel.yaml import YAML
+# except ImportError:
+#     print(
+#         "ruamel.yaml library is not installed. Please install it with 'pip install ruamel.yaml'",
+#         file=sys.stderr,
+#     )
+#     sys.exit(1)
+
+import yaml_filter
 
 SUPPORTED_CI_NAMES = [
     "dci",
@@ -34,9 +37,35 @@ SUPPORTED_CI_NAMES = [
     "prow",
 ]
 
+
+SUPPORTED_DATA_FORMATS = [
+    "xml",
+    "json",
+    "yaml",
+    "txt"
+]
+
 TEMPLATE_DEFAULT = "templates/test_report_send.yml.j2"
 
 
+RUAMEL_CONFIG: dict[str, Any] = {
+    "mapping": 2,
+    "sequence": 4,
+    "offset": 2,
+}
+YAML_LINE_WIDTH: int = 120
+
+DEFAULTS = {
+    "output_dir": os.getcwd(),
+    "outfile": "data.yml",
+    "trs_ci_system": "dci",
+    "reports_list": [],
+    "splunk_url": None,
+    "splunk_token": None,
+    "splunk_channel": None,
+    "splunk_index": None,
+    "trs_metadata_path": None,
+}
 # Custom representer for booleans to ensure lowercase 'true'/'false'
 def represent_bool_lowercase(dumper, data):
     if data:
@@ -82,7 +111,7 @@ def comma_separated_list(arg) -> list[str]:
         if item.strip() == "":
             continue
         result.append(item)
-    if not result:
+    if None in result or "" in result:
         raise argparse.ArgumentTypeError(
             f"Failed converting {arg} into non-empty list of non-empty strings"
         )
@@ -161,7 +190,7 @@ def str_url_validator(item_url_str: str, comment: str = "URL") -> str:
     return item_url_str
 
 
-def str_uuid_validator(uuid_string: str, comment: str = "") -> str:
+def str_uuid_validator(uuid_string: str, comment: str = "UUID validation") -> str:
     """
     Validates if the given string is a syntactically valid UUID and
     is formatted exactly as a standard lowercase, hyphenated UUID.
@@ -213,7 +242,63 @@ def str_uuid_validator(uuid_string: str, comment: str = "") -> str:
         )
 
 
-def str_path_validator(path: str, comment: str = "", is_dir: bool = False) -> str:
+def validate_json(path: str) -> str:
+    """
+    Validate path_str as json file. if not raise argparse.ArgumentTypeError
+    """
+    path_object = Path(path)
+    if not path_object.is_file():
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
+    import json
+    try:
+        json.load(path_object.open())
+    except json.JSONDecodeError:
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a valid JSON file.")
+    return path
+
+def validate_xml(path: str) -> str:
+    """
+    Validate path_str as xml file. if not raise argparse.ArgumentTypeError
+    """
+    path_object = Path(path)
+    if not path_object.is_file():
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
+    import xml.etree.ElementTree as ET
+    try:
+        tree = ET.parse(path_object)
+    except ET.ParseError as e:
+        raise argparse.ArgumentTypeError(f"File {path} is not a parsable XML: {e}")
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing.")
+    return path
+
+def validate_yaml(path: str) -> str:
+    """
+    Validate path_str as yaml file. if not raise argparse.ArgumentTypeError
+    """
+    path_object = Path(path)
+    if not path_object.is_file():
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
+
+    try:
+        yaml_filter.read_yaml(path)
+    except ParserError as e:
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a valid YAML file: {e}")
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"File '{path}' failed during parsing.")
+    return path
+
+
+def validate_txt(path: str) -> str:
+    path_object = Path(path)
+    if not path_object.is_file():
+        raise argparse.ArgumentTypeError(f"File '{path}' is not a file.")
+    if path_object.read_text().strip() == "":
+        raise argparse.ArgumentTypeError(f"File '{path}' is empty.")
+    return path
+
+
+def str_path_validator(path: str, comment: str = "", is_dir: bool = False, data_format: str|None = None) -> str:
     """
     Validate path_str as file. if not raise argparse.ArgumentTypeError
 
@@ -221,6 +306,7 @@ def str_path_validator(path: str, comment: str = "", is_dir: bool = False) -> st
         path: the string to test for being a file/directory
         comment: comment string for error message
         is_dir: check for being directory, otherwise file is assumed
+        data_format: file data format
     Raises:
         argparse.ArgumentTypeError: when item isn't a file/directory
 
@@ -233,8 +319,29 @@ def str_path_validator(path: str, comment: str = "", is_dir: bool = False) -> st
             f"For {comment}: {'Directory' if is_dir else 'File'} '{path}' not found."
         )
         raise argparse.ArgumentTypeError(message)
+    if is_dir:
+        return path
+    if data_format is None:
+       data_format = SUPPORTED_DATA_FORMATS[-1]
+    if data_format == "json":
+        path = validate_json(path)
+    elif data_format == "xml":
+        path = validate_xml(path)
+    elif data_format == "yaml":
+        path = validate_yaml(path)
+    elif data_format == "txt":
+        path = validate_txt(path)
+    else:
+        raise argparse.ArgumentTypeError(f"Unsupported data format: {data_format}")
     return path
 
+def str_validator(item_str: str, comment: str = "String validation") -> str:
+    """
+    Validates if the given string is a non-empty string.
+    """
+    if not isinstance(item_str, str):
+        raise argparse.ArgumentTypeError(f"{comment} Invalid type: String input must be a string, got {type(item_str)}.")
+    return item_str
 
 def get_cli_list_process(
     name: str,
@@ -249,7 +356,7 @@ def get_cli_list_process(
     validator_callback = config.get("validator_callback", None)
     validator_kws = config.get("validator_kws", {})
     arg_cli_name = f"--{name.replace('_', '-')}"
-    if cli_value is None or cli_value == [""]:  # Not provided via CLI, prompt the user
+    if not cli_value or cli_value == [""]:  # Not provided via CLI, prompt the user
         while True:
             msg_items: list[str] = ["comma-separated"]
             prop = "mandatory" if is_mandatory else "optional"
@@ -259,13 +366,13 @@ def get_cli_list_process(
             val_str = input_method(message).strip()
             if not val_str:
                 if is_mandatory:
-                    print(f"{name} list is mandatory and requires at least one item.")
+                    print(f"ERROR: {name} list is mandatory and requires at least one item.")
                     sys.exit(1)
                 return []  # Optional and empty
 
             items = [item.strip() for item in val_str.split(",")]
             if is_mandatory and not items:  # Should be caught by 'not val_str' already
-                print("Error: This list is mandatory and requires at least one item.")
+                print(f"ERROR: {name} list is mandatory and requires at least one item.")
                 continue
 
             if not validator_callback:
@@ -279,8 +386,8 @@ def get_cli_list_process(
                     item_path_str = validator_callback(
                         item_path_str, comment=prompt_message, **validator_kws
                     )
-                except argparse.ArgumentError as ae:
-                    print(ae.message)
+                except argparse.ArgumentTypeError as ae:
+                    print(str(ae))
                     all_items_valid = False
                     break
             if not all_items_valid:
@@ -297,8 +404,8 @@ def get_cli_list_process(
                 item_str = validator_callback(
                     item_str, comment=prompt_message, **validator_kws
                 )
-            except argparse.ArgumentError as ae:
-                print(ae.message)
+            except argparse.ArgumentTypeError as ae:
+                print(str(ae))
                 sys.exit(1)
         return cli_value
 
@@ -314,9 +421,9 @@ def get_cli_string_process(
     is_mandatory = config.get("is_mandatory", False)
     is_confidential = config.get("is_confidential", False)
     validator_callback = config.get("validator_callback", None)
-    if not isinstance(validator_callback, Callable):
-        print("FATAL: callback must be Callable")
-        sys.exit(1)
+    if not callable(validator_callback):
+        validator_callback = str_validator
+
     validator_kws = config.get("validator_kws", {})
     arg_cli_name = f"--{name.replace('_', '-')}"
     input_method = getpass.getpass if is_confidential else input
@@ -341,8 +448,8 @@ def get_cli_string_process(
                     val = validator_callback(
                         val, comment=prompt_message, **validator_kws
                     )
-                except argparse.ArgumentError as ae:
-                    print(ae.message)
+                except argparse.ArgumentTypeError as ae:
+                    print(str(ae))
                     continue
             return val
     else:  # Provided via CLI
@@ -423,29 +530,31 @@ def parse_cli_args(args: list[str] = sys.argv[1:]):
     )
     parser.add_argument(
         "--trs-ci-system",
-        default=None,
+        default=DEFAULTS["trs_ci_system"],
         help=f"CI System identifier. (SUPPORTED: ['{"', '".join(SUPPORTED_CI_NAMES)}'])",
     )
     parser.add_argument(
         "--reports-list",
-        default="",
+        default=[],
         type=comma_separated_list,
         help="Comma-separated list of JUnit report XML files. Validation ensures file(s) exist",
     )
 
     # Optional
     parser.add_argument(
-        "--splunk-channel", default=None, help="Splunk channel. (Optional)"
+        "--splunk-channel",
+        default=DEFAULTS["splunk_channel"],
+        help="Splunk channel. (Optional)"
     )
     parser.add_argument("--splunk-index", default=None, help="Splunk index. (Optional)")
     parser.add_argument(
         "--trs-metadata-path",
-        default=None,
+        default=DEFAULTS["trs_metadata_path"],
         help="Path to a metadata file or directory. Validated if provided and non-empty. (Optional)",
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
+        default=DEFAULTS["output_dir"],
         help="Output directory for junit2json. (Optional - Jinja template has its own default if this is empty or not provided)",
     )
 
@@ -461,7 +570,11 @@ def parse_cli_args(args: list[str] = sys.argv[1:]):
         help="If set, add 'trs_do_send: false' to the output. Default is to omit the key (implies true).",
     )
 
-    parser.add_argument("--outfile", default="data.yml", help="Output YAML file name.")
+    parser.add_argument(
+        "--outfile",
+        default=DEFAULTS["outfile"],
+        help="Output YAML file name."
+    )
 
     return parser.parse_args(args=args)
 
@@ -506,6 +619,7 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
         f"Enter CI System identifier (SUPPORTED: ['{"', '".join(SUPPORTED_CI_NAMES)}']).",
         config={
             "is_mandatory": True,
+            "validator_callback": str_validator,
         },
     )
 
@@ -517,6 +631,9 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
             "is_mandatory": True,
             "is_list": True,
             "validator_callback": str_path_validator,
+            "validator_kws": {
+                "data_format": "xml",
+            }
         },
     )
 
@@ -534,6 +651,9 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
         "Enter path to metadata file/directory",
         config={
             "validator_callback": str_path_validator,  # Validated only if a non-empty path is provided
+            "validator_kws": {
+                "data_format": "json",
+            },
         },
     )
 
@@ -561,24 +681,21 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
     return context_data
 
 
+
 def main():
     args = parse_cli_args(args=sys.argv[1:])
     context_data = build_context(args)
 
     # 4. Write to YAML file
     try:
-        outfile = context_data["outfile"]
+        outfile = os.path.join(context_data["output_dir"], context_data["outfile"])
         output_file = Path(outfile)
+        if output_file.exists():
+            print(f"ERROR: File {output_file} already exists. Please delete it or use a different name.")
+            return 3
         # Ensure parent directory exists if --outfile is like "some/dir/data.yml"
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        yaml_dump_config = {
-            "sort_keys": False,
-            "default_flow_style": False,
-            "indent": 2,
-            "explicit_start": True,
-        }
-        with open(output_file, "w", encoding="utf-8") as f:
-            yaml.dump(context_data, f, **yaml_dump_config)
+        yaml_filter.write_yaml(context_data, outfile, config=RUAMEL_CONFIG, width=YAML_LINE_WIDTH)
 
     except KeyError as ke:
         print(f"Missing key in context_data '{context_data}': {ke}", file=sys.stderr)
@@ -592,8 +709,8 @@ def main():
     cmd_items = ["jinja"]
     cmd_items += [
         "--format=yaml",
-        f'--data="{context_data["outfile"]}"',
-        f'--output="{context_data["playbook"]}"',
+        f'--data="{outfile}"',
+        f'--output="{context_data["output_dir"]}/{context_data["playbook"]}"',
         f'"{TEMPLATE_DEFAULT}"',
     ]
     cmd_items_len: int = len(cmd_items)

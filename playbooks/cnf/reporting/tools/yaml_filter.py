@@ -15,6 +15,7 @@ from typing import Any
 # Ensure ruamel.yaml is installed
 try:
     from ruamel.yaml import YAML
+    from ruamel.yaml.parser import ParserError
 except ImportError:
     print(
         "ruamel.yaml library is not installed. Please install it with 'python3 -m pip install -r requirements.txt' inside playbook directory",
@@ -131,6 +132,8 @@ def dict_filter(
     item: dict[str, str] = {}
     container_in = result.get(container_attr, [])
     container_out = []
+    if del_list is None:
+        del_list = []
     for item in container_in:
         keep = True
         for del_item in del_list:
@@ -155,8 +158,11 @@ def read_yaml(filename: str) -> dict:
         yaml = YAML()
         with open(filename, 'r', encoding='utf-8') as ifd:
             result = yaml.load(ifd)
+    except ParserError as pe:
+        print(f"ERROR: File '{filename}' is not a valid YAML file: {pe}", file=sys.stderr)
+        sys.exit(1)
     except Exception as re:
-        print(f"Error reading YAML file {filename}: {re}", file=sys.stderr)
+        print(f"ERROR: reading YAML file {filename} failed with: {re}", file=sys.stderr)
         sys.exit(1)
 
     return result

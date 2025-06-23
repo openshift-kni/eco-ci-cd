@@ -32,14 +32,13 @@ TPL_FILE="${TPL_FILE:-"${TPL_DIR}/${PLAYBOOK##*/}.j2"}"
 EXTRA_VARS="${EXTRA_VARS:-"${VARS_DIR}/${PLAYBOOK##*/}"}"
 ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-"${PWD}/collections"}"
 CACHE_PATH="${CACHE_PATH:-"${PWD}/.ansible"}"
-TEST="${TEST:-"dci"}"
+CI_TYPE="${CI_TYPE:-"dci"}"
 COLLECTION_ROOT="${COLLECTION_ROOT:-""}"
 COLLECTIONS_REQS_LOCAL="${COLLECTIONS_REQS_LOCAL:-"requirements.local.yml"}"
 COLLECTION_REQ_FILES_TXT="${COLLECTION_REQ_FILES_TXT:-"requirements.yml"}"
 FIXTURES_ROOT="${FIXTURES_ROOT:-"fixtures"}"
-TEST_DATA_DIR="${TEST_DATA_DIR:-"${FIXTURES_ROOT}/${TEST}"}"
+TEST_DATA_DIR="${TEST_DATA_DIR:-"${FIXTURES_ROOT}/${CI_TYPE}"}"
 REQ_COLLECTIONS_ATTR="${REQ_COLLECTIONS_ATTR:-"collections"}"
-YQ_SEARCH_PREFIX="${YQ_SEARCH_PREFIX:-".${REQ_COLLECTIONS_ATTR}[]"}"
 # this option affects die function behavior
 LIVE_FOREVER="${LIVE_FOREVER:-"0"}"
 
@@ -290,99 +289,33 @@ function install_collection_from_yml() {
   return "${rc}"
 }
 
-function install_collection_pkg() {
+function install_python_requirements() {
   local \
-    count \
     requirement \
-    yq_search_term \
-    item \
-    package \
-    collections_path \
     rc
-  local -a \
-    curr_cmd
   prolog "${@}"
   requirement="${1?cannot continue without requirement}"
-  collections_path="${2:-"${ANSIBLE_COLLECTIONS_PATH}"}"
-  # take the 1st item if it has multiple items separated by :
-  collections_path="${collections_path%%:*}"
-  yq_search_term="${3:-"${YQ_SEARCH_PREFIX}.source"}"
-  # install packages
-  log.debug "Processing requirements file: '${requirement}'"
-  curr_cmd=(yq -r "${yq_search_term}" "${requirement}")
-  run_cmd 0 "${curr_cmd[@]}" >/dev/null
-  rc=$?
-  # log.debug ">>>>\tLook above  ^^^, current command: '${curr_cmd[*]}', returned rc=${rc}"
-  count=0
-  while [[ "${rc}" -eq 0 ]] && read -r package; do
-    package="${package//file:\/\//}"
-    if ! [[ -r "${package}" ]]; then
-      log.debug "Processing: '${item}'. Skipped installing missing package: ${package}"
-      continue 1
-    fi
-    log.info "Installing collection from package: ${package}"
-    run_cmd 0 ansible-galaxy collection install --force "${package}" -p "${collections_path}"
-    rc=$?
-    log.info "==> Installed collection from: ${package} with rc=${rc}"
-    count=$((count + 1))
-  done < <("${curr_cmd[@]}" || true)
-  log.info "Installed: ${count} collections"
-}
-
-function install_collection_py_reqs() {
-  local \
-    count \
-    requirement \
-    yq_search_term \
-    py_req_file_path \
-    py_req \
-    package \
-    collection \
-    collections_path \
-    rc
-  local -a \
-    curr_cmd
-  prolog "${@}"
-  requirement="${1?cannot continue without requirement}"
-  collections_path="${2:-"${ANSIBLE_COLLECTIONS_PATH}"}"
-  # take the 1st item if it has multiple items separated by :
-  collections_path="${collections_path%%:*}"
-  yq_search_term="${3:-"${YQ_SEARCH_PREFIX}.name"}"
-  py_req="${4:-"requirements.txt"}"
-  curr_cmd=(yq -r "${yq_search_term}" "${requirement}")
+  curr_cmd=(pip3 install -r "${requirement}")
+  log.info "Installing python requirements from requirements yaml file: ${requirement}"
   run_cmd 0 "${curr_cmd[@]}"
   rc=$?
-  count=0
-  log.info "Installing python requirements for collections from requirements yaml file: ${requirement}"
-  while read -r collection; do
-    py_req_file_path="${collections_path}/ansible_collections/${collection//\./\/}/meta/${py_req}"
-    if ! [[ -r "${py_req_file_path}" ]]; then
-      log.warn "The collection '${collection}' python requirements file '${py_req_file_path}' is unreadable"
-      continue 1
-    fi
-    log.debug "Found collection ${collection} python requirements: ${py_req_file_path}"
-    run_cmd 0 pip3 install -r "${py_req_file_path}"
-    rc=$?
-    log.info "==> Installed python requirements: ${py_req_file_path} for collection ${collection} with rc=${rc}"
-    count=$((count + 1))
-  done < <("${curr_cmd[@]}" || true)
-  log.info "Installed: ${count} python requirements files"
+  epilog "${rc}" "Installed python requirements from: ${requirement}"
   return "${rc}"
 }
 
 function collections_install() {
   local \
-    item \
+    collections_path \
     var \
     val \
-    collections_path \
+    item \
+    sub_dir \
     idx \
-    total \
-    yq_search_prefix
+    total
   local -a \
     vars \
     requirements \
-    curr_cmd
+    cmd
   prolog "${@}"
   collections_path="${1?cannot continue without collections_path}"
   vars+=(collections_path)
@@ -392,35 +325,52 @@ function collections_install() {
     test -n "${val}" && log.debug "updated: ${var}='${val}'"
   done
   requirements=("${@}")
-  if [[ "${#requirements[@]}" -eq 0 ]]; then
+  total="${#requirements[@]}"
+  if [[ "${total}" -eq 0 ]]; then
     requirements+=("requirements.yml")
+    total="${#requirements[@]}"
     log.debug "Requirements are now: '${requirements[*]}'"
   fi
-  # install from the 1st requirement:
-  install_collection_from_yml \
-    "${requirements[0]}" \
-    "${collections_path}"
-  rc=$?
-  log.debug "Installed collections from ${requirements[0]} with rc=${rc}"
-  # pop the 1st requirement from requirements:
-  requirements=("${requirements[@]:1}")
-  yq_search_prefix="${YQ_SEARCH_PREFIX}"
   idx=0
-  total="${#requirements[@]}"
-  # go over remainder:
+  log.info "Start YAML installations: collections from requirements files: ${requirements[*]}"
   for item in "${requirements[@]}"; do
-    log.info "==> Installing requirements ${item} [${idx}/${total}]"
-    # install packages
-    install_collection_pkg "${item}" "${collections_path}" "${yq_search_prefix}.source"
+    install_collection_from_yml "${item}" "${collections_path}"
     rc=$?
-    log.debug "Installed collection from ${item} to ${collections_path} with rc=${rc}"
-    install_collection_py_reqs "${item}" "${collections_path}" "${yq_search_prefix}.name"
-    rc=$?
-    log.debug "Installed python requirements ${item} to ${collections_path} with rc=${rc}"
+    log.debug "Installed collections from ${requirements[0]} with rc=${rc}"
+    # pop the 1st requirement from requirements:
     idx=$((idx + 1))
   done
   test "${idx}" -eq 1 && val="" || val="s"
-  epilog "${rc}" "passing ${idx} yaml requirements file${val}"
+  log.info "End YAML installations: installed ${idx}[of ${total}] file${var}"
+  idx=0
+
+  log.info "Start collecting of python requirements files"
+  cmd=(find "${collections_path}" -name "meta" -type d -maxdepth 4)
+  requirements=()
+  while read -r sub_dir; do
+    total=$((total + 1))
+    log.debug "Testing collection meta sub_dir='${sub_dir}'"
+    for item in "${sub_dir}/ee-requirements.txt" "${sub_dir}/requirements.txt"; do
+      if ! [[ -r "${item}" ]]; then
+        log.debug "Python requirements file ${item} is unreadable"
+        continue
+      fi
+      requirements+=("${item}")
+      log.debug "Added python requirements file ${item}"
+      idx=$((idx + 1))
+    done
+  done < <("${cmd[@]}" -print || true)
+  total="${#requirements[@]}"
+  log.info "Collected ${total} python requirements files"
+  log.info "Start installing python requirements"
+  idx=0
+  for item in "${requirements[@]}"; do
+    install_python_requirements "${item}"
+    idx=$((idx + 1))
+  done
+  test "${idx}" -eq 1 && val="" || val="s"
+  log.info "End installing python requirements ${idx} [of ${total}] file${val}"
+  epilog "${rc}"
   return "${rc}"
 }
 
@@ -458,21 +408,30 @@ function lazy_collections_install() {
     test -n "${val}" && log.debug "updated: ${var}='${val}'"
   done
   rc=0
-  if [[ -d "${collections_path}" ]]; then
-    if [[ "${recreate}" -eq 0 ]]; then
-      log.warn "no need to clean up collections_path. [REASON: recreate=${recreate}]"
-      return "${rc}"
-    fi
-    rm -fr "${collections_path}"
-    log.info "deleted collections_path='${collections_path}'. [REASON: recreate=${recreate}]"
+  var=0
+  if [[ "${recreate}" -gt 0 ]]; then
+    log.info "Handle recreate=1"
+    for item in "${collections_path}" "${cache_path}"; do
+      val="Folder ${item} is missing. nothing to delete."
+      if [[ -d "${item}" ]]; then
+        rm -fr "${item}"
+        val="Deleted ${item}. [REASON: recreate=${recreate}]"
+      fi
+      log.debug "${val}"
+    done
+  else
+    log.info "Handle recreate=0"
+    # if either is missing, don't return
+    for item in "${collections_path}" "${cache_path}"; do
+      if ! [[ -d "${item}" ]]; then
+        var=$((var + 1))
+      fi
+    done
   fi
-  if [[ -d "${cache_path}" ]]; then
-    if [[ "${recreate}" -eq 0 ]]; then
-      log.warn "no need to clean up cache_path. [REASON: recreate=${recreate}]"
-      return "${rc}"
-    fi
-    rm -fr "${cache_path}"
-    log.info "deleted cache_path='${cache_path}'. [REASON: recreate=${recreate}]"
+  log.info "Calculated var=${var}"
+  if [[ "${var}" -eq 2 ]]; then
+    log.info "Skip installations. [REASON: ${collections_path} and ${cache_path} are present and recreate=${recreate}]."
+    return "${rc}"
   fi
   collections_install "${collections_path}" "${reqs[@]}"
   rc=$?
@@ -509,29 +468,33 @@ function venv_install() {
   if [[ "${#requirements[@]}" -eq 0 ]]; then
     requirements+=("requirements.txt")
   fi
-  log.debug "using requirements: ${requirements[*]}"
+  log.debug "Using requirements: ${requirements[*]}"
   venv_py="${host_py##*/}"
-  log.debug "Installing venv at ${venv_dir}"
+  log.debug "==> Creating venv at ${venv_dir}"
   cmd=("${host_py}" -m venv "${venv_dir}")
   run_cmd 0 "${cmd[@]}"
   rc=$?
   venv_activate "${venv_dir}" "${venv_py}"
   rc=$?
-  log.info "==> Created venv of ${venv_py} in ${venv_dir} and activated it"
+  log.debug "<== Created venv of ${venv_py} in ${venv_dir} and activated it"
+  log.debug "==> Upgrading venv pip of ${venv_py}"
   cmd=("${venv_py}" -m pip install --upgrade pip)
   # save old value
   run_cmd 0 "${cmd[@]}"
   rc=$?
-  log.info "==> Upgraded pip using venv python ${venv_py} with rc=${rc}"
+  log.debug "<== Upgraded pip using venv python ${venv_py} with rc=${rc}"
   cmd=("${venv_py}" -m pip install)
   for item in "${requirements[@]}"; do
     cmd+=("-r" "${item}")
   done
+  log.debug "==> Installing pip packages of venv in ${venv_py}"
   run_cmd 0 "${cmd[@]}"
   rc=$?
-  log.info "==> Installed venv packages from ${requirements[*]} with rc=${rc}"
-  log.info "==> Version info on python interpreter: $("${venv_py}" --version || true)"
-  return 0
+  log.debug "<== Installed pip packages of venv from ${requirements[*]} with rc=${rc}"
+  log.debug "==> Version info on python interpreter: $("${venv_py}" --version || true)"
+  log.info "<== Completed venv creation under ${venv_dir}"
+  epilog "${rc}"
+  return "${rc}"
 }
 
 function lazy_venv_install() {
@@ -569,7 +532,7 @@ function lazy_venv_install() {
   fi
   if [[ "${recreate}" -gt 0 ]]; then
     rm -fr "${venv_dir}"
-    log.info "deleted ${venv_dir}. [REASON: recreate=${recreate}]"
+    log.info "Deleted venv: ${venv_dir}. [REASON: recreate=${recreate}]"
   fi
   venv_install "${venv_dir}" "${py}"
   rc=$?
@@ -683,22 +646,21 @@ function print_debug_var_name() {
   log.info "variable ${var_name}='${var_value}'"
 }
 
-function print_test_type_detection_var() {
+function print_ci_type_detection_var() {
   local \
-    test_type \
+    ci_type \
     var_name \
     var_value
-  test_type="${1?cannot continue without test_type}"
-
-  case "${test_type}" in
+  ci_type="${1?cannot continue without ci_type}"
+  case "${ci_type}" in
   "dci") var_name="DCI_CS_URL" ;;
   "jenkins") var_name="JENKINS_URL" ;;
   "github") var_name="GITHUB_API_URL" ;;
   "gitlab") var_name="GITLAB_CI" ;;
   "prow") var_name="PROW_JOB_ID" ;;
-  *) die 1 "Bad name for test_type: ${test_type}" ;;
+  *) die 1 "Bad name for ci_type: ${ci_type}" ;;
   esac
-  log.info "test_type='${test_type}' ==> "
+  log.info "ci_type='${ci_type}' ==> "
   print_debug_var_name "${var_name}"
 }
 
@@ -956,7 +918,7 @@ function action.run_playbook() {
 function action.test() {
   local \
     item \
-    test_type \
+    ci_type \
     venv_dir \
     env_file \
     extra_vars \
@@ -972,26 +934,26 @@ function action.test() {
   playbook="${1:-"${PLAYBOOK}"}"
   vars+=(playbook)
   shift 1
-  test_type="${1:-"${TEST}"}"
-  vars+=(test_type)
+  ci_type="${1:-"${CI_TYPE}"}"
+  vars+=(ci_type)
   shift 1
-  env_file="${1:-"${FIXTURES_ROOT}/${test_type}/env.bash"}"
+  env_file="${1:-"${FIXTURES_ROOT}/${ci_type}/env.bash"}"
   vars+=(env_file)
   shift 1
-  extra_vars="${1:-"${FIXTURES_ROOT}/${test_type}/${PLAYBOOK}"}"
+  extra_vars="${1:-"${FIXTURES_ROOT}/${ci_type}/${PLAYBOOK}"}"
   vars+=(extra_vars)
   shift 1
   for var in "${vars[@]}"; do
     val="$(eval "echo \$${var}" || true)"
     test -n "${val}" && log.debug "updated: ${var}='${val}'"
   done
-  print_test_type_detection_var "${test_type}"
+  print_ci_type_detection_var "${ci_type}"
   source_script "${env_file}"
   rc=$?
   test "${rc}" -eq 0 || die "${rc}" "Failed during ${env_file} execution (sourcing). please check your environment."
   log.debug "sourced ${env_file} with rc=${rc}"
-  print_test_type_detection_var "${test_type}"
-  log.info "About to run test environment for ${test_type}, using extra_vars=${extra_vars}"
+  print_ci_type_detection_var "${ci_type}"
+  log.info "About to run test environment for ci_type=${ci_type}, using extra_vars=${extra_vars}"
   action.run_playbook "${venv_dir}" "${playbook}" "${extra_vars}"
   rc=$?
   epilog "${rc}"
@@ -1031,9 +993,8 @@ function action.reset_collections_reqs() {
   local \
     rc \
     src_reqs \
+    del_collections \
     dst_reqs
-  local -a \
-    del_collections
   src_reqs="${1?cannot continue without src_reqs}"
   del_collections="${2?cannot continue without del_collections}"
   dst_reqs="${3:-"${src_reqs##*/}"}"
@@ -1085,14 +1046,13 @@ function main() {
     EXTRA_VARS
     ANSIBLE_COLLECTIONS_PATH
     # CACHE_PATH
-    TEST
+    CI_TYPE
     COLLECTION_ROOT
     COLLECTIONS_REQS_LOCAL
     COLLECTION_REQ_FILES_TXT
     # FIXTURES_ROOT
     TEST_DATA_DIR
     REQ_COLLECTIONS_ATTR
-    # YQ_SEARCH_PREFIX
     # LIVE_FOREVER
   )
 
@@ -1143,8 +1103,8 @@ function main() {
     rc=$?
     ;;
   "test")
-    TEST_DATA_DIR="${TEST_DATA_DIR:-"${FIXTURES_ROOT}/${TEST}"}"
-    args+=("${PLAYBOOK}" "${TEST}")
+    TEST_DATA_DIR="${TEST_DATA_DIR:-"${FIXTURES_ROOT}/${CI_TYPE}"}"
+    args+=("${PLAYBOOK}" "${CI_TYPE}")
     args+=("${TEST_DATA_DIR}/env.bash")
     args+=("${TEST_DATA_DIR}/${PLAYBOOK}")
     time action.test "${args[@]}"

@@ -25,7 +25,7 @@ EXTRA_VARS  	= $(VARS_DIR)/$(notdir $(PLAYBOOK))
 EXTRA_PARAMS 	?= -vv
 ANSIBLE_COLLECTIONS_PATH ?= $(PWD)/collections
 SHELL			= /bin/bash
-TEST   			?= dci
+CI_TYPE   		?= dci
 WRAPPER			?= ./tools/make_wrapper.sh
 SCRIPT_DBG	?= $(DEV_MODE)
 

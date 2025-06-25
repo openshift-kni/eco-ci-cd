@@ -16,6 +16,7 @@ def send_to_slack(webhook_url, release_info, prow_job_url):
 
 Links:
 - Jira: {release_info['jira_card_link']}
+- Polarion: {release_info['polarion_url']}
 - Prow Job: <{prow_job_url}|View Prow Job>
 
 Environment:
@@ -78,6 +79,7 @@ def main():
     release_info = {
         "version": version,
         "jira_card_link": read_file_content(os.path.join(shared_dir, "jira_link")),
+        "polarion_url": read_file_content(os.path.join(shared_dir, "polarion_url.txt")),
         "test_env": {
             "cluster_name": read_file_content(os.path.join(shared_dir, "cluster_name")),
             "nic": read_file_content(os.path.join(shared_dir, "ocp_nic")),

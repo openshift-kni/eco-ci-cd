@@ -157,6 +157,12 @@
         - Remove stopped containers
         - Remove reporter project dir
 
+    - name: Copy polarion URL to shared directory
+      ansible.builtin.copy:
+        src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/.polarion_url"
+        dest: "{{ shared_dir }}/polarion_url.txt"
+        mode: "0777"
+
   handlers:
 
     - name: Remove reports dir

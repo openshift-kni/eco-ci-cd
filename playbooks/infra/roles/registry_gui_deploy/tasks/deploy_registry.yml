@@ -27,12 +27,36 @@
     mode: "0640"
   no_log: true
 
-- name: Deploy htpasswd file
+- name: Ensure required directories exist on localhost
+  become: false
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ registry_gui_local_cert_path }}"
+    state: directory
+    mode: "0755"
+    recurse: true
+
+- name: Deploy TLS certificate on localhost
+  become: false
+  delegate_to: localhost
+  ansible.builtin.copy:
+    content: "{{ registry_gui_tls_cert }}"
+    dest: "{{ registry_gui_local_cert_path }}/registry.crt"
+    mode: "0644"
+  no_log: true
+  notify:
+    - Remove localhost cert
+
+- name: Deploy htpasswd file on localhost
+  become: false
+  delegate_to: localhost
   ansible.builtin.copy:
     content: "{{ registry_gui_htpasswd_content }}"
     dest: "{{ registry_gui_local_pull_secret_path }}"
     mode: "0640"
   no_log: true
+  notify:
+    - Remove locahost secret
 
 - name: Install firewalld
   ansible.builtin.package:

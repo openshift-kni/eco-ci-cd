@@ -1,0 +1,14 @@
+---
+- name: Remove localhost cert
+  become: false
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ registry_gui_local_cert_path }}/registry.crt"
+    state: absent
+
+- name: Remove locahost secret
+  become: false
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ registry_gui_local_pull_secret_path }}"
+    state: absent

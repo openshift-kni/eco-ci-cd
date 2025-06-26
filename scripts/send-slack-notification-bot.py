@@ -53,8 +53,7 @@ def main():
     webhook_url = os.environ.get("WEBHOOK_URL")
     shared_dir = os.environ.get("SHARED_DIR")
     registry_url = os.environ.get("REGISTRY_URL", "https://registry.stage.redhat.io/openshift4")
-    prow_job_url = os.environ.get("JOB_URL", "Job URL Not Available") 
-    
+
     if not webhook_url or not shared_dir:
         logging.error("❌ Error: WEBHOOK_URL and SHARED_DIR environment variables must be set")
         sys.exit(1)
@@ -75,6 +74,18 @@ def main():
     except (ValueError, IndexError):
         logging.error(f"❌ Error: Invalid version format: '{version}'. Expected 'major.minor.patch'.")
         sys.exit(1)  
+
+    # Construct Prow job base URL
+    prow_base_url = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/"
+    job_name = f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-{major}.{minor}-cnf-network-functional-tests"
+    cnf_network_link = f"{prow_base_url}{job_name}/"
+    build_id = os.environ.get("BUILD_ID")
+    
+    # Construct the Prow job URL
+    if build_id:
+        prow_job_url = f"{cnf_network_link}{build_id}"
+    else:
+        prow_job_url = "Job URL Not Available"
         
     release_info = {
         "version": version,

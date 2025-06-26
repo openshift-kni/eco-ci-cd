@@ -1,0 +1,76 @@
+---
+- name: Setup NTO gotests
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    artifact_dir: /tmp/artifacts
+    gotest_dir: /tmp/gotest
+    nto_repo: https://github.com/openshift/cluster-node-tuning-operator
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+          - kubeconfig is defined
+
+    - name: Get Cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: api_version
+
+    - name: Set ocp_version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
+
+    - name: Ensure test directory does not exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ gotest_dir }}"
+        - "{{ artifact_dir }}"
+
+    - name: Ensure test directory is present
+      ansible.builtin.file:
+        mode: "0760"
+        path: "{{ artifact_dir }}"
+        state: directory
+        recurse: true
+      loop:
+        - "{{ gotest_dir }}"
+        - "{{ artifact_dir }}"
+
+    - name: Clone NTO repository
+      ansible.builtin.git:
+        repo: "{{ nto_repo }}"
+        dest: "{{ gotest_dir }}"
+        version: "release-{{ ocp_version }}"
+
+    - name: Create Go test script
+      ansible.builtin.copy:
+        dest: "{{ gotest_dir }}/run_gotests.sh"
+        mode: "0777"
+        content: |
+          #!/bin/bash
+          set -e
+          export PATH=/home/telcov10n/go/bin:/usr/local/go/bin:$PATH
+          export KUBECONFIG="{{ kubeconfig }}"
+          export ROLE_WORKER_CNF=worker-cnf
+          export PERF_TEST_PROFILE=performance
+
+          echo "Installing ginkgo and omgega..."
+          go install github.com/onsi/ginkgo/v2/ginkgo@latest
+
+          go mod vendor && go mod tidy && make vet
+
+          cd {{ gotest_dir }}
+          ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
+            --output-dir="{{ artifact_dir }}" \
+            --require-suite test/e2e/performanceprofile/functests/0_config \
+              test/e2e/performanceprofile/functests/1_performance \
+              test/e2e/performanceprofile/functests/6_mustgather_testing \
+              test/e2e/performanceprofile/functests/10_performance_ppc

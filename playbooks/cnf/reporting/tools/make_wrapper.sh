@@ -224,21 +224,21 @@ function source_script() {
     subdir \
     rc
   local -a \
-    path_to_script
+    paths_to_script
   script_path="${1?cannot continue without script_path}"
 
-  path_to_script=("$(dirname "${script_path}" || true)")
-  path_to_script=("$(dirname "${path_to_script[0]}" || true)" "${path_to_script[@]}")
-  path_to_script=("$(dirname "${path_to_script[0]}" || true)" "${path_to_script[@]}")
+  paths_to_script=("$(dirname "${script_path}" || true)")
+  paths_to_script=("$(dirname "${paths_to_script[0]}" || true)" "${paths_to_script[@]}")
+  paths_to_script=("$(dirname "${paths_to_script[0]}" || true)" "${paths_to_script[@]}")
 
   # validations: dirs presence + permissions
-  for subdir in "${path_to_script[@]}"; do
+  for subdir in "${paths_to_script[@]}"; do
     test -d "${subdir}" || die 1 "'${subdir}' folder is missing"
     test -x "${subdir}" || die 1 "'${subdir}' folder is non executable"
   done
   # validations: script permissions
   test -r "${script_path}" || die 1 "Expected script file ${script_path} is not readable."
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   source "${script_path}"
   rc=$?
   log.debug "sourced ${script_path} with rc=${rc}"
@@ -343,7 +343,7 @@ function collections_install() {
   test "${idx}" -eq 1 && val="" || val="s"
   log.info "End YAML installations: installed ${idx}[of ${total}] file${var}"
   idx=0
-
+  # log.info "><> ><> ><> ><> ><> ><> should see python packages installed <>< <>< <>< <>< <>< <><"
   log.info "Start collecting of python requirements files"
   cmd=(find "${collections_path}" -name "meta" -type d -maxdepth 4)
   requirements=()

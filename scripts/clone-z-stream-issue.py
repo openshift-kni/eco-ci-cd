@@ -68,7 +68,7 @@ def main():
         'issuetype': {'name': issue_to_clone.fields.issuetype.name},
         'description': issue_to_clone.fields.description,
         'summary': f'QE Zstream Verification Release {z_stream_version}',
-        'assignee': jira_client.myself()
+        'assignee': {'name': 'rhn-cnf-elevin'}
     }
     
     try: 

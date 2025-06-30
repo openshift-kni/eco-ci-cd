@@ -152,7 +152,7 @@
         PYLARION_TEMPLATE_NAME: "{{ reporter_template_name }}"
         POLARION_REPORT_PATH: "{{ report_files | join(';') }}"
         JUNIT_REPORT_PATH: "{{ report_junit_files | join(';') }}"
-        POLARION_TEST_RUN_URL_FILE: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/.polarion_url"
+        SAVE_POLARION_TEST_RUN_URL: "true"
       notify:
         - Remove reports dir
         - Remove stopped containers
@@ -160,7 +160,7 @@
 
     - name: Copy polarion URL to shared directory
       ansible.builtin.copy:
-        src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/.polarion_url"
+        src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
         dest: "{{ shared_dir }}/polarion_url"
         mode: "0777"
 

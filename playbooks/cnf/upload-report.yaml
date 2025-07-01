@@ -158,11 +158,26 @@
         - Remove stopped containers
         - Remove reporter project dir
 
+    - name: Check if polarion URL file exists
+      ansible.builtin.stat:
+        path: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
+      register: polarion_url_file
+      retries: 5
+      delay: 3
+      until: polarion_url_file.stat.exists
+
+    - name: Debug message when polarion URL file does not exist
+      ansible.builtin.debug:
+        msg: "Warning: Polarion URL file does not exist at {{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
+      when: not polarion_url_file.stat.exists
+
     - name: Copy polarion URL to shared directory
       ansible.builtin.copy:
         src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
         dest: "{{ shared_dir }}/polarion_url"
+        remote_src: true
         mode: "0777"
+      when: polarion_url_file.stat.exists
 
   handlers:
 

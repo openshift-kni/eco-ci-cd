@@ -38,6 +38,11 @@
   kubernetes.core.k8s:
     state: present
     definition: "{{ machine_config_pool }}"
+  notify:
+    - Wait for MCP
+
+- name: Apply container runtime config
+  ansible.builtin.include_tasks: containerRuntime.yml
 
 - name: Create performance Profile
   ansible.builtin.include_tasks: ppc.yml

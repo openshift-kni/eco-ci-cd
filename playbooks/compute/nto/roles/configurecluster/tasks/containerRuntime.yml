@@ -1,0 +1,16 @@
+---
+- name: Change container runtime to {{ container_runtime }}
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: ContainerRuntimeConfig
+      metadata:
+        name: "enable-{{ container_runtime }}-worker-cnf"
+      spec:
+        containerRuntimeConfig:
+          defaultRuntime: "{{ container_runtime }}"
+        machineConfigPoolSelector:
+          matchLabels:
+            machineconfiguration.openshift.io/role: worker-cnf
+  notify:
+    - Wait for MCP

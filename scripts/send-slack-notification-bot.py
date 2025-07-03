@@ -90,7 +90,7 @@ def main():
     release_info = {
         "version": version,
         "jira_card_link": read_file_content(os.path.join(shared_dir, "jira_link")),
-        "polarion_url": read_file_content(os.path.join(shared_dir, "polarion_url")),
+        "polarion_url": read_file_content("/tmp/reporter_project/conf/.polarion_url"),
         "test_env": {
             "cluster_name": read_file_content(os.path.join(shared_dir, "cluster_name")),
             "nic": read_file_content(os.path.join(shared_dir, "ocp_nic")),

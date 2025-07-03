@@ -3,8 +3,11 @@ collections:
   - name: community.libvirt
     version: 1.3.0
   - name: redhatci.ocp
-    version: 2.5.1749150845
+    source: https://github.com/mvk/ansible-collection-redhatci-ocp.git
+    type: git
+    version: mvk-role-test_report_send
   - name: kubernetes.core
     version: 2.4.2
   - name: junipernetworks.junos
     version: 9.1.0
+#    version: 89962fa4f89434092c01e583d44f255531acc684

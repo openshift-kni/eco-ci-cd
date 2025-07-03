@@ -6,3 +6,7 @@ inventory*
 *__pycache__*
 **/collections
 **/.ansible
+
+# emacs config files
+.projectile
+.dir-locals.el

@@ -172,11 +172,10 @@
       when: not polarion_url_file.stat.exists
 
     - name: Copy polarion URL to shared directory
-      ansible.builtin.copy:
+      ansible.builtin.fetch:
         src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
         dest: "{{ shared_dir }}/polarion_url"
-        remote_src: true
-        mode: "0777"
+        flat: true
       when: polarion_url_file.stat.exists
 
   handlers:

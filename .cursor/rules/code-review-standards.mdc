@@ -1,0 +1,84 @@
+---
+description: "Code review standards and best practices for thorough PR reviews"
+---
+
+# Code Review Standards for eco-ci-cd
+
+## Review Approach
+- **Be Thorough**: Don't just check syntax - understand the full context and impact
+- **Be Constructive**: Provide specific, actionable feedback with examples
+- **Be Educational**: Explain the "why" behind recommendations
+- **Be Consistent**: Apply the same standards across all reviews
+
+## What to Review
+
+### 1. Technical Correctness
+- **Logic Flow**: Does the code do what it claims to do?
+- **Edge Cases**: Are error conditions and edge cases handled?
+- **Dependencies**: Are all dependencies properly declared and used?
+- **Integration**: How does this change affect other components?
+
+### 2. Code Quality
+- **Readability**: Is the code self-documenting with clear names?
+- **Maintainability**: Will future developers understand this code?
+- **Best Practices**: Does it follow language/framework conventions?
+- **Performance**: Are there obvious performance issues?
+
+### 3. Security and Safety
+- **Input Validation**: Are inputs properly validated?
+- **Permissions**: Are file/directory permissions appropriate?
+- **Secrets**: No hardcoded credentials or sensitive data?
+- **Error Handling**: Are failures handled gracefully?
+
+### 4. Documentation
+- **Documentation**: Is documentation updated for new features?
+- **Examples**: Are usage examples provided where helpful?
+
+## Review Comments Best Practices
+
+### Structure Comments Well
+```
+**Issue Type**: Brief description of the problem
+**Recommendation**: Specific fix with code example
+**Rationale**: Why this change is needed
+```
+
+### Categorize Issues
+- **Critical**: Must fix - blocks functionality or security
+- **Important**: Should fix - affects maintainability or best practices  
+- **Minor**: Nice to have - style or optimization improvements
+
+### Provide Examples
+Always show the recommended fix:
+```yaml
+# Instead of this:
+mode: "0755"
+
+# Use this:
+mode: "0644"
+```
+
+### Testing Recommendations
+Suggest specific test cases:
+- Happy path scenarios
+- Edge cases and error conditions
+- Performance considerations
+
+## Review Checklist
+- [ ] Code achieves stated objective
+- [ ] No security vulnerabilities introduced
+- [ ] Follows project coding standards
+- [ ] Appropriate error handling
+- [ ] Clear variable/function names
+- [ ] Adequate comments/documentation
+- [ ] No breaking changes without migration path
+- [ ] Performance implications considered
+- [ ] Backward compatibility maintained
+
+## Common Issues to Watch For
+- **Path Handling**: Incorrect file path construction
+- **Permissions**: Inappropriate file/directory permissions
+- **Deprecated Syntax**: Using outdated language features
+- **Resource Management**: Proper cleanup of resources
+- **Configuration**: Hardcoded values that should be configurable
+- **Dependencies**: Missing or incorrect version constraints

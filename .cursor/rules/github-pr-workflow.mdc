@@ -1,0 +1,119 @@
+---
+description: "GitHub pull request workflow and integration best practices"
+---
+
+# GitHub PR Workflow for eco-ci-cd
+
+## PR Creation Best Practices
+
+### Title Format
+- Keep titles under 50 characters when possible
+
+### PR Description
+- **Brief Summary**: What does this PR do?
+- **Context**: Why is this change needed?
+- **Breaking Changes**: Any compatibility concerns?
+
+### Before Creating PR
+- [ ] Self-review your changes
+- [ ] Check for lint/format issues
+- [ ] Update relevant documentation
+- [ ] Verify CI/CD pipeline compatibility
+
+## Review Process
+
+### As a Reviewer
+- **Review the Full Context**: Don't just check individual lines
+- **Test Impact**: Consider how changes affect the entire system
+- **Security Review**: Check for any security implications
+- **Performance Review**: Identify potential performance issues
+
+### Review Comment Types
+- **Blocking Issues**: Critical problems that must be fixed
+- **Suggestions**: Non-blocking improvements
+- **Questions**: Ask for clarification when needed
+- **Praise**: Acknowledge good practices
+
+### Review Status Options
+- **Approve**: Ready to merge
+- **Request Changes**: Issues must be addressed
+- **Comment**: Feedback without blocking
+
+## GitHub Integration Features
+
+### Useful GitHub Commands
+- `/hold` - Prevent automatic merging
+- `/lgtm` - Looks good to me (if configured)
+- `/approve` - Approve for merge
+- `/assign @username` - Assign to reviewer
+
+### Labels to Use
+- `do-not-merge/hold` - PR is not ready for merge
+- `priority/high` - High priority change
+- `kind/bug` - Bug fix
+- `kind/feature` - New feature
+- `needs-rebase` - Conflicts need resolution
+
+## CI/CD Integration
+
+### Expected Checks
+- Ansible syntax validation
+- Lint checks (yamllint, ansible-lint)
+
+### Handling CI Failures
+- **Don't ignore failures**: Investigate and fix
+- **Dependency issues**: Update or pin versions appropriately
+
+## Merge Guidelines
+
+### When to Merge
+- [ ] All required reviews approved
+- [ ] All CI checks pass
+- [ ] No merge conflicts
+- [ ] Documentation updated
+- [ ] Breaking changes documented
+
+### Merge Strategies
+- **Squash and Merge**: For feature branches (preferred)
+- **Rebase and Merge**: For maintaining linear history
+- **Merge Commit**: For preserving branch context
+
+## Post-Merge
+
+### Follow-up Actions
+- Monitor deployment/CI for issues
+- Update related documentation
+- Close related issues
+- Notify stakeholders if needed
+
+### If Issues Arise
+- Create hotfix PR if urgent
+- Revert if major issues found
+- Document lessons learned
+
+## Communication
+
+### PR Comments
+- Be constructive and specific
+- Provide examples and alternatives
+- Explain the reasoning behind suggestions
+- Use GitHub's suggestion feature when appropriate
+
+### Status Updates
+- Update PR description if scope changes
+- Comment on progress for long-running PRs
+- Notify reviewers when ready for re-review
+
+## Common Patterns
+
+### Small PRs are Better
+- Easier to review thoroughly
+- Faster to merge
+- Lower risk of conflicts
+- Better for git history
+
+### Documentation Updates
+- Update README if behavior changes
+- Add examples for new features
+- Update inline comments
+- Consider adding to CHANGELOG

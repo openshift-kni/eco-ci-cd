@@ -166,6 +166,13 @@
       delay: 3
       until: polarion_url_file.stat.exists
 
+    - name: Copy polarion url file to tmp directory
+      ansible.builtin.copy:
+        src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
+        dest: "/tmp/.polarion_url"
+        mode: "0777"
+      when: polarion_url_file.stat.exists
+
     - name: Debug message when polarion URL file does not exist
       ansible.builtin.debug:
         msg: "Warning: Polarion URL file does not exist at {{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"

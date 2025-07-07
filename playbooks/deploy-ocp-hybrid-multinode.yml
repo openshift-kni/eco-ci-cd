@@ -26,6 +26,9 @@
 # - ocp version of link to ocp release
 # - pre-configured hosts_vars and grup_vars directories
 
+# optional variables:
+# - extra_manifests: list of extra manifests for OCP installation
+
 ## Roles Requirements
 # The playbook uses role:
 # - redhatci.ocp.create_vms: Creates VMs on given hypervisor.
@@ -232,6 +235,44 @@
     - name: Generate deployment manifests for OCP installation
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
+
+    - name: Get stats for each file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ extra_manifests }}"
+      register: extra_manifests_stats
+      when:
+        - extra_manifests is defined
+        - extra_manifests | length > 0
+
+    - name: Assert extra manifests path exists
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "The file '{{ item.item }}' does not exist."
+      loop: "{{ extra_manifests_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: extra_manifests_stats is defined
+
+    - name: Debug extra manifests to be copied
+      ansible.builtin.debug:
+        msg: "Copying {{ extra_manifests | length }} extra manifest(s): {{ extra_manifests }}"
+      when:
+        - extra_manifests is defined
+        - extra_manifests | length > 0
+
+    - name: Copy extra manifests
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/{{ item }}"
+        mode: "0644"
+      loop:
+        - "{{ extra_manifests }}"
+      when:
+        - extra_manifests_stats is defined
+        - extra_manifests is defined
+        - extra_manifests | length > 0
 
     - name: Generate boot ISO for agent-based installer
       ansible.builtin.import_role:

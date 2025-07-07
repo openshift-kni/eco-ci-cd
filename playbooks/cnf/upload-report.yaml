@@ -169,6 +169,7 @@
     - name: Copy polarion url file to tmp directory
       ansible.builtin.copy:
         src: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}/conf/.polarion_url"
+        remote_src: true
         dest: "/tmp/.polarion_url"
         mode: "0777"
       when: polarion_url_file.stat.exists

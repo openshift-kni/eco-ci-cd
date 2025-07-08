@@ -2,6 +2,7 @@ import requests
 import os
 import sys
 import logging
+import argparse
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -38,41 +39,38 @@ Environment:
         logging.error(f"❌ Failed to send message to Slack: {e}")
         return False
 
-def read_file_content(file_path):
-    try:
-        with open(file_path, 'r') as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        logging.warning(f"Warning: File not found at {file_path}. Returning empty string.")
-        return ""
-    except Exception as e:
-        logging.error(f"Error reading file {file_path}: {e}")
-        return ""
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Send release information to Slack")
+    
+    # Required arguments
+    parser.add_argument("--webhook-url", required=True, help="Slack webhook URL")
+    parser.add_argument("--version", required=True, help="Release version")
+    
+    # Optional arguments with defaults
+    parser.add_argument("--registry-url", default="https://registry.stage.redhat.io/openshift4", 
+                       help="Registry URL for images (default: %(default)s)")    
+    # Direct values
+    parser.add_argument("--jira-link", default="", help="Jira card link")
+    parser.add_argument("--polarion-url", default="", help="Polarion URL")
+    parser.add_argument("--cluster-name", default="", help="Cluster name")
+    parser.add_argument("--nic", default="", help="NIC name")
+    parser.add_argument("--secondary-nic", default="", help="Secondary NIC name")
+    
+    return parser.parse_args()
     
 def main():
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    shared_dir = os.environ.get("SHARED_DIR")
-    registry_url = os.environ.get("REGISTRY_URL", "https://registry.stage.redhat.io/openshift4")
-
-    if not webhook_url or not shared_dir:
-        logging.error("❌ Error: WEBHOOK_URL and SHARED_DIR environment variables must be set")
-        sys.exit(1)
+    args = parse_arguments()
     
-    version = read_file_content(os.path.join(shared_dir, "cluster_version"))
-    if not version:
-        logging.error("❌ Error: Could not read version from cluster_version file.")
-        sys.exit(1)
-
     # Determine RHEL version based on the cluster version
     rhel_version = "rhel9"  # Default to rhel9
     try:
         # Compare version as a tuple of integers, e.g., (4, 14) <= (4, 15)
-        major, minor, *_ = map(int, version.split('.'))
+        major, minor, *_ = map(int, args.version.split('.'))
         if (major, minor) <= (4, 15):
             rhel_version = "rhel8"
-        logging.info(f"Detected version {version}, using '{rhel_version}' images.")
+        logging.info(f"Detected version {args.version}, using '{rhel_version}' images.")
     except (ValueError, IndexError):
-        logging.error(f"❌ Error: Invalid version format: '{version}'. Expected 'major.minor.patch'.")
+        logging.error(f"❌ Error: Invalid version format: '{args.version}'. Expected 'major.minor.patch'.")
         sys.exit(1)  
 
     # Construct Prow job base URL
@@ -80,7 +78,7 @@ def main():
     job_name = f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-{major}.{minor}-cnf-network-functional-tests"
     cnf_network_link = f"{prow_base_url}{job_name}/"
     build_id = os.environ.get("BUILD_ID")
-    
+
     # Construct the Prow job URL
     if build_id:
         prow_job_url = f"{cnf_network_link}{build_id}"
@@ -88,19 +86,19 @@ def main():
         prow_job_url = "Job URL Not Available"
         
     release_info = {
-        "version": version,
-        "jira_card_link": read_file_content(os.path.join(shared_dir, "jira_link")),
-        "polarion_url": read_file_content("/tmp/.polarion_url"),
+        "version": args.version,
+        "jira_card_link": args.jira_link,
+        "polarion_url": args.polarion_url,
         "test_env": {
-            "cluster_name": read_file_content(os.path.join(shared_dir, "cluster_name")),
-            "nic": read_file_content(os.path.join(shared_dir, "ocp_nic")),
-            "secondary_nic": read_file_content(os.path.join(shared_dir, "secondary_nic")),
-            "cnf_image_version": f"{registry_url}/dpdk-base-{rhel_version}:v{version}",
-            "dpdk_image_version": f"{registry_url}/cnf-{rhel_version}:v{version}"
+            "cluster_name": args.cluster_name,
+            "nic": args.nic,
+            "secondary_nic": args.secondary_nic,
+            "cnf_image_version": f"{args.registry_url}/dpdk-base-{rhel_version}:v{args.version}",
+            "dpdk_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{args.version}"
         }
     }
     
-    message_sent = send_to_slack(webhook_url, release_info, prow_job_url)
+    message_sent = send_to_slack(args.webhook_url, release_info, prow_job_url)
     if not message_sent:
         logging.error("❌ Error: Slack notification failed.")
         sys.exit(1)

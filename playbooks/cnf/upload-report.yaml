@@ -68,6 +68,11 @@
         tag: "{{ reporter_image_tag }}"
         state: present
 
+    - name: Ensure reporter project directory is removed before clone
+      ansible.builtin.file:
+        path: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}"
+        state: absent
+
     - name: Git clone reporter project  # noqa: latest[git]
       ansible.builtin.git:
         repo: "{{ reporter_project_git }}"

@@ -8,15 +8,36 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     sshpass \
     python3 \
     python3-pip \
+    python3-wheel \
+    python3-setuptools \
     && dnf clean all
 
 # Copy application files to eco-ci-cd folder
 COPY . .
 
-# Install ansible and ansible-lint
-RUN pip3 install --no-cache-dir \
-    -r requirements.container.txt
+# Update pip, wheel, etc.
+RUN python3 -m pip \
+        install \
+            --no-cache-dir \
+            --upgrade \
+            pip \
+            wheel \
+            setuptools
 
+# Install ansible and ansible-lint
+RUN python3 -m pip \
+        install \
+            --no-cache-dir \
+            ansible \
+            ansible-lint \
+            jira \
+            jmespath \
+            junitparser \
+            lxml \
+            ncclient \
+            netaddr \
+            paramiko \
+            requests
 
 # Install requirements
 RUN ansible-galaxy collection install -r requirements.yml

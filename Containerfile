@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi
+FROM registry.access.redhat.com/ubi9/ubi:latest
 
 WORKDIR /eco-ci-cd
 
@@ -12,11 +12,17 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     python3.11-setuptools \
     && dnf clean all
 
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 2
+
+RUN python3.11 --version
+RUN python3.9 --version
+RUN python3 --version
+
 # Copy application files to eco-ci-cd folder
 COPY . .
 
-RUN python3.11 --version
-RUN python3 --version
+
 # Update pip, wheel, etc.
 RUN python3.11 -m pip \
         install \

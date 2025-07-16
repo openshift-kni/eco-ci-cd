@@ -5,7 +5,7 @@ collections:
   - name: redhatci.ocp
     source: https://github.com/mvk/ansible-collection-redhatci-ocp.git
     type: git
-    version: collection-install-fix
+    version: role-report-send-p2
   - name: kubernetes.core
     version: 2.4.2
   - name: junipernetworks.junos

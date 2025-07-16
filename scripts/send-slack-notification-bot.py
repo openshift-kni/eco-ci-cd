@@ -10,22 +10,45 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-def send_to_slack(webhook_url, release_info, prow_job_url):
-    """Send release info to Slack channel"""
+def send_to_slack(webhook_url, release_info, prow_job_url, phase1_prow_url=None):
+    """Send release info to Slack channel
     
-    message = f"""🚀 **Release {release_info['version']}**
+    Args:
+        webhook_url (str): Slack webhook URL
+        release_info (dict): Release information dictionary
+        prow_job_url (str): Current/main Prow job URL
+        phase1_prow_url (str, optional): Phase 1 Prow job URL if available
+    """
+    
+    # Determine job labels based on whether this is a multi-phase workflow
+    has_phase1 = bool(phase1_prow_url)
+    main_job_label = "Phase 2 Job" if has_phase1 else "Prow Job"
+    
+    # Build links dynamically to avoid duplication
+    links = [
+        f"Jira: {release_info['jira_card_link']}",
+        f"Polarion: {release_info['polarion_url']}"
+    ]
+    
+    # Add job links in logical order (Phase 1 first if exists, then main job)
+    if has_phase1:
+        links.append(f"Phase 1 Job: <{phase1_prow_url}|View Phase 1 Job>")
+    
+    links.append(f"{main_job_label}: <{prow_job_url}|View {main_job_label}>")
+    
+    # Construct the final links section
+    links_section = "Links:\n" + "\n".join(f"- {link}" for link in links)
+    
+    message = f"""🚀 *Release {release_info['version']}*
 
-Links:
-- Jira: {release_info['jira_card_link']}
-- Polarion: {release_info['polarion_url']}
-- Prow Job: <{prow_job_url}|View Prow Job>
+{links_section}
 
-Environment:
-- Cluster: {release_info['test_env']['cluster_name']}
-- NIC: {release_info['test_env']['nic']}
-- SECONDARY_NIC: {release_info['test_env']['secondary_nic']}
-- CNF Image: {release_info['test_env']['cnf_image_version']}
-- DPDK Image: {release_info['test_env']['dpdk_image_version']}
+*Environment:*
+• *Cluster:* {release_info['test_env']['cluster_name']}
+• *NIC:* {release_info['test_env']['nic']}
+• *Secondary NIC:* {release_info['test_env']['secondary_nic']}
+• *CNF Image:* `{release_info['test_env']['cnf_image_version']}`
+• *DPDK Image:* `{release_info['test_env']['dpdk_image_version']}`
 """
 
     payload = {"text": message}
@@ -33,7 +56,10 @@ Environment:
     try:
         response = requests.post(webhook_url, json=payload, timeout=30)
         response.raise_for_status()
-        logging.info("✅ Message sent to Slack!")
+        
+        # Log the workflow type for debugging
+        workflow_type = "multi-phase" if has_phase1 else "single-phase"
+        logging.info(f"✅ Message sent to Slack! ({workflow_type} workflow)")
         return True
     except requests.exceptions.RequestException as e:
         logging.error(f"❌ Failed to send message to Slack: {e}")
@@ -55,37 +81,66 @@ def parse_arguments():
     parser.add_argument("--cluster-name", default="", help="Cluster name")
     parser.add_argument("--nic", default="", help="NIC name")
     parser.add_argument("--secondary-nic", default="", help="Secondary NIC name")
+    parser.add_argument("--phase1-build-id", default="", help="Phase 1 build ID")
     
     return parser.parse_args()
-    
-def main():
-    args = parse_arguments()
-    
-    # Determine RHEL version based on the cluster version
-    rhel_version = "rhel9"  # Default to rhel9
+
+def parse_version(version_string):
+    """Parse version string and return major, minor components and determine RHEL version."""
     try:
-        # Compare version as a tuple of integers, e.g., (4, 14) <= (4, 15)
-        major, minor, *_ = map(int, args.version.split('.'))
-        if (major, minor) <= (4, 15):
-            rhel_version = "rhel8"
-        logging.info(f"Detected version {args.version}, using '{rhel_version}' images.")
+        major, minor, *_ = map(int, version_string.split('.'))
+        rhel_version = "rhel8" if (major, minor) <= (4, 15) else "rhel9"
+        logging.info(f"Detected version {version_string}, using '{rhel_version}' images.")
+        return major, minor, rhel_version
     except (ValueError, IndexError):
-        logging.error(f"❌ Error: Invalid version format: '{args.version}'. Expected 'major.minor.patch'.")
-        sys.exit(1)  
+        logging.error(f"❌ Error: Invalid version format: '{version_string}'. Expected 'major.minor.patch'.")
+        sys.exit(1)
 
-    # Construct Prow job base URL
-    prow_base_url = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/"
-    job_name = f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-{major}.{minor}-cnf-network-functional-tests"
-    cnf_network_link = f"{prow_base_url}{job_name}/"
-    build_id = os.environ.get("BUILD_ID")
-
-    # Construct the Prow job URL
-    if build_id:
-        prow_job_url = f"{cnf_network_link}{build_id}"
+def construct_job_name(major, minor):
+    """Construct the appropriate job name based on version."""
+    if (major, minor) > (4, 17):
+        return f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-phase2-{major}.{minor}-cnf-network-functional-tests"
     else:
-        prow_job_url = "Job URL Not Available"
-        
-    release_info = {
+        return f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-{major}.{minor}-cnf-network-functional-tests"
+
+def construct_prow_urls(major, minor, phase1_build_id=None):
+    """Construct Prow job URLs for current and optionally phase1/phase2 jobs.
+    
+    Args:
+        major (int): Major version number
+        minor (int): Minor version number  
+        phase1_build_id (str, optional): Phase 1 build ID. If None or empty, 
+                                        phase1 URL will not be generated.
+    
+    Returns:
+        tuple: (current_prow_url, phase1_prow_url or None)
+    """
+    prow_base_url = "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/"
+    
+    # Current job URL
+    job_name = construct_job_name(major, minor)
+    cnf_network_link = f"{prow_base_url}{job_name}/"
+
+    # BUILD_ID is automatically being passed from the prow job
+    build_id = os.environ.get("BUILD_ID")
+    
+    current_prow_url = f"{cnf_network_link}{build_id}" if build_id else "Job URL Not Available"
+    
+    # Phase 1 job URL (only if phase1_build_id is provided and not empty)
+    phase1_prow_url = None
+    if phase1_build_id and phase1_build_id.strip():
+        phase1_job_name = f"periodic-ci-openshift-kni-eco-ci-cd-main-cnf-network-phase1-{major}.{minor}-cnf-network-functional-tests"
+        phase1_cnf_network_link = f"{prow_base_url}{phase1_job_name}/"
+        phase1_prow_url = f"{phase1_cnf_network_link}{phase1_build_id.strip()}"
+        logging.info(f"Phase 1 Prow URL constructed: {phase1_prow_url}")
+    else:
+        logging.debug("Phase 1 build ID not provided or empty - skipping Phase 1 URL generation")
+    
+    return current_prow_url, phase1_prow_url
+
+def create_release_info(args, rhel_version):
+    """Create the release info dictionary."""
+    return {
         "version": args.version,
         "jira_card_link": args.jira_link,
         "polarion_url": args.polarion_url,
@@ -97,11 +152,28 @@ def main():
             "dpdk_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{args.version}"
         }
     }
+
+def main():
+    """Main function to orchestrate the Slack notification process."""
+    args = parse_arguments()
     
-    message_sent = send_to_slack(args.webhook_url, release_info, prow_job_url)
+    # Parse version and determine RHEL version
+    major, minor, rhel_version = parse_version(args.version)
+    
+    # Construct Prow job URLs
+    current_prow_url, phase1_prow_url = construct_prow_urls(major, minor, args.phase1_build_id)
+    
+    # Construct the relevant information for the slack message
+    release_info = create_release_info(args, rhel_version)
+    
+    # Send notification to Slack
+    message_sent = send_to_slack(args.webhook_url, release_info, current_prow_url, phase1_prow_url)
+    
     if not message_sent:
         logging.error("❌ Error: Slack notification failed.")
         sys.exit(1)
+    
+    logging.info("✅ Slack notification sent successfully!")
 
 if __name__ == "__main__":
     main()

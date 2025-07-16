@@ -15,10 +15,6 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 2
 
-RUN python3.11 --version
-RUN python3.9 --version
-RUN python3 --version
-
 # Copy application files to eco-ci-cd folder
 COPY . .
 
@@ -28,24 +24,24 @@ RUN python3.11 -m pip \
         install \
             --no-cache-dir \
             --upgrade \
-            pip \
-            wheel \
-            setuptools
+                pip \
+                wheel \
+                setuptools
 
 # Install ansible and ansible-lint
 RUN python3.11 -m pip \
         install \
             --no-cache-dir \
-            ansible \
-            ansible-lint \
-            jira \
-            jmespath \
-            junitparser \
-            lxml \
-            ncclient \
-            netaddr \
-            paramiko \
-            requests
+                ansible \
+                ansible-lint \
+                jira \
+                jmespath \
+                junitparser \
+                lxml \
+                ncclient \
+                netaddr \
+                paramiko \
+                requests
 
 # Install requirements
 RUN ansible-galaxy collection install -r requirements.yml

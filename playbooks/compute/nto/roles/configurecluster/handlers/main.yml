@@ -5,7 +5,7 @@
       kubernetes.core.k8s_info:
         api_version: machineconfiguration.openshift.io/v1
         kind: MachineConfigPool
-        name: worker-cnf
+        name: "worker-cnf"
       register: mcp_restart
       until: >
         mcp_restart.resources is defined and
@@ -23,7 +23,7 @@
       kubernetes.core.k8s_info:
         api_version: machineconfiguration.openshift.io/v1
         kind: MachineConfigPool
-        name: worker-cnf
+        name: "worker-cnf"
       register: mcp_status
       until: >
         mcp_status.resources is defined and

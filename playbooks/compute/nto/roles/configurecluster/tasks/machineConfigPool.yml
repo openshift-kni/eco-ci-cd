@@ -1,0 +1,39 @@
+---
+- name: Retrieve worker nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: worker_nodes_info
+
+- name: Apply CNF label to all worker nodes
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          node-role.kubernetes.io/worker-cnf: ''
+  loop: "{{ worker_nodes_info.resources | map(attribute='metadata.name') }}"
+
+- name: Render Machine config pool
+  ansible.builtin.set_fact:
+    machine_config_pool: "{{ lookup('template', 'machineConfigPool.yml.j2') }}"
+
+- name: Save Machine config pool
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/machineConfigPool.yml"
+    content: "{{ machine_config_pool }}"
+    mode: '775'
+  delegate_to: localhost
+
+- name: Apply MCP configuration
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ machine_config_pool }}"
+  vars:
+    mcp_pool_name:
+      - "worker-cnf"
+  notify:
+    - Wait for MCP

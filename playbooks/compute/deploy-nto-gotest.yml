@@ -58,7 +58,7 @@
     - name: Set base RHEL image to rhel8 for 4.18-
       ansible.builtin.set_fact:
         base_rhel_image: rhel8
-      when: ocp_version is version('4.18', '<')
+      when: ocp_version is version('4.18', '<=')
 
     - name: Create Go test script
       ansible.builtin.copy:
@@ -71,8 +71,8 @@
           export KUBECONFIG="{{ kubeconfig }}"
           export ROLE_WORKER_CNF=worker-cnf
           export PERF_TEST_PROFILE=performance
-          export IMAGE_REGISTRY=registry.redhat.io
-          export CNF_TESTS_IMAGE=/openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
+          export IMAGE_REGISTRY="registry.redhat.io/"
+          export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
 
           echo "Installing ginkgo and omgega..."

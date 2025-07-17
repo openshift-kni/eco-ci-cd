@@ -316,6 +316,15 @@
     REGISTRY_AUTH_FILE: /etc/containers/auth.json
   tasks:
 
+    - name: Deploy chrony config
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'chrony.conf.j2') }}"
+        dest: /etc/chrony.conf
+        mode: '0644'
+      become: true
+      notify:
+        - Restart chrony
+
     - name: Set up authorized_keys
       become: false
       ansible.builtin.lineinfile:
@@ -463,3 +472,10 @@
       ansible.builtin.file:
         state: absent
         path: "/tmp/{{ golang_pkg }}"
+
+    - name: Restart chrony
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: chronyd.service
+        enabled: true
+      become: true

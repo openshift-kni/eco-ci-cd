@@ -366,8 +366,24 @@
           ansible.builtin.command: update-ca-trust
           changed_when: false
 
+    - name: Deploy chrony config
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'chrony.conf.j2') }}"
+        dest: /etc/chrony.conf
+        mode: '0644'
+      become: true
+      notify:
+        - Restart chrony
+
   handlers:
     - name: Remove installation ISO
       ansible.builtin.file:
         path: /opt/http_store/data/{{ hostvars['bastion']['iso_name'] }}"
         state: absent
+
+    - name: Restart chrony
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: chronyd.service
+        enabled: true
+      become: true

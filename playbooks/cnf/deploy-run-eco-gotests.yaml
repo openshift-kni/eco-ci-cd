@@ -45,7 +45,6 @@
 # labels                            # string: List of test labels
 # eco_gotests_report_path           # string: Directory path for the test report output.
 # test_timeout                      # string: Timeout example 12h
-# eco_cnf_core_net_frr_image        # string: Link to frr image
 # eco_cnf_core_net_mlb_addr_list    # string: List of mlb addresses
 # eco_cnf_core_net_switch_ip:       # string: switch ip address
 # eco_cnf_core_net_switch_user      # string: Username for accessing the intermediate switch.
@@ -60,7 +59,6 @@
     eco_gotest_dir: /tmp/eco_gotests
     eco_gotests_report_path: "{{ eco_gotest_dir}}/report"
     test_timeout: "12h"
-    eco_cnf_core_net_frr_image: "{{ frr_image_link | default(undefined) }}"
     eco_cnf_core_net_mlb_addr_list: "{{ tests_mlb_addr_list | default(undefined) }}"
     eco_cnf_core_net_switch_ip: "{{ hostvars['switch'].ansible_host | default(undefined) }}"
     eco_cnf_core_net_switch_user: "{{ hostvars['switch'].ansible_user | default(undefined) }}"
@@ -107,12 +105,23 @@
       containers.podman.podman_image:
         name: "{{ eco_gotests_image }}"
         state: absent
-        tag: "v{{ version }}.0"
+        tag: "{{ item }}"
+      loop:
+        - "v{{ version }}.0"
+        - "latest"
 
-    - name: Pull a specific version of eco-gotests image
-      containers.podman.podman_image:
-        name: "{{ eco_gotests_image }}"
-        tag: "v{{ version }}.0"
+    - name: Try pulling specific image, fallback to latest if it fails
+      block:
+        - name: Pull a specific version of eco-gotests image
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: v{{ version }}.0
+
+      rescue:
+        - name: Pull latest version of eco-gotests image as fallback
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: latest
 
     - name: Prepare execute shell script
       ansible.builtin.template:

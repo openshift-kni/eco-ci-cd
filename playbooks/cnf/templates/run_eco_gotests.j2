@@ -15,8 +15,6 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   {% if eco_cnf_core_net_mlb_addr_list is defined and eco_cnf_core_net_mlb_addr_list | length > 0 %}-e ECO_CNF_CORE_NET_MLB_ADDR_LIST={{ eco_cnf_core_net_mlb_addr_list }} \
   {% endif %}
-  {% if eco_cnf_core_net_frr_image is defined and eco_cnf_core_net_frr_image | length > 0 %}-e ECO_CNF_CORE_NET_FRR_IMAGE={{ eco_cnf_core_net_frr_image }} \
-  {% endif %}
   {% if eco_cnf_core_net_switch_ip is defined and eco_cnf_core_net_switch_ip | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_IP={{ eco_cnf_core_net_switch_ip }} \
   {% endif %}
   {% if eco_cnf_core_net_switch_user is defined and eco_cnf_core_net_switch_user | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_USER={{ eco_cnf_core_net_switch_user }} \

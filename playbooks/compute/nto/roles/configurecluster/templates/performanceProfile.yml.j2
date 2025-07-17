@@ -2,10 +2,9 @@ apiVersion: performance.openshift.io/v2
 kind: PerformanceProfile
 metadata:
     name: performance
-    annotations:
-        performance.openshift.io/ignore-cgroups-version: "{{ ignore_cgroups_version }}"
 {% if annotations is defined %}
-{{ annotations }}
+    annotations:
+        {{ annotations }}
 {% endif %}
 spec:
     cpu:

@@ -5,44 +5,31 @@
       - kubernetes >= 24.2.0
       - PyYAML >= 3.11
 
-- name: Retrieve worker nodes
+- name: Get Cluster version
   kubernetes.core.k8s_info:
-    kind: Node
-    label_selectors:
-      - node-role.kubernetes.io/worker
-  register: worker_nodes_info
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
 
-- name: Apply CNF label to all worker nodes
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: v1
-      kind: Node
-      metadata:
-        name: "{{ item }}"
-        labels:
-          node-role.kubernetes.io/worker-cnf: ''
-  loop: "{{ worker_nodes_info.resources | map(attribute='metadata.name') }}"
-
-- name: Render Machine config pool
+- name: Set ocp_version
   ansible.builtin.set_fact:
-    machine_config_pool: "{{ lookup('template', 'machineConfigPool.yml.j2') }}"
+    ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
 
-- name: Save Machine config pool
-  ansible.builtin.copy:
-    dest: "{{ artifacts_folder }}/machineConfigPool.yml"
-    content: "{{ machine_config_pool }}"
-    mode: '775'
-  delegate_to: localhost
+- name: Print ocp_version
+  ansible.builtin.debug:
+    msg: "OCP version: {{ ocp_version }}"
 
-- name: Apply MCP configuration
-  kubernetes.core.k8s:
-    state: present
-    definition: "{{ machine_config_pool }}"
-  notify:
-    - Wait for MCP
+- name: Create machine config pool
+  ansible.builtin.include_tasks: machineConfigPool.yml
+
+- name: Apply Cgroup configuration
+  ansible.builtin.include_tasks: cgroup.yml
+  when: cgroup_version is defined
 
 - name: Apply container runtime config
   ansible.builtin.include_tasks: containerRuntime.yml
+  when: container_runtime is defined
 
 - name: Create performance Profile
   ansible.builtin.include_tasks: ppc.yml

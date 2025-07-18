@@ -44,7 +44,7 @@ RUN python3.11 -m pip \
                 requests
 
 # Install requirements
-RUN ansible-galaxy collection install -r requirements.yml
+RUN ansible-galaxy collection install --force -r requirements.yml
 
 # Set entrypoint to bash
 ENTRYPOINT ["/bin/bash"]

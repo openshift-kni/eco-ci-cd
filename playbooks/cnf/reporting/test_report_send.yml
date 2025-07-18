@@ -57,7 +57,7 @@
 
     - name: Load role redhatci.ocp.test_report_send only for its defaults (not tasks)
       ansible.builtin.import_role:
-        name: redhatci.ocp.test_report_send
+        name: redhatci.ocp.report_send
         defaults_from: main.yml
         tasks_from: empty.yml
         public: true
@@ -86,9 +86,15 @@
     - name: Convert JUnit reports convert to json without merging
       ansible.builtin.include_role:
         name: redhatci.ocp.junit2json
+    - name: Detect metadata
+      ansible.builtin.include_role:
+        name: redhatci.ocp.report_metadata_gen
+    - name: Combine tests and metadata
+      ansible.builtin.include_role:
+        name: redhatci.ocp.report_combine
     - name: Upload reports to Splunk
       ansible.builtin.include_role:
-        name: redhatci.ocp.test_report_send
+        name: redhatci.ocp.report_send
       vars:
         trs_report_path: "{{ global_json_reports_list[0] }}"
         trs_collector_target: "{{ splunk_channel }}"

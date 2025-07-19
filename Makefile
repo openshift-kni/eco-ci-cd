@@ -1,6 +1,8 @@
 .ONESHELL:
 
 SCRIPT_DEBUG		?= 0
+RESET_VENV			?= 0
+VENV_DIR			?= .venv
 GIT_REMOTE_NAME		?= origin
 GIT_URL				?= $(shell ./scripts/git_remote_normalize.sh $(GIT_REMOTE_NAME))
 GIT_COMMIT			?= $(shell git rev-parse HEAD)
@@ -12,22 +14,34 @@ PODMAN_PARAMS 		?=
 PODMAN_BUILD_PARAMS ?= --platform=linux/amd64
 PODMAN_TAG_PARAMS 	?=
 PODMAN_PUSH_PARAMS 	?=
+PODMAN_BUILD_ARGS_FILE		?= current-build-args.txt
 
 ifeq ($(SCRIPT_DEBUG),1)
 	PODMAN_PARAMS += --log-level debug
 endif
 
-image-build:
+ifeq ($(RESET_VENV),1)
+	rm -rf $(VENV_DIR)
+endif
+
+
+
+image-build-args-file
 	@GIT_TAG=$${GIT_TAG:-latest}
+	@echo "Generating build arguments file: $(PODMAN_BUILD_ARGS_FILE)"
+	{ \
+		echo "GIT_URL=$(GIT_URL)"; \
+		echo "GIT_BRANCH=$(GIT_BRANCH)"; \
+		echo "GIT_COMMIT=$(GIT_COMMIT)"; \
+		echo "GIT_TAG=$${GIT_TAG}"; \
+	} > $(PODMAN_BUILD_ARGS_FILE)
+
+image-build:	image-build-args-file
 	@podman \
 		$(PODMAN_PARAMS) \
 		build \
 			$(PODMAN_BUILD_PARAMS) \
-			--label "org.opencontainers.image.version=$${GIT_TAG}" \
-			--label "org.opencontainers.image.source=$(GIT_URL)" \
-			--label "org.opencontainers.image.source.commit=$(GIT_COMMIT)" \
-			--label "org.opencontainers.image.source.branch=$(GIT_BRANCH)" \
-			--label "org.opencontainers.image.source.tag=$${GIT_TAG}" \
+			--build-arg-file $(PODMAN_BUILD_ARGS_FILE) \
 			--tag $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT) \
 			-f Containerfile \
 			.
@@ -50,7 +64,6 @@ image-push:
 			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT)
 	@echo " done"
 	@echo -n "Pushing: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_TAG) ..."
-	@podman push \
 	@podman \
 		$(PODMAN_PARAMS) \
 		push \
@@ -66,19 +79,31 @@ cnf-reporting-%:
 	@echo "--- Forwarding target '$(*)' to playbooks/cnf/reporting ---"
 	@(cd playbooks/cnf/reporting && $(MAKE) $(*) )
 
-# reporting-:
-# reporting-reset-collections-reqs:
-# reporting-clean-caches:	$(CLEANUP_LIST)
-# reporting-bootstrap:
-# reporting-gendata:
-# reporting-render:
-# reporting-run-playbook:
-# reporting-pylint: $(GENERATOR)
-# reporting-ansible-lint: $(PLAYBOOK)
-# reporting-shellcheck: $(WRAPPER)
-# reporting-lint:	pylint	ansible-lint shellcheck
-# reporting-pytest:
-# reporting-test-verify:
-# reporting-test:
-# reporting-retest:
+### Make targets for cnf-reporting
+# cnf-reporting-reset-collections-reqs
+# cnf-reporting-clean-caches
+# cnf-reporting-bootstrap
+# cnf-reporting-gendata
+# cnf-reporting-render
+# cnf-reporting-run-playbook
+# cnf-reporting-pylint
+# cnf-reporting-ansible-lint
+# cnf-reporting-shellcheck
+# cnf-reporting-lint
+# cnf-reporting-pytest
+# cnf-reporting-test-verify
+# cnf-reporting-test
+# cnf-reporting-retest
 	
+
+venv-ensure:
+	@echo "Ensuring venv $(VENV_DIR) is installed"
+	mkdir -p $(VENV_DIR)
+	python3.11 -m venv $(VENV_DIR)
+	source $(VENV_DIR)/bin/activate
+	pip install -r requirements-base.local.txt
+
+pydeps-update:	venv-ensure
+	@echo "Updating pydeps"
+	REQS=requirements.container
+	pip-compile --upgrade -o $${REQS}.txt $${REQS}.in

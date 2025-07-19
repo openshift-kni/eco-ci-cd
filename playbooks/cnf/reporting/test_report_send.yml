@@ -8,7 +8,7 @@
   pre_tasks:
     - name: Print CI detection variables' values
       when:
-        - trs_debug is defined and trs_debug
+        - rs_debug is defined and rs_debug
       block:
         - name: Print detection variable {{ item }}
           ansible.builtin.debug:
@@ -19,40 +19,40 @@
             - GITLAB_CI
             - JENKINS_URL
             - PROW_JOB_ID
-    - name: Initialize trs_collector_url
+    - name: Initialize rs_collector_url
       ansible.builtin.set_fact:
-        trs_collector_url: "{{ trs_collector_url | default('') }}"
-    - name: Update trs_collector_url from splunk_url
+        rs_collector_url: "{{ rs_collector_url | default('') }}"
+    - name: Update rs_collector_url from splunk_url
       ansible.builtin.set_fact:
-        trs_collector_url: "{{ splunk_url }}"
+        rs_collector_url: "{{ splunk_url }}"
       when:
-        - trs_collector_url | length == 0
+        - rs_collector_url | length == 0
         - splunk_url | default("") | length > 0
-    - name: Initialize trs_collector_auth_headers
+    - name: Initialize rs_collector_auth_headers
       ansible.builtin.set_fact:
-        trs_collector_auth_headers: "{{ trs_collector_auth_headers | default({}) }}"
-    - name: Update trs_collector_auth_headers from splunk_channel
+        rs_collector_auth_headers: "{{ rs_collector_auth_headers | default({}) }}"
+    - name: Update rs_collector_auth_headers from splunk_channel
       ansible.builtin.set_fact:
-        trs_collector_auth_headers: "{{ trs_collector_auth_headers | combine({'X-Splunk-Request-Channel': splunk_channel}) }}"
+        rs_collector_auth_headers: "{{ rs_collector_auth_headers | combine({'X-Splunk-Request-Channel': splunk_channel}) }}"
       when:
         - splunk_channel | default("") | length > 0
-    - name: Initialize trs_collector_auth_token
+    - name: Initialize rs_collector_auth_token
       ansible.builtin.set_fact:
-        trs_collector_auth_token: "{{ trs_collector_auth_token | default('') }}"
-    - name: Update trs_collector_auth_token
+        rs_collector_auth_token: "{{ rs_collector_auth_token | default('') }}"
+    - name: Update rs_collector_auth_token
       ansible.builtin.set_fact:
-        trs_collector_auth_token: "{{ splunk_token }}"
+        rs_collector_auth_token: "{{ splunk_token }}"
       when:
-        - trs_collector_auth_token | length == 0
+        - rs_collector_auth_token | length == 0
         - splunk_token | default("") | length > 0
-    - name: Initialize trs_collector_source
+    - name: Initialize rs_collector_source
       ansible.builtin.set_fact:
-        trs_collector_source: "{{ trs_collector_source | default('') }}"
-    - name: Update trs_collector_source from splunk_source
+        rs_collector_source: "{{ rs_collector_source | default('') }}"
+    - name: Update rs_collector_source from splunk_source
       ansible.builtin.set_fact:
-        trs_collector_source: "{{ splunk_source }}"
+        rs_collector_source: "{{ splunk_source }}"
       when:
-        - trs_collector_source | length == 0
+        - rs_collector_source | length == 0
         - splunk_source | default("") | length > 0
 
     - name: Load role redhatci.ocp.test_report_send only for its defaults (not tasks)
@@ -61,17 +61,17 @@
         defaults_from: main.yml
         tasks_from: empty.yml
         public: true
-    - name: Validate legal trs_ci_system value
+    - name: Validate legal rs_ci_system value
       ansible.builtin.assert:
         that:
-          - trs_ci_system in trs_ci_systems_supported
+          - rs_ci_system in rs_ci_systems_supported
         fail_msg: |
-          CI system '{{ trs_ci_system }}' is not supported. Supported trs_ci_system values:
-          {%- for item in trs_ci_systems_supported -%}
+          CI system '{{ rs_ci_system }}' is not supported. Supported rs_ci_system values:
+          {%- for item in rs_ci_systems_supported -%}
           "  - '{{ item }}'"
           {%- endfor -%}
       when:
-        - trs_ci_system | default("") | length > 0
+        - rs_ci_system | default("") | length > 0
     - name: Validate junit2json variables are defined
       ansible.builtin.assert:
         that: "{{ condition }}"
@@ -89,6 +89,14 @@
     - name: Detect metadata
       ansible.builtin.include_role:
         name: redhatci.ocp.report_metadata_gen
+      vars:
+        rmg_ci_system: "{{ rs_ci_system }}"
+        rmg_ci_type: "{{ rs_ci_type }}"
+        rmg_ci_url: "{{ rs_ci_url }}"
+        rmg_ci_job_id: "{{ rs_ci_job_id }}"
+        rmg_ci_build_id: "{{ rs_ci_build_id }}"
+        rmg_ci_build_url: "{{ rs_ci_build_url }}"
+        rmg_ci_build_number: "{{ rs_ci_build_number }}"
     - name: Combine tests and metadata
       ansible.builtin.include_role:
         name: redhatci.ocp.report_combine
@@ -96,7 +104,7 @@
       ansible.builtin.include_role:
         name: redhatci.ocp.report_send
       vars:
-        trs_report_path: "{{ global_json_reports_list[0] }}"
-        trs_collector_target: "{{ splunk_channel }}"
+        rs_report_path: "{{ global_json_reports_list[0] }}"
+        rs_collector_target: "{{ splunk_channel }}"
       when:
         - global_json_reports_list | default([]) | length > 0

@@ -26,7 +26,6 @@ check-requirements:
 	@fi
 	@$(WRAPPER) "$@" "$${APPS[@]}"
 
-
 reset-collections-reqs:
 	$(MAKE) check-requirements
 	@if echo "$(COLLECTION_REQ_FILES_TXT)" | grep -q ","; then
@@ -62,10 +61,12 @@ ansible-lint: $(PLAYBOOK)
 shellcheck: $(WRAPPER)
 	@shellcheck -o all $(WRAPPER)
 
-lint:	pylint	ansible-lint shellcheck
+infra-lint:	pylint	ansible-lint shellcheck
 
 pytest:
 	@pytest -v ./tools
+
+infra-test:	pytest
 
 test-verify:
 	@echo "DEBUG: running $@ with: RAW_ACTUAL_EVENT=$(RAW_ACTUAL_EVENT), ACTUAL_EVENT=$(ACTUAL_EVENT), EXPECTED_EVENT=$(EXPECTED_EVENT)"

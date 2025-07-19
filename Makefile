@@ -57,3 +57,28 @@ image-push:
 			$(PODMAN_PUSH_PARAMS) \
 			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_TAG)
 	@echo " done"
+
+
+
+cnf-reporting-%:
+	# The recipe for the rule.
+	# It runs the sub-make in a subshell to avoid changing the current directory.
+	@echo "--- Forwarding target '$(*)' to playbooks/cnf/reporting ---"
+	@(cd playbooks/cnf/reporting && $(MAKE) $(*) )
+
+# reporting-:
+# reporting-reset-collections-reqs:
+# reporting-clean-caches:	$(CLEANUP_LIST)
+# reporting-bootstrap:
+# reporting-gendata:
+# reporting-render:
+# reporting-run-playbook:
+# reporting-pylint: $(GENERATOR)
+# reporting-ansible-lint: $(PLAYBOOK)
+# reporting-shellcheck: $(WRAPPER)
+# reporting-lint:	pylint	ansible-lint shellcheck
+# reporting-pytest:
+# reporting-test-verify:
+# reporting-test:
+# reporting-retest:
+	

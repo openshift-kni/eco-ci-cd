@@ -1,12 +1,14 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest
 
+ARG GIT_URL
+
 LABEL org.opencontainers.image.authors="Telcov10n CI/CD Team"
 LABEL org.opencontainers.image.description="ECO CI/CD"
-LABEL org.opencontainers.image.documentation="https://github.com/telcov10n/eco-ci-cd/tree/main"
+LABEL org.opencontainers.image.documentation="${GIT_URL}/tree/main"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.source="https://github.com/telcov10n/eco-ci-cd"
+LABEL org.opencontainers.image.source="${GIT_URL}.git"
 LABEL org.opencontainers.image.title="ECO CI/CD"
-LABEL org.opencontainers.image.url="https://github.com/telcov10n/eco-ci-cd/tree/main"
+LABEL org.opencontainers.image.url="${GIT_URL}/tree/main"
 LABEL org.opencontainers.image.vendor="Telcov10n CI/CD Team"
 
 WORKDIR /eco-ci-cd

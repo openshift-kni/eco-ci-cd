@@ -6,7 +6,7 @@ splunk_url: https://httpbingo.org/status/403
 splunk_token: 0f5f7d4c-8d68-41ac-8374-79592a78d5a3 # not real
 splunk_channel: 25027c3b-6ec5-4b22-bc71-0a5bcd94da1e # not real
 splunk_index: myindex-devel
-trs_ci_system: dci
+rs_ci_system: dci
 junit2_input_reports_list:
   - "{{ playbook_dir }}/fixtures/dci/apirequestcounts_ocp_compatibility_ztp-install_junit.xml"
   - "{{ playbook_dir }}/fixtures/dci/du_op_deploy_cloudran_site_new_version.xml"

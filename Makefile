@@ -29,16 +29,16 @@ endif
 
 
 image-build-args-file:
-	@GIT_TAG=$${GIT_TAG:-latest}
 	@echo "Generating build arguments file: $(BUILD_ARGS_FILE)"
 	{ \
 		echo "GIT_URL=$(GIT_URL)"; \
 		echo "GIT_BRANCH=$(GIT_BRANCH)"; \
 		echo "GIT_COMMIT=$(GIT_COMMIT)"; \
-		echo "GIT_TAG=$${GIT_TAG}"; \
+		echo "GIT_TAG=$(GIT_TAG)"; \
 	} > $(BUILD_ARGS_FILE)
 
 image-build:	image-build-args-file
+	@echo "Building image: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT) with build args file: $(BUILD_ARGS_FILE)"
 	@podman \
 		$(PODMAN_PARAMS) \
 		build \
@@ -48,6 +48,7 @@ image-build:	image-build-args-file
 			-f Containerfile \
 			.
 	@echo "Image built: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT)"
+	@GIT_TAG=$${GIT_TAG:-latest}
 	@echo -n "Tagging: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT) as $(IMAGE_REGISTRY)/$(IMAGE_NAME):$${GIT_TAG} ..."
 	@podman \
 		$(PODMAN_PARAMS) \
@@ -57,7 +58,7 @@ image-build:	image-build-args-file
 			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$${GIT_TAG}
 	@echo "done"
 
-image-push:
+image-push:	image-build-args-file
 	@echo -n "Pushing: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT) ..."
 	@podman \
 		$(PODMAN_PARAMS) \
@@ -65,12 +66,13 @@ image-push:
 			$(PODMAN_PUSH_PARAMS) \
 			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT)
 	@echo " done"
-	@echo -n "Pushing: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_TAG) ..."
+	@GIT_TAG=$${GIT_TAG:-latest}
+	@echo -n "Pushing: $(IMAGE_REGISTRY)/$(IMAGE_NAME):$${GIT_TAG} ..."
 	@podman \
 		$(PODMAN_PARAMS) \
 		push \
 			$(PODMAN_PUSH_PARAMS) \
-			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_TAG)
+			$(IMAGE_REGISTRY)/$(IMAGE_NAME):$${GIT_TAG}
 	@echo " done"
 
 

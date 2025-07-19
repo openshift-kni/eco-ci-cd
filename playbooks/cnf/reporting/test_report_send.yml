@@ -97,6 +97,7 @@
         rmg_ci_build_id: "{{ rs_ci_build_id }}"
         rmg_ci_build_url: "{{ rs_ci_build_url }}"
         rmg_ci_build_number: "{{ rs_ci_build_number }}"
+        rmg_
     - name: Combine tests and metadata
       ansible.builtin.include_role:
         name: redhatci.ocp.report_combine

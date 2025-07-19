@@ -4,18 +4,21 @@ ARG GIT_URL
 ARG GIT_BRANCH
 ARG GIT_COMMIT
 ARG GIT_TAG
+ARG IMAGE_VENDOR="Red Hat Inc."
+ARG IMAGE_MAINTAINER="Telcov10n CI/CD Team"
+ARG IMAGE_DESCRIPTION="ECO CI/CD"
 
-LABEL org.opencontainers.image.authors="Telcov10n CI/CD Team"
-LABEL org.opencontainers.image.description="ECO CI/CD"
+LABEL org.opencontainers.image.authors="${IMAGE_MAINTAINER}"
+LABEL org.opencontainers.image.description="${IMAGE_DESCRIPTION}"
 LABEL org.opencontainers.image.documentation="${GIT_URL}/tree/main"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.source.branch="${GIT_BRANCH}"
 LABEL org.opencontainers.image.source.commit="${GIT_COMMIT}"
 LABEL org.opencontainers.image.source.tag="${GIT_TAG}"
 LABEL org.opencontainers.image.source="${GIT_URL}.git"
-LABEL org.opencontainers.image.title="ECO CI/CD"
+LABEL org.opencontainers.image.title="${IMAGE_TITLE}"
 LABEL org.opencontainers.image.url="${GIT_URL}/tree/main"
-LABEL org.opencontainers.image.vendor="Telcov10n CI/CD Team"
+LABEL org.opencontainers.image.vendor="${IMAGE_VENDOR}"
 LABEL org.opencontainers.image.version="${GIT_TAG}"
 
 WORKDIR /eco-ci-cd
@@ -47,7 +50,7 @@ RUN python3.11 -m pip \
 RUN python3.11 -m pip \
         install \
             --no-cache-dir \
-            -r requirements-container.txt \
+            -r requirements-container.txt
 
 # Install requirements
 RUN ansible-galaxy collection install --force -r requirements.yml

@@ -14,7 +14,9 @@ PODMAN_PARAMS 		?=
 PODMAN_BUILD_PARAMS ?= --platform=linux/amd64
 PODMAN_TAG_PARAMS 	?=
 PODMAN_PUSH_PARAMS 	?=
-PODMAN_BUILD_ARGS_FILE		?= current-build-args.txt
+BUILD_ARGS_FILE		?= current-build-args.txt
+PY_REQS_BASE_FILE	?= requirements-base.local.txt
+PY_REQS_PREFIX		?= requirements-container
 
 ifeq ($(SCRIPT_DEBUG),1)
 	PODMAN_PARAMS += --log-level debug
@@ -26,22 +28,22 @@ endif
 
 
 
-image-build-args-file
+image-build-args-file:
 	@GIT_TAG=$${GIT_TAG:-latest}
-	@echo "Generating build arguments file: $(PODMAN_BUILD_ARGS_FILE)"
+	@echo "Generating build arguments file: $(BUILD_ARGS_FILE)"
 	{ \
 		echo "GIT_URL=$(GIT_URL)"; \
 		echo "GIT_BRANCH=$(GIT_BRANCH)"; \
 		echo "GIT_COMMIT=$(GIT_COMMIT)"; \
 		echo "GIT_TAG=$${GIT_TAG}"; \
-	} > $(PODMAN_BUILD_ARGS_FILE)
+	} > $(BUILD_ARGS_FILE)
 
 image-build:	image-build-args-file
 	@podman \
 		$(PODMAN_PARAMS) \
 		build \
 			$(PODMAN_BUILD_PARAMS) \
-			--build-arg-file $(PODMAN_BUILD_ARGS_FILE) \
+			--build-arg-file $(BUILD_ARGS_FILE) \
 			--tag $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(GIT_COMMIT) \
 			-f Containerfile \
 			.
@@ -101,9 +103,18 @@ venv-ensure:
 	mkdir -p $(VENV_DIR)
 	python3.11 -m venv $(VENV_DIR)
 	source $(VENV_DIR)/bin/activate
-	pip install -r requirements-base.local.txt
+	pip install -r $(PY_REQS_BASE_FILE)
 
 pydeps-update:	venv-ensure
+	source $(VENV_DIR)/bin/activate
 	@echo "Updating pydeps"
-	REQS=requirements.container
-	pip-compile --upgrade -o $${REQS}.txt $${REQS}.in
+	CMD=(pip-compile)
+	if [ -f $(PY_REQS_PREFIX).txt ]; then \
+		CMD+=(--upgrade)
+	else \
+		CMD+=(--annotate)
+	fi
+	CMD+=($(PY_REQS_PREFIX).in)
+	CMD+=(-o $(PY_REQS_PREFIX).txt)
+	echo "Running: $${CMD[*]}"
+	$${CMD[@]}

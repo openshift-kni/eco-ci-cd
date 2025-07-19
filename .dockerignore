@@ -1,8 +1,11 @@
 .ansible
 .vscode
+.venv
+.cursor
 .gitignore
 *.md
 .idea
 *__pycache__*
 tests
+ee-rhel9-amd64
 .github

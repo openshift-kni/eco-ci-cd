@@ -1,0 +1,529 @@
+# Prow Job Creation Complete Guide
+
+This comprehensive guide walks through creating new Prow jobs for telco verification workflows, from initial analysis to deployment, covering Jenkins migration patterns and eco-ci-cd integration.
+
+## Phase 1: Analysis and Planning
+
+### 1.1 Jenkins Job Analysis (If Migrating)
+
+**Identify Source Jenkins Files:**
+```bash
+# Find existing Jenkins job definitions
+find telco-auto-ci-cd/jobs/ -name "*.groovy" -o -name "*.Jenkinsfile"
+
+# Key files to examine:
+# - jobs/{Domain}/*.groovy (job definitions)
+# - jobs/{Domain}/*.Jenkinsfile (pipeline scripts)
+# - vars/*.groovy (shared library functions)
+```
+
+**Extract Key Information:**
+```groovy
+// From Jenkins job definitions, identify:
+
+// 1. Parameters and Environment Variables
+parameters {
+    choice(name: 'CONTAINER_RUNTIME', choices: ['runc', 'crun'])
+    booleanParam(name: 'RT_KERNEL', defaultValue: false)
+    string(name: 'CLUSTER_NAME', defaultValue: 'hlxcl15')
+}
+
+// 2. Build Steps and Scripts
+steps {
+    build job: 'Deploy-OCP-Hybrid-MultiNode'
+    build job: 'Run-CNF-Tests'
+}
+
+// 3. Post-build Actions
+publishHTML([...])
+archiveArtifacts artifacts: '**/*.xml'
+```
+
+**Map Jenkins Functions to Prow Concepts:**
+```groovy
+// Jenkins shared library usage:
+getBaremetalDeployer()     → eco-ci-cd Ansible playbooks
+getClusterWorkersNumber()  → Environment variables in Prow config
+authWithQuay()            → Pull secrets in Prow steps
+```
+
+### 1.2 Eco-CI-CD Playbook Analysis
+
+**Identify Relevant Playbooks:**
+```bash
+# Search for domain-specific playbooks
+find eco-ci-cd/playbooks/ -name "*.yml" | grep -E "(compute|cnf|ran|slcm)"
+
+# Key playbooks by domain:
+# - playbooks/compute/deploy-nto-gotest.yml
+# - playbooks/cnf/deploy-cnf-config.yaml
+# - playbooks/deploy-ocp-hybrid-multinode.yml (infrastructure)
+```
+
+**Analyze Playbook Requirements:**
+```yaml
+# From playbook analysis, identify:
+# 1. Required inventory structure
+# 2. Environment variables expected
+# 3. Artifacts generated
+# 4. Dependencies on other playbooks
+
+# Example: deploy-nto-gotest.yml
+- name: Generate test script
+  template:
+    src: run_gotests.sh.j2
+    dest: /tmp/gotest/run_gotests.sh
+  vars:
+    kubeconfig: "{{ kubeconfig }}"
+    artifact_dir: /tmp/artifacts
+```
+
+### 1.3 Domain Pattern Analysis
+
+**Identify Domain Characteristics:**
+```yaml
+# Compute Domain Pattern:
+execution_model: ssh_only        # Tests run on bastion
+worker_count: 2                  # Uses worker0, worker1
+bmc_access: required            # BMC addresses needed
+test_framework: ginkgo          # Go-based testing
+artifacts: junit_xml            # JUnit reports generated
+
+# CNF Network Domain Pattern:
+execution_model: mixed          # Some local, some remote
+worker_count: 3                 # Uses worker0, worker1, worker2
+network_config: sriov          # SR-IOV network setup
+test_framework: cnf_suite      # CNF test suite
+artifacts: multiple_formats    # Various report formats
+```
+
+## Phase 2: Prow Step Structure Creation
+
+### 2.1 Step Registry File Structure
+
+**Create Directory Structure:**
+```bash
+mkdir -p release/ci-operator/step-registry/telcov10n/functional/{domain}/{step-type}/{step-name}/
+
+# Required files:
+# - {step-name}-commands.sh (executable script)
+# - {step-name}-ref.yaml (step definition)  
+# - {step-name}-ref.metadata.json (metadata)
+# - OWNERS (symlink to parent)
+```
+
+**Step Types by Function:**
+- `setup-cluster-env`: Environment preparation
+- `ocp-deploy`: Cluster deployment  
+- `config`: Configuration and setup
+- `eco-gotests`: Test execution
+- `reporter`: Test result processing
+- `send-slack-notification`: Notifications
+- `clone-z-stream-issue`: Issue management
+
+### 2.2 Commands Script Template
+
+**Basic Script Structure:**
+```bash
+#!/bin/bash
+set -o nounset
+set -o errexit
+set -o pipefail
+
+# Standard Prow environment variables available:
+# - SHARED_DIR: Data shared between steps
+# - ARTIFACT_DIR: Artifacts for collection
+# - CLUSTER_NAME: Cluster identifier
+# - VERSION: OCP version
+
+echo "Step: {step-name} starting"
+
+# 1. Environment Setup
+export ECO_CI_CD_INVENTORY_PATH="/eco-ci-cd/inventories/ocp-deployment"
+PROJECT_DIR="${PROJECT_DIR:-/tmp}"
+
+# 2. Create necessary directories
+mkdir -p "${ECO_CI_CD_INVENTORY_PATH}/group_vars"
+mkdir -p "${ECO_CI_CD_INVENTORY_PATH}/host_vars"
+
+# 3. Copy shared inventory data
+cp -r "${SHARED_DIR}"/group_vars/* "${ECO_CI_CD_INVENTORY_PATH}/group_vars/" 2>/dev/null || true
+cp -r "${SHARED_DIR}"/host_vars/* "${ECO_CI_CD_INVENTORY_PATH}/host_vars/" 2>/dev/null || true
+
+# 4. Domain-specific logic here
+# ... implementation ...
+
+# 5. Save results to SHARED_DIR for next steps
+echo "Step: {step-name} completed successfully"
+```
+
+### 2.3 Environment Variable Patterns
+
+**Standard Variables:**
+```bash
+# Always include these standard variables
+CLUSTER_NAME="${CLUSTER_NAME}"                    # Target cluster
+VERSION="${VERSION}"                              # OCP version
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-runc}"    # Container runtime
+FEATURES="${FEATURES}"                            # Domain features
+LABELS="${LABELS}"                                # Test labels
+```
+
+**Domain-Specific Variables:**
+```bash
+# Compute Domain
+ECO_GOTEST_BMC_ACCESS="${ECO_GOTEST_BMC_ACCESS:-true}"
+HUGEPAGES_DEFAULT_SIZE="${HUGEPAGES_DEFAULT_SIZE:-1G}"
+RT_KERNEL="${RT_KERNEL:-false}"
+IGNORE_CGROUPS_VERSION="${IGNORE_CGROUPS_VERSION:-true}"
+
+# CNF Network Domain  
+ECO_CNF_NETWORK_CONFIG="${ECO_CNF_NETWORK_CONFIG}"
+SRIOV_ENABLED="${SRIOV_ENABLED:-true}"
+NETWORK_TYPE="${NETWORK_TYPE:-OVNKubernetes}"
+```
+
+**Container Image Variables:**
+```bash
+# Version-aligned container images
+ECO_GOTESTS_ENV_VARS="-e ECO_CNF_CORE_COMPUTE_TEST_CONTAINER=quay.io/ocp-edge-qe/eco-gotests-compute-client:v${VERSION}"
+ECO_GOTESTS_ENV_VARS+=" -e ECO_CNF_CORE_COMPUTE_NTO_TEST_CONTAINER=quay.io/ocp-edge-qe/eco-gotests-nto:v${VERSION}"
+```
+
+## Phase 3: CI Operator Configuration
+
+### 3.1 Config File Creation
+
+**Single Version Configuration:**
+```yaml
+# release/ci-operator/config/openshift-kni/eco-ci-cd/openshift-kni-eco-ci-cd-main__{domain}-{version}.yaml
+build_root:
+  image_stream_tag:
+    name: eco-ci-cd
+    namespace: telcov10n-ci
+    tag: eco-ci-cd
+
+resources:
+  '*':
+    limits:
+      memory: 4Gi
+    requests:
+      cpu: 100m
+      memory: 200Mi
+
+tests:
+- as: {domain}-functional-tests
+  capabilities:
+  - intranet
+  cron: 0 3 * * *
+  steps:
+    env:
+      CLUSTER_NAME: {cluster-name}
+      VERSION: "{version}"
+      # ... domain-specific environment variables
+    test:
+    - ref: telcov10n-functional-{domain}-eco-gotests
+    workflow: telcov10n-functional-{domain}-ocp-setup
+```
+
+**Multi-Version Configuration:**
+```yaml
+# release/ci-operator/config/openshift-kni/eco-ci-cd/openshift-kni-eco-ci-cd-main__{domain}.yaml
+tests:
+- as: functional-tests-4.18
+  env:
+    CLUSTER_NAME: {cluster-4.18}
+    VERSION: "4.18"
+- as: functional-tests-4.19  
+  env:
+    CLUSTER_NAME: {cluster-4.19}
+    VERSION: "4.19"
+- as: functional-tests-4.20
+  env:
+    CLUSTER_NAME: {cluster-4.20}
+    VERSION: "4.20"
+```
+
+### 3.2 Step Reference YAML
+
+**Step Definition Template:**
+```yaml
+# {step-name}-ref.yaml
+ref:
+  as: telcov10n-functional-{domain}-{step-type}-{step-name}
+  commands: telcov10n-functional-{domain}-{step-type}-{step-name}-commands.sh
+  from: eco-ci-cd
+  resources:
+    requests:
+      cpu: 100m
+      memory: 200Mi
+  timeout: 30m
+  env:
+  - name: ENV_VAR_NAME
+    default: "default_value"
+    documentation: |-
+      Description of environment variable purpose and usage.
+  documentation: |-
+    Step description: what this step accomplishes in the workflow.
+```
+
+### 3.3 Workflow Definition
+
+**Workflow Structure:**
+```yaml
+# {domain}-ocp-setup-workflow.yaml
+workflow:
+  as: telcov10n-functional-{domain}-ocp-setup
+  steps:
+    pre:
+    - ref: telcov10n-functional-{domain}-setup-cluster-env
+    - ref: telcov10n-functional-{domain}-ocp-deploy
+    - ref: telcov10n-functional-{domain}-config
+    post:
+    - ref: telcov10n-functional-{domain}-reporter
+    - ref: telcov10n-verify-junit-reports
+    - ref: telcov10n-functional-{domain}-send-slack-notification
+  documentation: |-
+    {Domain} cluster setup and configuration workflow.
+```
+
+## Phase 4: Implementation Patterns
+
+### 4.1 SSH Execution Pattern (Compute-like domains)
+
+**SSH Connection Setup:**
+```bash
+# Extract bastion connection info
+BASTION_IP=$(grep -oP "(?<=ansible_host: ).*" "${SHARED_DIR}/host_vars/bastion")
+BASTION_USER=$(grep -oP "(?<=ansible_user: ).*" "${SHARED_DIR}/host_vars/bastion")
+
+# Setup SSH key
+cp "${SHARED_DIR}/ssh-privatekey" /tmp/temp_ssh_key
+chmod 600 /tmp/temp_ssh_key
+```
+
+**Remote Execution:**
+```bash
+# Run Ansible playbook to setup test environment
+cd /eco-ci-cd || exit 1
+ansible-playbook ./playbooks/{domain}/{playbook}.yml \
+  -i "${ECO_CI_CD_INVENTORY_PATH}/build-inventory.py" \
+  ${ECO_GOTESTS_ENV_VARS}
+
+# Execute tests via SSH
+ssh -o StrictHostKeyChecking=no "${BASTION_USER}@${BASTION_IP}" -i /tmp/temp_ssh_key \
+  "cd /tmp/gotest && ./run_gotests.sh || true"
+
+# Collect artifacts
+scp -r -o StrictHostKeyChecking=no -i /tmp/temp_ssh_key \
+  "${BASTION_USER}@${BASTION_IP}":/tmp/artifacts/*.xml "${ARTIFACT_DIR}/junit_eco_gotests/"
+```
+
+### 4.2 BMC Address Extraction
+
+**Multi-Worker BMC Pattern:**
+```bash
+# Extract BMC addresses from all worker files
+BMC_ADDRESSES=""
+for worker_file in "${SHARED_DIR}"/worker*; do
+  if [[ -f "${worker_file}" ]]; then
+    worker_name=$(basename "${worker_file}")
+    BMC_ADDRESS=$(grep -oP "(?<=bmc_address: ).*" "${worker_file}" | sed "s/'//g" || echo "")
+    if [[ -n "${BMC_ADDRESS}" ]]; then
+      BMC_ADDRESSES="${BMC_ADDRESSES:+${BMC_ADDRESSES},}${BMC_ADDRESS}"
+      echo "BMC address found in ${worker_name}: ${BMC_ADDRESS}"
+    fi
+  fi
+done
+
+ECO_GOTESTS_ENV_VARS+=" -e ECO_CNF_CORE_NET_BMC_HOST_NAMES=${BMC_ADDRESSES}"
+```
+
+### 4.3 JUnit Report Integration
+
+**Reporter-Compatible Naming:**
+```bash
+# Create junit-named copies for reporter compatibility
+echo "Create junit-named copies in ARTIFACT_DIR for reporter compatibility"
+for xml_file in "${ARTIFACT_DIR}"/junit_eco_gotests/*.xml; do
+  if [[ -f "${xml_file}" ]]; then
+    basename_file=$(basename "${xml_file}")
+    junit_name="junit_${basename_file}"
+    cp -v "${xml_file}" "${ARTIFACT_DIR}/junit_eco_gotests/${junit_name}"
+    echo "Created junit copy: ${basename_file} -> ${junit_name}"
+  fi
+done
+
+# Copy to SHARED_DIR for reporter step
+cp -v "${ARTIFACT_DIR}"/junit_eco_gotests/junit_*.xml "${SHARED_DIR}/" 2>/dev/null || echo "No junit test reports found"
+```
+
+## Phase 5: Testing and Validation
+
+### 5.1 Local Validation
+
+**Script Syntax Validation:**
+```bash
+# Check script syntax
+bash -n {step-name}-commands.sh
+
+# Validate YAML syntax
+yamllint {step-name}-ref.yaml
+
+# Check JSON format
+jq empty {step-name}-ref.metadata.json
+```
+
+**Environment Variable Testing:**
+```bash
+# Test with sample environment
+export CLUSTER_NAME="test-cluster"
+export VERSION="4.18"
+export SHARED_DIR="/tmp/test-shared"
+export ARTIFACT_DIR="/tmp/test-artifacts"
+
+# Create test directories
+mkdir -p "${SHARED_DIR}"/{group_vars,host_vars}
+mkdir -p "${ARTIFACT_DIR}"
+
+# Run script in test mode
+./{step-name}-commands.sh
+```
+
+### 5.2 Integration Testing
+
+**Workflow Testing:**
+```bash
+# Test complete workflow locally
+ci-operator --config=config.yaml --target={test-name}
+
+# Verify artifacts generation
+ls -la "${ARTIFACT_DIR}"/
+ls -la "${SHARED_DIR}"/
+
+# Check log output for errors
+grep -i error ci-operator.log
+```
+
+**Cross-Step Data Flow:**
+```bash
+# Verify data flows between steps
+# 1. Check SHARED_DIR contents after each step
+# 2. Validate environment variable propagation  
+# 3. Confirm artifact collection
+# 4. Test reporter integration
+```
+
+## Phase 6: Documentation and Metadata
+
+### 6.1 Metadata JSON Template
+
+```json
+{
+  "path": "ci-operator/step-registry/telcov10n/functional/{domain}/{step-type}/{step-name}-ref.yaml",
+  "owners": {
+    "approvers": ["ccardenosa"],
+    "reviewers": ["ccardenosa"]
+  }
+}
+```
+
+### 6.2 Documentation Standards
+
+**Step Documentation:**
+```yaml
+documentation: |-
+  Brief description of step purpose.
+  
+  This step performs the following actions:
+  1. Action one with specific details
+  2. Action two with expected outcomes
+  3. Error handling and recovery procedures
+  
+  Environment Variables:
+  - REQUIRED_VAR: Description of required variable
+  - OPTIONAL_VAR: Description with default value
+  
+  Artifacts Generated:
+  - /path/to/artifact: Description of artifact content
+  
+  Integration Notes:
+  - Dependencies on previous steps
+  - Data flow to subsequent steps
+```
+
+## Phase 7: Deployment and Monitoring
+
+### 7.1 Pre-deployment Checklist
+
+- [ ] All files have correct permissions (755 for .sh, 644 for .yaml/.json)
+- [ ] OWNERS symlinks created in all directories
+- [ ] Environment variables documented with defaults
+- [ ] Step names follow telcov10n-functional-{domain}-{type}-{name} pattern
+- [ ] Workflows reference correct step names
+- [ ] CI operator configs have proper resource limits
+- [ ] Multi-version configs use correct cluster assignments
+- [ ] Container image versions align with OCP versions
+
+### 7.2 Deployment Process
+
+**File Creation Order:**
+1. Create step registry files ({step-name}-commands.sh, -ref.yaml, -ref.metadata.json)
+2. Create workflow definition
+3. Create CI operator configuration
+4. Update periodic job configurations
+5. Test with rehearsal jobs
+6. Deploy to production
+
+### 7.3 Monitoring and Maintenance
+
+**Key Metrics to Monitor:**
+- Job success/failure rates
+- Step execution times
+- Artifact collection success
+- Reporter integration success
+- Resource utilization
+
+**Common Maintenance Tasks:**
+- Update container image versions
+- Adjust resource limits based on usage
+- Update environment variable defaults
+- Enhance error handling based on failure patterns
+- Optimize execution times
+
+## Jenkins to Prow Migration Checklist
+
+### Analysis Phase
+- [ ] Identified source Jenkins job files
+- [ ] Extracted parameters and environment variables
+- [ ] Mapped Jenkins shared library functions to Prow equivalents
+- [ ] Analyzed build steps and artifacts
+- [ ] Identified eco-ci-cd playbook dependencies
+
+### Implementation Phase
+- [ ] Created step registry structure
+- [ ] Implemented commands scripts with proper error handling
+- [ ] Created step reference YAML files
+- [ ] Built workflow definitions
+- [ ] Configured CI operator files
+- [ ] Set up periodic job scheduling
+
+### Testing Phase
+- [ ] Validated script syntax and YAML format
+- [ ] Tested environment variable propagation
+- [ ] Verified artifact collection and reporting
+- [ ] Confirmed end-to-end workflow execution
+- [ ] Validated integration with existing infrastructure
+
+### Deployment Phase
+- [ ] Created all required files with correct permissions
+- [ ] Updated documentation and metadata
+- [ ] Performed rehearsal testing
+- [ ] Deployed to production environment
+- [ ] Set up monitoring and alerting
+
+This comprehensive guide provides the foundation for creating robust, maintainable Prow jobs that integrate seamlessly with the telco verification ecosystem.
+description:
+globs:
+alwaysApply: false
+---

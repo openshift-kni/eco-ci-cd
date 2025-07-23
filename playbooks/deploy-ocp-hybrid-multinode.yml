@@ -318,22 +318,154 @@
   hosts: workers
   gather_facts: false
   tasks:
-    - name: Boot ISO
-      ansible.builtin.import_role:
-        name: redhatci.ocp.boot_iso
-      vars:
-        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+    - name: Boot ISO with cleanup handling
+      block:
+        - name: Boot ISO
+          ansible.builtin.import_role:
+            name: redhatci.ocp.boot_iso
+          vars:
+            boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+      rescue:
+        - name: Handle boot failure - eject virtual media
+          block:
+            - name: Construct proper VM name for cleanup
+              ansible.builtin.set_fact:
+                vm_name: "{{ cluster_name }}_{{ inventory_hostname }}"
+              delegate_to: bastion
+
+            - name: Construct BMC base address
+              ansible.builtin.set_fact:
+                base_bmc_address: >-
+                  {{
+                    'https://' + hostvars[inventory_hostname]['bmc_address']
+                    if not hostvars[inventory_hostname]['bmc_address'].startswith(('http://', 'https://'))
+                    else hostvars[inventory_hostname]['bmc_address']
+                  }}
+              delegate_to: bastion
+
+            - name: Identify System Manager
+              ansible.builtin.uri:
+                url: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+                user: "{{ bmc_user }}"
+                password: "{{ bmc_password }}"
+                method: GET
+                status_code: [200, 201]
+                validate_certs: false
+                return_content: true
+              register: http_reply
+              delegate_to: bastion
+
+            - name: Debug
+              ansible.builtin.debug:
+                msg: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+                verbosity: 1
+
+            - name: Debug
+              ansible.builtin.debug:
+                var: http_reply
+                verbosity: 1
+
+            - name: KVM Set System UUID
+              ansible.builtin.set_fact:
+                system_uuid_url: "{{ base_bmc_address }}/{{ http_reply.json['@odata.id'] }}"
+                system_manager_url: "{{ base_bmc_address }}/{{ http_reply.json.Links.ManagedBy[0]['@odata.id'] }}"
+              delegate_to: bastion
+
+            - name: Eject Virtual Media
+              ansible.builtin.include_role:
+                name: "redhatci.ocp.vendors.{{ hostvars[inventory_hostname]['vendor'] | lower }}"
+                tasks_from: eject.yml
+                apply:
+                  delegate_to: bastion
+              vars:
+                target_host: "{{ inventory_hostname }}"
+                boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+          rescue:
+            - name: Log cleanup failure (non-fatal)
+              ansible.builtin.debug:
+                msg: "Virtual media cleanup failed for {{ inventory_hostname }}, but continuing..."
+
+        - name: Re-raise the original error
+          ansible.builtin.fail:
+            msg: "Boot ISO task failed for {{ inventory_hostname }}"
+      # Note: Cleanup is handled by the final cleanup play regardless
 
 - name: Boot Virtual Machines
   hosts: masters
   gather_facts: false
   serial: 1
   tasks:
-    - name: Boot ISO
-      ansible.builtin.import_role:
-        name: redhatci.ocp.boot_iso
-      vars:
-        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+    - name: Boot ISO with cleanup handling
+      block:
+        - name: Boot ISO
+          ansible.builtin.import_role:
+            name: redhatci.ocp.boot_iso
+          vars:
+            boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+      rescue:
+        - name: Handle boot failure - eject virtual media
+          block:
+            - name: Construct proper VM name for cleanup
+              ansible.builtin.set_fact:
+                vm_name: "{{ cluster_name }}_{{ inventory_hostname }}"
+              delegate_to: bastion
+
+            - name: Construct BMC base address
+              ansible.builtin.set_fact:
+                base_bmc_address: >-
+                  {{
+                    'https://' + hostvars[inventory_hostname]['bmc_address']
+                    if not hostvars[inventory_hostname]['bmc_address'].startswith(('http://', 'https://'))
+                    else hostvars[inventory_hostname]['bmc_address']
+                  }}
+              delegate_to: bastion
+
+            - name: Identify System Manager
+              ansible.builtin.uri:
+                url: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+                user: "{{ bmc_user }}"
+                password: "{{ bmc_password }}"
+                method: GET
+                status_code: [200, 201]
+                validate_certs: false
+                return_content: true
+              register: http_reply
+              delegate_to: bastion
+
+            - name: Debug
+              ansible.builtin.debug:
+                msg: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+                verbosity: 1
+
+            - name: Debug
+              ansible.builtin.debug:
+                var: http_reply
+                verbosity: 1
+
+            - name: KVM Set System UUID
+              ansible.builtin.set_fact:
+                system_uuid_url: "{{ base_bmc_address }}/{{ http_reply.json['@odata.id'] }}"
+                system_manager_url: "{{ base_bmc_address }}/{{ http_reply.json.Links.ManagedBy[0]['@odata.id'] }}"
+              delegate_to: bastion
+
+            - name: Eject Virtual Media
+              ansible.builtin.include_role:
+                name: "redhatci.ocp.vendors.{{ hostvars[inventory_hostname]['vendor'] | lower }}"
+                tasks_from: eject.yml
+                apply:
+                  delegate_to: bastion
+              vars:
+                target_host: "{{ inventory_hostname }}"
+                boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+          rescue:
+            - name: Log cleanup failure (non-fatal)
+              ansible.builtin.debug:
+                msg: "Virtual media cleanup failed for {{ inventory_hostname }}, but continuing..."
+
+        - name: Re-raise the original error
+          ansible.builtin.fail:
+            msg: "Boot ISO task failed for {{ inventory_hostname }}"
+      # Note: Cleanup is handled by the final cleanup play regardless
 
 - name: Monitor installation process of agent-based installer
   hosts: bastion
@@ -371,3 +503,76 @@
       vars:
         pull_secret: "{{ pull_secret_raw }}"
         trusted_registries: "{{ additional_trusted_registries }}"
+
+# Cleanup play - ensures virtual media ejection on playbook completion or failure
+- name: Cleanup Virtual Media (Always Execute)
+  hosts: nodes
+  gather_facts: false
+  any_errors_fatal: false
+  tags:
+    - always
+    - cleanup
+  tasks:
+    - name: Eject virtual media from all nodes
+      when: inventory_hostname in groups['masters'] or inventory_hostname in groups['workers']
+      block:
+        - name: Construct proper VM name for cleanup
+          ansible.builtin.set_fact:
+            vm_name: "{{ cluster_name }}_{{ inventory_hostname }}"
+          delegate_to: bastion
+
+        - name: Construct BMC base address
+          ansible.builtin.set_fact:
+            base_bmc_address: >-
+              {{
+                'https://' + hostvars[inventory_hostname]['bmc_address']
+                if not hostvars[inventory_hostname]['bmc_address'].startswith(('http://', 'https://'))
+                else hostvars[inventory_hostname]['bmc_address']
+              }}
+          delegate_to: bastion
+
+        - name: Identify System Manager
+          ansible.builtin.uri:
+            url: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+            user: "{{ bmc_user }}"
+            password: "{{ bmc_password }}"
+            method: GET
+            status_code: [200, 201]
+            validate_certs: false
+            return_content: true
+          register: http_reply
+          delegate_to: bastion
+
+        - name: Debug
+          ansible.builtin.debug:
+            msg: "{{ base_bmc_address }}/redfish/v1/Systems/{{ vm_name }}"
+            verbosity: 1
+
+        - name: Debug
+          ansible.builtin.debug:
+            var: http_reply
+            verbosity: 1
+
+        - name: KVM Set System UUID
+          ansible.builtin.set_fact:
+            system_uuid_url: "{{ base_bmc_address }}/{{ http_reply.json['@odata.id'] }}"
+            system_manager_url: "{{ base_bmc_address }}/{{ http_reply.json.Links.ManagedBy[0]['@odata.id'] }}"
+          delegate_to: bastion
+
+        - name: Eject Virtual Media
+          ansible.builtin.include_role:
+            name: "redhatci.ocp.vendors.{{ hostvars[inventory_hostname]['vendor'] | lower }}"
+            tasks_from: eject.yml
+            apply:
+              delegate_to: bastion
+          vars:
+            target_host: "{{ inventory_hostname }}"
+            boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+      rescue:
+        - name: Log cleanup failure (non-fatal)
+          ansible.builtin.debug:
+            msg: "Virtual media cleanup failed for {{ inventory_hostname }}, but continuing..."
+
+    - name: Log cleanup completion
+      ansible.builtin.debug:
+        msg: "Virtual media cleanup completed for {{ inventory_hostname }}"

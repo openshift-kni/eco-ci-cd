@@ -1,0 +1,303 @@
+
+# Telco Verification Prow Steps Development Guide
+
+## Overview
+
+This guide covers creating Prow steps for telco verification workflows, migrating from Jenkins-based automation to cloud-native Prow CI/CD. Based on the compute-nto implementation pattern.
+
+## File Organization & Naming
+
+### Directory Structure
+```
+ci-operator/step-registry/telcov10n/functional/{domain}/{step-type}/
+├── OWNERS                                    # Symlink to ../OWNERS
+├── {name}-commands.sh                        # Executable script (755)
+├── {name}-ref.yaml                          # Step definition
+└── {name}-ref.metadata.json                # Ownership metadata
+```
+
+### Naming Conventions
+- **Base Pattern**: `telcov10n-functional-{domain}-{step-type}`
+- **Domain Examples**: `compute-nto`, `cnf-network`, `ran-du`
+- **Step Types**: `config`, `ocp-deploy`, `eco-gotests`, `reporter`, `setup-cluster-env`
+
+### Required Files for Each Step
+1. **Commands Script**: `{name}-commands.sh` (executable, 755 permissions)
+2. **Step Definition**: `{name}-ref.yaml` (YAML configuration)
+3. **Metadata**: `{name}-ref.metadata.json` (ownership info)
+4. **Ownership**: `OWNERS` (symlink to parent directory)
+
+## Step Types & Patterns
+
+### 1. Configuration Steps (`*-config`)
+**Purpose**: Configure cluster settings (NTO, operators, etc.)
+```yaml
+# Example: telcov10n-functional-compute-nto-config-ref.yaml
+ref:
+  as: telcov10n-functional-compute-nto-config
+  from_image:
+    namespace: telcov10n-ci
+    name: eco-ci-cd
+    tag: eco-ci-cd
+  commands: telcov10n-functional-compute-nto-config-commands.sh
+  env:
+  - name: CONTAINER_RUNTIME
+    default: "runc"
+    documentation: |-
+      Container runtime (runc/crun)
+  - name: RT_KERNEL  
+    default: "false"
+    documentation: |-
+      Enable Real Time kernel (true/false)
+  documentation: |-
+    Configure Node Tuning Operator and compute settings
+```
+
+**Common Environment Variables**:
+- `CONTAINER_RUNTIME`: Runtime type (runc/crun)
+- `RT_KERNEL`: Boolean for Real Time kernel
+- `HUGEPAGES_DEFAULT_SIZE`: Memory page size (1G/2M)
+- `HUGEPAGES_PAGES`: JSON format list of page configurations
+- `IGNORE_CGROUPS_VERSION`: Boolean for cgroups handling
+
+### 2. Deployment Steps (`*-ocp-deploy`)
+**Purpose**: Deploy OpenShift clusters
+```bash
+# Common pattern in commands.sh
+echo "Deploying OpenShift cluster..."
+export ECO_CI_CD_INVENTORY_PATH="/eco-ci-cd/inventories/ocp-deployment"
+cd /eco-ci-cd || exit 1
+ansible-playbook ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml
+```
+
+### 3. Test Execution Steps (`*-eco-gotests`) 
+**Purpose**: Run telco verification tests
+```yaml
+env:
+- name: ECO_GOTESTS_ENV_VARS
+  default: ""
+  documentation: |-
+    Additional environment variables for test containers
+- name: FEATURES
+  default: "compute"
+  documentation: |-
+    Test feature categories to run
+- name: LABELS
+  default: "nto"
+  documentation: |-
+    Test labels to filter on
+```
+
+### 4. Reporter Steps (`*-reporter`)
+**Purpose**: Collect and upload test reports
+```bash
+# Standard pattern for report collection
+mkdir -pv /tmp/reports /tmp/junit
+cp "${SHARED_DIR}"/report_*.xml /tmp/reports/ 2>/dev/null || echo "No reports found"
+cp "${SHARED_DIR}"/junit_*.xml /tmp/junit/ 2>/dev/null || echo "No junit files found"
+
+# Run report upload playbook
+ansible-playbook ./playbooks/cnf/upload-report.yaml
+```
+
+## Workflow Composition
+
+### Workflow Structure
+```yaml
+# Example: telcov10n-functional-compute-nto-ocp-setup-workflow.yaml
+workflow:
+  as: telcov10n-functional-compute-nto-ocp-setup
+  steps:
+    pre:
+    - ref: telcov10n-functional-compute-nto-ocp-deploy    # Deploy cluster
+    - ref: telcov10n-functional-compute-nto-config        # Configure settings
+    post:
+    - ref: telcov10n-functional-compute-nto-reporter      # Upload reports
+    - ref: telcov10n-verify-junit-reports                 # Verify results
+```
+
+### CI Operator Config Integration
+```yaml
+# openshift-kni-eco-ci-cd-main__{domain}-{version}.yaml
+tests:
+- as: {domain}-functional-tests
+  steps:
+    env:
+      CLUSTER_NAME: hlxcl15
+      CONTAINER_RUNTIME: runc
+      FEATURES: compute
+      RT_KERNEL: "false"
+    test:
+    - ref: telcov10n-functional-{domain}-eco-gotests
+    workflow: telcov10n-functional-{domain}-ocp-setup
+```
+
+## Jenkins to Prow Migration Pattern
+
+### Migration Mapping
+| Jenkins Component | Prow Component | Notes |
+|------------------|----------------|-------|
+| `*.Jenkinsfile` | `*-ref.yaml` step | Parameters → Environment variables |
+| `*.groovy` job | CI operator config | Job scheduling → Cron expressions |
+| Manual triggers | Automated workflows | Event-driven execution |
+| Jenkins vars | Environment variables | Centralized configuration |
+
+### Environment Variable Conversion
+```groovy
+// Jenkins parameter
+parameters {
+    choice(name: 'CONTAINER_RUNTIME', choices: ['runc', 'crun'])
+    booleanParam(name: 'RT_KERNEL', defaultValue: false)
+}
+```
+↓
+```yaml
+# Prow environment variable
+env:
+- name: CONTAINER_RUNTIME
+  default: "runc"
+- name: RT_KERNEL
+  default: "false"
+```
+
+## Ansible Integration Patterns
+
+### Inventory Path Convention
+- **Standard Path**: `/eco-ci-cd/inventories/ocp-deployment`
+- **CNF Networks**: `/eco-ci-cd/inventories/cnf`
+- **Infrastructure**: `/eco-ci-cd/inventories/infra`
+
+### Common Ansible Patterns
+```bash
+# Set inventory path
+export ECO_CI_CD_INVENTORY_PATH="/eco-ci-cd/inventories/ocp-deployment"
+
+# Change to eco-ci-cd directory
+cd /eco-ci-cd || exit 1
+
+# Create necessary directories
+mkdir -pv "${ECO_CI_CD_INVENTORY_PATH}/group_vars"
+mkdir -pv "${ECO_CI_CD_INVENTORY_PATH}/host_vars"
+
+# Copy shared inventory data
+cp -r "${SHARED_DIR}"/group_vars/* "${ECO_CI_CD_INVENTORY_PATH}/group_vars/" 2>/dev/null || true
+cp -r "${SHARED_DIR}"/host_vars/* "${ECO_CI_CD_INVENTORY_PATH}/host_vars/" 2>/dev/null || true
+
+# Run playbook
+ansible-playbook ./playbooks/{domain}/{playbook}.yml
+```
+
+### SHARED_DIR Data Flow
+1. **Deploy steps** → Save cluster info to `${SHARED_DIR}`
+2. **Config steps** → Read cluster info, save configuration
+3. **Test steps** → Read all data, save test results  
+4. **Reporter steps** → Read results, upload reports
+
+## Environment Variable Best Practices
+
+### Variable Naming
+- **Consistent casing**: Use UPPERCASE for environment variables
+- **Clear naming**: `HUGEPAGES_DEFAULT_SIZE` not `HP_SIZE`
+- **Boolean values**: Use `"true"`/`"false"` strings, not bare booleans
+- **JSON data**: Properly escape JSON strings in YAML
+
+### Documentation Standards
+```yaml
+env:
+- name: HUGEPAGES_PAGES
+  default: "[]"
+  documentation: |-
+    JSON format list of hugepage configurations.
+    Example: '[{"count": 1, "size": "1G"}, {"count": 128, "size": "2M"}]'
+```
+
+### Default Value Guidelines
+- Always provide sensible defaults
+- Use empty strings `""` for optional parameters
+- Use `"[]"` for empty JSON arrays
+- Use `"false"` for boolean flags (not bare false)
+
+## File Permissions & Ownership
+
+### Required Permissions
+```bash
+# Commands scripts must be executable
+chmod 755 *-commands.sh
+
+# YAML and JSON files should be readable
+chmod 644 *.yaml *.json
+
+# OWNERS files are symlinks
+ln -sf ../OWNERS OWNERS
+```
+
+### Metadata JSON Structure
+```json
+{
+    "path": "ci-operator/step-registry/telcov10n/functional/{domain}/{step-type}/{name}-ref.yaml",
+    "owners": {
+        "approvers": ["ccardenosa"],
+        "reviewers": ["ccardenosa"]
+    }
+}
+```
+
+## Testing & Validation
+
+### Pre-commit Checklist
+- [ ] All files have correct permissions (755 for .sh, 644 for .yaml/.json)
+- [ ] OWNERS symlinks are created
+- [ ] Environment variables have documentation
+- [ ] Default values are provided for all variables
+- [ ] JSON strings are properly escaped in YAML
+- [ ] Ansible paths use consistent conventions
+- [ ] Step names follow naming patterns
+
+### Common Issues to Avoid
+- **Missing executables**: Commands scripts without 755 permissions
+- **Broken symlinks**: OWNERS files not properly linked
+- **Invalid JSON**: Improperly escaped JSON in environment variables
+- **Missing defaults**: Environment variables without default values
+- **Inconsistent paths**: Mixed inventory path conventions
+- **Silent failures**: Missing error handling in scripts
+
+## Integration with Existing Steps
+
+### Reusable Components
+- `telcov10n-verify-junit-reports`: Standard test result verification
+- Common environment variables across domains
+- Shared Ansible playbooks in `eco-ci-cd`
+
+### Cross-domain Patterns
+- **Compute**: Node tuning, container runtime configuration
+- **CNF**: Network function testing, performance validation  
+- **RAN**: Radio access network specific tests
+- **SLCM**: Software lifecycle management
+
+## Development Workflow
+
+### Creating New Steps
+1. **Research existing patterns** in similar domains
+2. **Identify Jenkins equivalent** if migrating
+3. **Plan environment variables** and defaults
+4. **Create file structure** following naming conventions
+5. **Implement Ansible integration** using standard paths
+6. **Test integration** with existing workflows
+7. **Update CI operator configs** with new steps
+
+### Testing Changes
+```bash
+# Validate YAML syntax
+yamllint *.yaml
+
+# Check JSON formatting  
+jq empty *.json
+
+# Verify symlinks
+ls -la OWNERS
+
+# Test script syntax
+bash -n *-commands.sh
+```
+
+This guide ensures consistent, maintainable Prow steps that integrate seamlessly with the telco verification ecosystem.

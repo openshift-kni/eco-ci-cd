@@ -11,6 +11,8 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   -e ECO_TC_PREFIX={{ report_tc_prefix }} \
   -e ECO_TEST_FEATURES={{ features }} \
   -e ECO_TEST_LABELS={{ labels }} \
+  {% if minor_ocp_version | int > 15 %}-e PERF_TEST_PROFILE={{ cnf_perf_test_profile }} \
+  {% endif %}
   {% if eco_worker_label is defined and eco_worker_label | length > 0 %}-e ECO_WORKER_LABEL={{ eco_worker_label }} \
   {% endif %}
   {% if eco_cnf_core_net_mlb_addr_list is defined and eco_cnf_core_net_mlb_addr_list | length > 0 %}-e ECO_CNF_CORE_NET_MLB_ADDR_LIST={{ eco_cnf_core_net_mlb_addr_list }} \

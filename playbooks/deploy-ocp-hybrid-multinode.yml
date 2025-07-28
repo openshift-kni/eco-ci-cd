@@ -7,6 +7,7 @@
 # It includes various roles and tasks necessary to configure a bastion host,
 # deploy virtual machines (VMs), and boot bare-metal (BM) and VM nodes.
 # The playbook also sets up dependencies, generates manifests, and monitors the installation process.
+# For KVM VMs, it generates static UUIDs based on MAC addresses to ensure consistency across deployments.
 
 ## Overview:
 # This playbook automates the process of deploying ocp cluster. It includes:
@@ -86,6 +87,24 @@
         vm_spec: "{{ vm_spec_string | from_yaml }}"
         network_interfaces: "{{ network_interfaces_string | from_yaml }}"
       when: vendor | lower == 'kvm'
+
+    # Generate static UUID for KVM VMs using pattern: 731c0b10-aaaa-aaaa-aaaa-{mac_without_colons}
+    # This ensures consistent VM UUIDs across deployments for the same MAC address
+    # Example: MAC 52:54:00:a6:0e:20 -> UUID 731c0b10-aaaa-aaaa-aaaa-525400a60e20
+    - name: Generate static UUID for KVM nodes
+      ansible.builtin.set_fact:
+        uuid: "731c0b10-aaaa-aaaa-aaaa-{{ mac | replace(':', '') | lower }}"
+      when:
+        - vendor | lower == 'kvm'
+        - mac is defined
+
+    - name: Debug generated UUID for KVM nodes
+      ansible.builtin.debug:
+        msg: "Generated UUID for {{ inventory_hostname }} (MAC: {{ mac }}): {{ uuid }}"
+      when:
+        - vendor | lower == 'kvm'
+        - mac is defined
+        - uuid is defined
 
     - name: Process KVM nodes to set facts
       ansible.builtin.import_role:

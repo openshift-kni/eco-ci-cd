@@ -50,7 +50,6 @@
 # eco_cnf_core_net_switch_user      # string: Username for accessing the intermediate switch.
 # eco_cnf_core_net_switch_pass      # string: Password for accessing the intermediate switch.
 # eco_worker_label                  # string: Label for the CNF worker role.
-# cnf_perf_test_profile:            # string: The default of the performance profile.
 # additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
 - name: Set up eco-gotests
   hosts: bastion
@@ -65,7 +64,6 @@
     eco_cnf_core_net_switch_user: "{{ hostvars['switch'].ansible_user | default(undefined) }}"
     eco_cnf_core_net_switch_pass: "{{ hostvars['switch'].ansible_password | default(undefined) }}"
     eco_worker_label: workercnf
-    cnf_perf_test_profile: "performance-profile-dpdk"
   tasks:
     - name: Ensure required variables are defined
       ansible.builtin.assert:
@@ -130,5 +128,3 @@
         src: run_eco_gotests.j2
         dest: "{{ eco_gotest_dir }}/eco-gotests-run.sh"
         mode: "0764"
-      vars:
-        minor_ocp_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"

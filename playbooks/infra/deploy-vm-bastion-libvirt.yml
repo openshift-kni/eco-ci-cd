@@ -226,12 +226,6 @@
         name: "{{ vm_name }}"
         state: running
 
-    - name: Remove qcow2 image
-      ansible.builtin.file:
-        path: "{{ libvirtd_disk_path }}/{{ vm_disk_name }}"
-        state: absent
-      become: true
-
 - name: Set ssh certificate
   hosts: localhost
   gather_facts: false

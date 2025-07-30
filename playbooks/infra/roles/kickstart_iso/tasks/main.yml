@@ -31,6 +31,14 @@
     opts: ro
     state: ephemeral
 
+- name: Get suffix for filename
+  ansible.builtin.set_fact:
+    generated_suffix: lookup('community.general.random_string', upper=false, numbers=false,length=5, special=false)
+
+- name: Set kickstart iso os install path
+  ansible.builtin.set_fact:
+    kickstart_iso_os_install_path: "{{ kickstart_iso_os_install_path_basename }}-{{ generated_suffix }}"
+
 - name: Create working directory
   ansible.builtin.file:
     state: directory
@@ -117,6 +125,10 @@
               linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL={{ volume_name.stdout }} inst.ks=hd:LABEL={{ volume_name.stdout }}:/ks.cfg
               initrdefi /images/pxeboot/initrd.img
       }
+
+- name: Set kickstart iso name
+  ansible.builtin.set_fact:
+    kickstart_iso_name: "{{ kickstart_iso_basename }}-{{ generated_suffix }}"
 
 - name: Create bootable iso
   become: true

@@ -1,0 +1,109 @@
+---
+- name: Gather release from stream
+  when: ocp_version_facts_query is not defined
+  block:
+    - name: Fetch data from release stream {{ release_stream }}
+      ansible.builtin.uri:
+        url: "{{ release_stream }}"
+        return_content: true
+      register: api_response
+      failed_when: false
+      changed_when: false
+
+    - name: Extract matching tags from response
+      ansible.builtin.set_fact:
+        matching_tags: >-
+          {{
+            api_response.json.tags
+            | selectattr('name', 'search', '^' + ocp_version_facts_release)
+            | selectattr('phase', 'equalto', 'Accepted')
+            | list
+          }}
+      when:
+        - api_response.status == 200
+        - api_response.json.tags is defined
+
+    - name: Set first matching tag if found
+      ansible.builtin.set_fact:
+        ocp_version_match: "{{ matching_tags[0] }}"
+      when:
+        - matching_tags is defined
+        - matching_tags | length > 0
+
+- name: Inspect image manifest and derive creation date
+  when: ocp_version_match is defined
+  block:
+    - name: Get image manifest
+      ansible.builtin.uri:
+        url: "https://{{ registry }}/v2/{{ repository }}/manifests/{{ ocp_version_match.pullSpec.split(':')[-1] }}"
+        method: GET
+        headers:
+          Accept: "application/vnd.docker.distribution.manifest.v2+json"
+        return_content: true
+      register: manifest_response
+
+    - name: Extract config digest
+      ansible.builtin.set_fact:
+        config_digest: "{{ (manifest_response.json.config.digest) | default('') }}"
+
+    - name: Fail if config digest is not found
+      ansible.builtin.fail:
+        msg: "Could not find config digest in image manifest"
+      when: config_digest == ''
+
+    - name: Get image config blob
+      ansible.builtin.uri:
+        url: "https://{{ registry }}/v2/{{ repository }}/blobs/{{ config_digest }}"
+        method: GET
+        return_content: true
+      register: config_response
+
+    - name: Parse image creation date from raw JSON content
+      ansible.builtin.set_fact:
+        image_created: "{{ (config_response.content | from_json).created }}"
+  rescue:
+    - name: Fallback parse creation date from pullSpec tag
+      when: ocp_version_match is defined
+      ansible.builtin.set_fact:
+        image_created: "{{ ocp_version_match.pullSpec.split(':')[-1] | regex_search('\\d{4}-\\d{2}-\\d{2}') }}"
+
+- name: Post-process image creation and compute age
+  when: ocp_version_match is defined
+  block:
+    - name: Show image creation date
+      ansible.builtin.debug:
+        msg: "Image was created on {{ image_created }}"
+
+    - name: Convert creation date to epoch seconds
+      ansible.builtin.command: date -d "{{ image_created }}" +%s
+      register: image_created_ts_cmd
+      changed_when: false
+
+    - name: Set timestamp fact from command
+      ansible.builtin.set_fact:
+        image_created_ts: "{{ image_created_ts_cmd.stdout | int }}"
+
+    - name: Get current timestamp
+      ansible.builtin.command: date +%s
+      register: now_ts_cmd
+      changed_when: false
+
+    - name: Cache current timestamp
+      ansible.builtin.set_fact:
+        now_ts: "{{ now_ts_cmd.stdout | int }}"
+
+    - name: Calculate age in days
+      ansible.builtin.set_fact:
+        image_age_days: "{{ ((now_ts | int) - (image_created_ts | int)) // 86400 }}"
+
+    - name: Show image age
+      ansible.builtin.debug:
+        msg: "Image was created {{ image_age_days }} days ago (on {{ image_created }})"
+
+- name: Select recent accepted tag (nightly/stable cutoff)
+  when:
+    - ocp_version_match is defined
+    - image_age_days is defined
+    - (image_age_days | int) < (ocp_version_release_age_max_days | int)
+  ansible.builtin.set_fact:
+    ocp_version_facts_query: "{{ ocp_version_match }}"

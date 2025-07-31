@@ -5,7 +5,23 @@
 
 - name: Grab version from pull spec
   ansible.builtin.set_fact:
-    ocp_version_facts_parsed_release: "{{ ocp_version_facts_pull_spec | regex_search('ocp-release:([0-9]+\\.[0-9]+\\.[0-9]+)', '\\1') | first }}"
+    ocp_version_facts_parsed_release: >-
+      {{
+        (ocp_version_facts_pull_spec | default(''))
+        | regex_search('(?<=release:)([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-zA-Z.-]+)?)')
+        | default('')
+        | regex_replace('-(x86|x64|x86_64|aarch64|ppc64le|s390x)$', '')
+      }}
+
+- name: Display parsed release version for debugging
+  ansible.builtin.debug:
+    msg: "Parsed OpenShift release version: {{ ocp_version_facts_parsed_release }}"
+  when: ocp_version_facts_parsed_release | length > 0
+
+- name: Validate parsed release version
+  ansible.builtin.fail:
+    msg: "Failed to parse OpenShift version from pull spec: {{ ocp_version_facts_pull_spec }}"
+  when: ocp_version_facts_parsed_release | length == 0
 
 - name: Setup oc client pull link
   ansible.builtin.set_fact:

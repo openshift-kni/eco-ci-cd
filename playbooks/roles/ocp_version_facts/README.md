@@ -13,6 +13,11 @@ The `ocp_version_facts` Ansible role is responsible for managing and setting Ope
 - Identifies and sets development versions when present.
 - Ensures all required version facts are configured.
 - Provides debug output for all configured facts.
+ - Parses nightly/EC/RC formats from pull-specs (e.g., `4.20.0-0.nightly-2025-07-31-063120`).
+ - Strips architecture suffixes from pull-specs (e.g., `-x86`, `-x64`, `-x86_64`, `-aarch64`, `-ppc64le`, `-s390x`).
+ - Validates input and parsed version, failing fast with clear messages.
+ - Computes image age and enforces maximum allowed age via `ocp_version_release_age_max_days`.
+ - Sets `ocp_version_facts_release_type` (one of: `nightly`, `engineering-candidate`, `release-candidate`, or `stable`).
 
 ## Requirements
 - Ansible 2.9+
@@ -31,6 +36,8 @@ The following variables are used within the role:
 - `ocp_version_facts_z_stream`: Z-stream version number (e.g., `2`).
 - `ocp_version_facts_dev_version`: Development version if present (e.g., `rc1`).
 - `ocp_version_facts_oc_client_pull_link`: Link to pull the OC client.
+- `ocp_version_facts_release_type`: Derived release type (`nightly` | `engineering-candidate` | `release-candidate` | `stable`).
+- `ocp_version_release_age_max_days`: Maximum allowed age (in days) for a selected release when resolving from streams (default defined in `defaults/main.yml`).
 
 ## Usage
 To use this role, include it in your playbook as follows:
@@ -51,6 +58,8 @@ Includes a task file if a full pull spec is provided. The `pull-spec-provided.ym
 - Sets the pull spec.
 - Extracts the release version from the pull spec using regex.
 - Constructs the OC client pull link using artifacts link and client prefix.
+- Strips architecture suffixes from the parsed version (e.g., `-x86`, `-x64`, `-x86_64`, `-aarch64`, `-ppc64le`, `-s390x`).
+- Supports nightly/EC/RC tag formats present in pull-specs.
 
 ### Set facts for short release version
 
@@ -63,10 +72,12 @@ Includes a task file for short release versions. The `version-provided.yml` file
 ### Set major/minor/z_stream versions
 
 Extracts and sets the major, minor, and z-stream versions.
+Also ensures major/minor are integers for downstream use.
 
 ### Set dev version if present and remove z-stream
 
 Identifies and sets development versions.
+Additionally derives `ocp_version_facts_release_type` as `nightly`, `engineering-candidate` (EC), `release-candidate` (RC), or `stable` when no dev suffix is present.
 
 ### Assert required facts
 
@@ -75,6 +86,14 @@ Ensures all necessary facts are configured properly.
 ### Display ocp_version_facts
 
 Outputs debug information for configured facts.
+
+### Release age validation
+
+When resolving the latest release from streams, the role:
+- Retrieves the image creation timestamp from the image config.
+- Computes the image age (in days).
+- Fails if the age exceeds `ocp_version_release_age_max_days`.
+- Only selects a candidate tag when it is newer than `ocp_version_release_age_max_days`.
 
 ## Dependencies
 

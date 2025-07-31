@@ -33,6 +33,6 @@ spec:
     realTimeKernel:
         enabled:  {{ rt_kernel }}
     workloadHints:
-        highPowerConsumption: true
-        perPodPowerManagement: false
+        highPowerConsumption: {{ high_power_consumption }}
+        perPodPowerManagement: {{ per_pod_power_management }}
         realTime: {{ rt_kernel }}

@@ -3,6 +3,8 @@ mcp_timeout: 10m
 artifacts_folder: /artifacts
 ignore_cgroups_version: "true"
 rt_kernel: false
+high_power_consumption: false
+per_pod_power_management: false
 must_gather_dir: "/mustgather"
 container_runtime: "runc"
 nto_image: registry-proxy.engineering.redhat.com/rh-osbs/openshift-ose-cluster-node-tuning-rhel9-operator

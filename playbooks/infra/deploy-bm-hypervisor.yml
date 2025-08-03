@@ -102,6 +102,7 @@
     os_install_path: "{{ dest_iso_dir }}/os-install"
     location: rdu
     system_iso_link: "{{ system_iso_rdu_link if location == 'rdu' else system_iso_tlv_link }}"
+    http_store_port: 8888
   tasks:
 
       # Requirements of redhatci.ocp.setup_http_store role
@@ -131,6 +132,8 @@
     - name: Setup http storage
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
+      vars:
+        http_port: "{{ http_store_port }}"
 
 - name: Deploy Bare-Metal
   hosts: hypervisor
@@ -138,12 +141,13 @@
   become: true
   vars:
     system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
+    http_store_port: 8888
   tasks:
     - name: Boot BM using pre-configured ISO
       ansible.builtin.import_role:
         name: redhatci.ocp.boot_iso
       vars:
-        boot_iso_url: "http://{{ hostvars['bastion']['ansible_host'] }}/{{ hostvars['bastion']['iso_name'] }}"
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_host'] }}:{{ http_store_port }}/{{ hostvars['bastion']['iso_name'] }}"
 
     - name: Wait until BM installation is completed
       ansible.builtin.wait_for_connection:

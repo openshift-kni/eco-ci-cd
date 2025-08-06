@@ -69,6 +69,7 @@
     - name: Extract OpenShift version details
       ansible.builtin.set_fact:
         version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+        ocp_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
 
     - name: Print cluster version
       ansible.builtin.debug:
@@ -92,105 +93,185 @@
             cnf_worker_name: >-
               {{ (all_worker_nodes.resources | list)[0].metadata.name | regex_replace('[0-9]', '.*') }}
 
+    - name: Ensure 'junit' directory is absent
+      ansible.builtin.file:
+        path: "{{ cnf_test_dir }}/junit"
+        state: absent
+
     - name: Ensure repository does not exist
       ansible.builtin.file:
         path: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
         state: absent
 
-    - name: Clone cnf-feature-deploy project
-      block:
-        - name: Git clone cnf-feature-deploy repo specific branch
-          ansible.builtin.git:
-            repo: "{{ cnf_test_repo }}"
-            dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
-            force: true
-            update: true
-            depth: 1
-            recursive: true
-            version: "release-{{ version }}"
-          register: cnftests_git_clone
-          retries: 3
-          delay: 5
-          until: cnftests_git_clone is not failed
+    - name: Ensure report directory does not exist
+      ansible.builtin.file:
+        path: "{{ cnf_test_dir }}/report"
+        state: absent
 
-      rescue:
-        - name: Git clone cnf-feature-deploy repo master branch
-          ansible.builtin.git:
-            repo: "{{ cnf_test_repo }}"
-            dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
-            force: true
-            update: true
-            depth: 1
-            recursive: true
-            version: "master"
-          register: cnftests_master_git_clone
-          retries: 3
-          delay: 5
-          until: cnftests_master_git_clone is not failed
+    - name: Ensure 'junit' directory exists
+      ansible.builtin.file:
+        path: "{{ cnf_test_dir }}/junit"
+        state: directory
+        mode: "0777"
 
-    - name: Install Ginkgo v2
-      changed_when: false
-      ansible.builtin.shell: |
-        go install {{ ginkgo_link | default('github.com/onsi/ginkgo/v2/ginkgo@v2.23.3') }}
-      environment:
-        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
-
-    - name: Get branch information from MetalLB project
-      ansible.builtin.uri:
-        url: "https://github.com/openshift/metallb-operator/tree/release-{{ version }}"
-        method: GET
-      register: metallb_github_response
-
-    - name: Set MetalLB branch variable based on existence
-      ansible.builtin.set_fact:
-        dynamic_metallb_branch: "{{ 'release-' + version if metallb_github_response.status == 200 else 'main' }}"
-
-    - name: Get branch information from SR-IOV project
-      ansible.builtin.uri:
-        url: "https://github.com/openshift/sriov-network-operator/tree/release-{{ version }}"
-        method: GET
-      register: sriov_github_response
-
-    - name: Set SR-IOV branch variable based on existence
-      ansible.builtin.set_fact:
-        dynamic_sriov_branch: "{{ 'release-' + version if sriov_github_response.status == 200 else 'master' }}"
-
-    - name: Get branch information from Node Tuning operator project
-      ansible.builtin.uri:
-        url: "https://github.com/openshift/cluster-node-tuning-operator/tree/release-{{ version }}"
-        method: GET
-      register: tuning_github_response
-
-    - name: Set Node Tuning operator branch variable based on existence
-      ansible.builtin.set_fact:
-        dynamic_tuning_branch: "{{ 'release-' + version if tuning_github_response.status == 200 else 'master' }}"
-
-    - name: Update all submodules
-      changed_when: false
-      environment:
-        METALLB_OPERATOR_TARGET_COMMIT: "{{ dynamic_metallb_branch }}"
-        SRIOV_NETWORK_OPERATOR_TARGET_COMMIT: "{{ dynamic_sriov_branch }}"
-        CLUSTER_NODE_TUNING_OPERATOR_TARGET_COMMIT: "{{ dynamic_tuning_branch }}"
-        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
-      ansible.builtin.shell: |
-        make init-git-submodules
-      args:
-        chdir: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+    - name: Ensure 'report' directory exists
+      ansible.builtin.file:
+        path: "{{ cnf_test_dir }}/report"
+        state: directory
+        mode: "0777"
 
     - name: Set containers version
       ansible.builtin.set_fact:
         containers_version: "{{ version }}"
 
-    - name: Print dpdk-base image version
-      ansible.builtin.debug:
-        msg: dpdk-base-rhel9:v{{ containers_version }}
+    # TODO: Remove this block when OCP 4.14 reaches end-of-life
+    - name: Run CNF tests via podman image. OCP < 4.15
+      when:
+        - ocp_minor_version|int < 15
+      block:
 
-    - name: Print cnf_tests_version image version
-      ansible.builtin.debug:
-        msg: cnf_tests_version:v{{ containers_version }}
+        - name: Remove cnf-tests container
+          containers.podman.podman_container:
+            name: "cnf-container-tests"
+            state: absent
 
-    - name: Prepare execute shell script
-      ansible.builtin.template:
-        src: run_cnf_tests.j2
-        dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}/cnf-tests-run.sh"
-        mode: "0764"
+        - name: Remove cnf-tests image
+          containers.podman.podman_image:
+            name: "{{ container_registry }}/cnf-tests-rhel8"
+            state: absent
+            tag: "{{ item }}"
+          loop:
+            - "v{{ containers_version }}"
+            - "latest"
+
+        - name: Pull cnf-tests image
+          containers.podman.podman_image:
+            name: "{{ container_registry }}/cnf-tests-rhel8"
+            state: present
+            tag: "v{{ containers_version }}"
+
+        - name: Reset cnf_test_dir variable
+          ansible.builtin.set_fact:
+            cnf_test_dir: "{{ cnf_test_dir }}{{ cnftests_git_dest }}"
+
+        - name: Ensure cnf_test_dir directory exists
+          ansible.builtin.file:
+            path: "{{ cnf_test_dir }}"
+            state: directory
+            mode: "0777"
+
+        - name: Copy kubeconfig to cnf_test_dir
+          ansible.builtin.copy:
+            src: "{{ kubeconfig }}"
+            dest: "{{ cnf_test_dir }}"
+            remote_src: true
+            mode: "0777"
+
+        - name: Prepare CNF tests execution script
+          ansible.builtin.template:
+            src: run_cnf_tests_container.j2
+            dest: "{{ cnf_test_dir }}/cnf-tests-run.sh"
+            mode: "0764"
+          vars:
+            junit_report_path: /tmp/junit
+            report_path: /tmp/report
+            registry: "{{ container_registry }}"
+            cnf_image_tag: "{{ container_registry }}/cnf-tests-rhel8:v{{ containers_version }}"
+
+    - name: Run CNF tests via makefile. OCP > 4.15
+      when:
+        - ocp_minor_version|int > 15
+      block:
+        - name: Clone cnf-feature-deploy project
+          block:
+            - name: Git clone cnf-feature-deploy repo specific branch
+              ansible.builtin.git:
+                repo: "{{ cnf_test_repo }}"
+                dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+                force: true
+                update: true
+                depth: 1
+                recursive: true
+                version: "release-{{ version }}"
+              register: cnftests_git_clone
+              retries: 3
+              delay: 5
+              until: cnftests_git_clone is not failed
+
+          rescue:
+            - name: Git clone cnf-feature-deploy repo master branch
+              ansible.builtin.git:
+                repo: "{{ cnf_test_repo }}"
+                dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+                force: true
+                update: true
+                depth: 1
+                recursive: true
+                version: "master"
+              register: cnftests_master_git_clone
+              retries: 3
+              delay: 5
+              until: cnftests_master_git_clone is not failed
+
+        - name: Install Ginkgo v2
+          changed_when: false
+          ansible.builtin.shell: |
+            go install {{ ginkgo_link | default('github.com/onsi/ginkgo/v2/ginkgo@v2.23.3') }}
+          environment:
+            PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+        - name: Get branch information from MetalLB project
+          ansible.builtin.uri:
+            url: "https://github.com/openshift/metallb-operator/tree/release-{{ version }}"
+            method: GET
+          register: metallb_github_response
+
+        - name: Set MetalLB branch variable based on existence
+          ansible.builtin.set_fact:
+            dynamic_metallb_branch: "{{ 'release-' + version if metallb_github_response.status == 200 else 'main' }}"
+
+        - name: Get branch information from SR-IOV project
+          ansible.builtin.uri:
+            url: "https://github.com/openshift/sriov-network-operator/tree/release-{{ version }}"
+            method: GET
+          register: sriov_github_response
+
+        - name: Set SR-IOV branch variable based on existence
+          ansible.builtin.set_fact:
+            dynamic_sriov_branch: "{{ 'release-' + version if sriov_github_response.status == 200 else 'master' }}"
+
+        - name: Get branch information from Node Tuning operator project
+          ansible.builtin.uri:
+            url: "https://github.com/openshift/cluster-node-tuning-operator/tree/release-{{ version }}"
+            method: GET
+          register: tuning_github_response
+
+        - name: Set Node Tuning operator branch variable based on existence
+          ansible.builtin.set_fact:
+            dynamic_tuning_branch: "{{ 'release-' + version if tuning_github_response.status == 200 else 'master' }}"
+
+        - name: Update all submodules
+          changed_when: false
+          environment:
+            METALLB_OPERATOR_TARGET_COMMIT: "{{ dynamic_metallb_branch }}"
+            SRIOV_NETWORK_OPERATOR_TARGET_COMMIT: "{{ dynamic_sriov_branch }}"
+            CLUSTER_NODE_TUNING_OPERATOR_TARGET_COMMIT: "{{ dynamic_tuning_branch }}"
+            PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+          ansible.builtin.shell: |
+            make init-git-submodules
+          args:
+            chdir: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
+
+        - name: Print dpdk-base image version
+          ansible.builtin.debug:
+            msg: dpdk-base-rhel9:v{{ containers_version }}
+
+        - name: Print cnf_tests_version image version
+          ansible.builtin.debug:
+            msg: cnf_tests_version:v{{ containers_version }}
+
+        - name: Prepare execute shell script
+          ansible.builtin.template:
+            src: run_cnf_tests.j2
+            dest: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}/cnf-tests-run.sh"
+            mode: "0764"

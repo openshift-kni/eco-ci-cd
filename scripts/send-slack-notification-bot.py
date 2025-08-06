@@ -148,8 +148,8 @@ def create_release_info(args, rhel_version):
             "cluster_name": args.cluster_name,
             "nic": args.nic,
             "secondary_nic": args.secondary_nic,
-            "cnf_image_version": f"{args.registry_url}/dpdk-base-{rhel_version}:v{args.version}",
-            "dpdk_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{args.version}"
+            "cnf_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{args.version}",
+            "dpdk_image_version": f"{args.registry_url}/dpdk-base-{rhel_version}:v{args.version}"
         }
     }
 

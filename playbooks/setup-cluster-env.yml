@@ -75,11 +75,11 @@
           - intel_810
           - mlx_cx_6
       "4.14":
-        cluster_name: hlxcl7
+        cluster_name: kni-qe-92
         nics:
+          - mlx_cx_6
           - intel_710
           - intel_810
-          - mlx_cx_6
 
   tasks:
     - name: Ensure release variable is set

@@ -2,7 +2,7 @@
 
 podman run --name cnf-container-tests \
     --net=host \
-    -v {{ cnf_test_dir }}:/kubeconfig:Z \
+    -v {{ cnf_test_script_dir }}:/kubeconfig:Z \
     -v {{ junit_report_path }}:/junit:Z \
     -v {{ report_path }}:/report:Z \
     -e KUBECONFIG=/kubeconfig/kubeconfig \

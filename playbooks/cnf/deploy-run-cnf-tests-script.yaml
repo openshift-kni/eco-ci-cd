@@ -150,27 +150,27 @@
             state: present
             tag: "v{{ containers_version }}"
 
-        - name: Reset cnf_test_dir variable
+        - name: Reset cnf_test_script_dir variable
           ansible.builtin.set_fact:
-            cnf_test_dir: "{{ cnf_test_dir }}{{ cnftests_git_dest }}"
+            cnf_test_script_dir: "{{ cnf_test_dir }}{{ cnftests_git_dest }}"
 
-        - name: Ensure cnf_test_dir directory exists
+        - name: Ensure cnf_test_script_dir directory exists
           ansible.builtin.file:
-            path: "{{ cnf_test_dir }}"
+            path: "{{ cnf_test_script_dir }}"
             state: directory
             mode: "0777"
 
-        - name: Copy kubeconfig to cnf_test_dir
+        - name: Copy kubeconfig to cnf_test_script_dir
           ansible.builtin.copy:
             src: "{{ kubeconfig }}"
-            dest: "{{ cnf_test_dir }}"
+            dest: "{{ cnf_test_script_dir }}"
             remote_src: true
             mode: "0777"
 
         - name: Prepare CNF tests execution script
           ansible.builtin.template:
             src: run_cnf_tests_container.j2
-            dest: "{{ cnf_test_dir }}/cnf-tests-run.sh"
+            dest: "{{ cnf_test_script_dir }}/cnf-tests-run.sh"
             mode: "0764"
           vars:
             junit_report_path: /tmp/junit

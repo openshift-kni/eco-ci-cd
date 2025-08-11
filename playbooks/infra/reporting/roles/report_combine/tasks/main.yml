@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for redhatci.ocp.report_combine
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - rc_report_path | length > 0
+      - rc_metadata_path | length > 0
+      - rc_combined_event_path | length > 0
+      - rc_collector_format in rc_supported_formats
+    fail_msg: "One or more required parameters are missing or invalid"
+
+- name: Read input files
+  ansible.builtin.include_tasks:
+    file: "read-file.yml"
+  loop:
+    - path: "{{ rc_report_path }}"
+      name: rc_test_data
+    - path: "{{ rc_metadata_path }}"
+      name: rc_meta_data
+      mandatory: true
+  loop_control:
+    loop_var: rc_file_item
+
+- name: Combine data using format-specific logic
+  ansible.builtin.include_tasks:
+    file: "formats/{{ rc_collector_format }}.yml"
+
+- name: Print combined event structure
+  ansible.builtin.debug:
+    var: rc_combined_event
+  when:
+    - rc_debug
+
+- name: Ensure output directory exists
+  ansible.builtin.file:
+    path: "{{ rc_combined_event_path | dirname }}"
+    state: directory
+    mode: '0755'
+  when:
+    - rc_combined_event_path | length > 0
+    - rc_combined_event_path | dirname | length > 1
+
+- name: Write combined event to output file
+  ansible.builtin.copy:
+    content: "{{ rc_combined_event | to_nice_json(indent=2) }}"
+    dest: "{{ rc_combined_event_path }}"
+    mode: '0644'
+  when:
+    - rc_combined_event_path | length > 0

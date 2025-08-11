@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for redhatci.ocp.report_metadata_gen
+
+- name: Check whether existing metadata file rmg_existing_metadata_path exists
+  ansible.builtin.stat:
+    path: "{{ rmg_existing_metadata_path }}"
+  register: _rmg_existing_metadata_file_stat
+
+- name: Read existing metadata from provided file
+  ansible.builtin.set_fact:
+    rmg_existing_metadata: "{{ lookup('file', rmg_existing_metadata_path) | from_json }}"
+  when:
+    - _rmg_existing_metadata_file_stat is defined
+    - _rmg_existing_metadata_file_stat.stat.exists
+    - _rmg_existing_metadata_file_stat.stat.isreg

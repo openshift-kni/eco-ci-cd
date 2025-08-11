@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# ensure-file tasks for redhatci.ocp.report_combine
+
+- name: Gathering file stats for {{ rc_file_path }}
+  ansible.builtin.stat:
+    path: "{{ rc_file_path }}"
+    get_attributes: true
+  register: _rc_file_stat
+
+- name: Validating file requirements for {{ rc_file_path }}
+  ansible.builtin.assert:
+    that:
+      - _rc_file_stat.stat.exists
+      - _rc_file_stat.stat.isreg
+      - (_rc_file_stat.stat.readable | default(false)) or (_rc_file_mode_readable | bool)
+      - _rc_file_stat.stat.size > 0
+    fail_msg: "File {{ rc_file_path }} failed validation checks"
+    success_msg: "File {{ rc_file_path }} passed all validation checks"
+  vars:
+    # Check owner read (0o400), group read (0o040), or other read (0o004) permissions
+    # Using arithmetic to simulate bitwise AND since Jinja2 doesn't support & operator
+    # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/stat_module.html#return-values
+    _rc_file_mode_readable: >-
+      {{ ((_rc_file_stat.stat.mode | int // 256) % 2 == 1) or
+        ((_rc_file_stat.stat.mode | int // 32) % 2 == 1) or
+        ((_rc_file_stat.stat.mode | int // 4) % 2 == 1) }}

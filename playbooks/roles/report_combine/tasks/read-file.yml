@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for redhatci.ocp.report_combine
+
+- name: Validate the file exists, readable and non-empty
+  ansible.builtin.include_tasks:
+    file: "validate-file.yml"
+  vars:
+    rc_file_path: "{{ rc_file_item.path }}"
+
+- name: Read JSON file {{ rc_file_item.path }}
+  ansible.builtin.slurp:
+    src: "{{ rc_file_item.path }}"
+  register: _rc_file_read
+
+- name: Parse data as JSON from file {{ rc_file_item.path }}
+  ansible.builtin.set_fact:
+    "{{ rc_file_item.name }}": "{{ _rc_file_read.content | b64decode | from_json | default({}) }}"
+  # noqa: redhat-ci[no-role-prefix] - Dynamic variable name controlled by caller
+
+- name: "Verify the data is not empty (mandatory={{ rc_file_item.mandatory | default(false) | string }})"
+  ansible.builtin.assert:
+    that:
+      - vars[rc_file_item.name] | default({}) | length > 0
+    fail_msg: >
+      The role (report_combine) does not support combining empty data
+        in: {{ rc_file_item.name }}
+        from: {{ rc_file_item.path }}
+  when:
+    - rc_file_item.mandatory is defined
+    - rc_file_item.mandatory | default(false)
+
+- name: Print user note
+  ansible.builtin.debug:
+    msg: "NOTE: this run of the role has an empty data in {{ rc_file_item.path }}"
+  when:
+    - not (rc_file_item.mandatory | default(false))
+    - vars[rc_file_item.name] | length == 0
+
+- name: Print (verbosity>=3) the value of {{ rc_file_item.name }}
+  ansible.builtin.debug:
+    msg: "{{ rc_file_item.name }}: {{ vars[rc_file_item.name] }}"
+    verbosity: 3

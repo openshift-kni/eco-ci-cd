@@ -1,0 +1,20 @@
+---
+- name: Test activities before main report processing
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Run pre-test activities
+      ansible.builtin.debug:
+        msg: "Pre-test actions"
+    - name: Assert rs_collector_url is set
+      ansible.builtin.assert:
+        that:
+          - rs_collector_url | default('') | length > 0
+        fail_msg: "rs_collector_url is not set"
+    - name: Assert rs_collector_auth_token is set
+      ansible.builtin.assert:
+        that:
+          - rs_collector_auth_token | default('') | length > 0
+        fail_msg: "rs_collector_auth_token is not set"
+- name: Import the main report send playbook
+  ansible.builtin.import_playbook: report-send.yml

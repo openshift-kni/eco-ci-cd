@@ -75,7 +75,7 @@
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
 
-          echo "Installing ginkgo and omgega..."
+          echo "Installing ginkgo and gomega..."
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
           cd {{ gotest_dir }}

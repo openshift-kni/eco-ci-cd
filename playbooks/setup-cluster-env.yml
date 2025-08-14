@@ -44,6 +44,12 @@
     ocp_release_version_file_name: "cluster_version"
     cluster_name_file_name: "cluster_name"
     cluster_release_map:
+      "4.20":
+        cluster_name: hlxcl7
+        nics:
+          - intel_710
+          - intel_810
+          - mlx_cx_6
       "4.19":
         cluster_name: kni-qe-92
         nics:
@@ -96,7 +102,7 @@
 
     - name: Set cluster name
       ansible.builtin.set_fact:
-        cluster_name: "{{ cluster_release_map[release].cluster_name }}"
+        cluster_name: "{{ cluster_release_map[ocp_version_facts_major + '.' + ocp_version_facts_minor].cluster_name }}"
 
     - name: Print cluster name
       ansible.builtin.debug:
@@ -109,8 +115,19 @@
         mode: "0660"
 
     - name: Set OCP secondary NIC
+      when: ocp_version_facts_z_stream is defined and ocp_version_facts_z_stream is not none
       ansible.builtin.set_fact:
-        ocp_secondary_nic: "{{ cluster_release_map[release].nics[ocp_version_facts_z_stream | int % (cluster_release_map[release].nics | length)] }}"
+        ocp_secondary_nic: "{{ cluster_release_map[ocp_version_facts_major + '.' + ocp_version_facts_minor].nics[ocp_version_facts_z_stream |
+                               int % (cluster_release_map[ocp_version_facts_major + '.' + ocp_version_facts_minor].nics | length)] }}"
+
+    - name: Set OCP secondary NIC for latest release
+      when: ocp_version_facts_dev_version is defined and ocp_version_facts_dev_version is not none
+      ansible.builtin.set_fact:
+        ocp_secondary_nic: >-
+          {{
+            cluster_release_map[ocp_version_facts_major + '.' + ocp_version_facts_minor].nics
+            [ (ansible_date_time.weeknumber | int - 1) % 3 ]
+          }}
 
     - name: Print OCP secondary NIC
       ansible.builtin.debug:

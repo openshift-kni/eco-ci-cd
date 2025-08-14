@@ -1,5 +1,13 @@
 ---
 # tasks file for ocp_version
+- name: Validate input parameters
+  ansible.builtin.assert:
+    that:
+      - ocp_version_facts_release is defined
+      - ocp_version_facts_release | length > 0
+    fail_msg: "ocp_version_facts_release must be defined and not empty"
+    success_msg: "Input validation passed"
+
 - name: Set facts for provided pull spec
   when: ocp_version_facts_release | length > 7
   ansible.builtin.include_tasks:
@@ -10,17 +18,45 @@
   ansible.builtin.include_tasks:
     file: ./version-provided.yml
 
+- name: Validate parsed release format
+  ansible.builtin.assert:
+    that:
+      - ocp_version_facts_parsed_release is defined
+      - ocp_version_facts_parsed_release | length > 0
+      - ocp_version_facts_parsed_release.split('.') | length >= 3
+    fail_msg: "Invalid OpenShift version format: {{ ocp_version_facts_parsed_release | default('undefined') }}"
+    success_msg: "Version format validation passed"
+
 - name: Set major/minor/z_stream versions
   ansible.builtin.set_fact:
-    ocp_version_facts_major: "{{ ocp_version_facts_parsed_release.split('.')[0] }}"
-    ocp_version_facts_minor: "{{ ocp_version_facts_parsed_release.split('.')[1] }}"
+    ocp_version_facts_major: "{{ ocp_version_facts_parsed_release.split('.')[0] | int }}"
+    ocp_version_facts_minor: "{{ ocp_version_facts_parsed_release.split('.')[1] | int }}"
     ocp_version_facts_z_stream: "{{ ocp_version_facts_parsed_release.split('.')[2] }}"
 
 - name: Set dev version if present and remove z-stream
-  when: '"0-" in ocp_version_facts_parsed_release.split(".")[2]'
+  when:
+    - ocp_version_facts_parsed_release.split(".") | length >= 4
+    - '"0-" in ocp_version_facts_parsed_release.split(".")[2]'
   ansible.builtin.set_fact:
     ocp_version_facts_dev_version: "{{ ocp_version_facts_parsed_release.split('.')[2] + '.' + ocp_version_facts_parsed_release.split('.')[3] }}"
     ocp_version_facts_z_stream: null
+
+- name: Set OpenShift release type
+  ansible.builtin.set_fact:
+    ocp_version_facts_release_type: >-
+      {%- if ocp_version_facts_dev_version is defined -%}
+        {%- if 'nightly' in ocp_version_facts_dev_version -%}
+          nightly
+      {%- elif 'ec' in ocp_version_facts_dev_version -%}
+          engineering-candidate
+      {%- elif 'rc' in ocp_version_facts_dev_version -%}
+          release-candidate
+      {%- else -%}
+          development
+      {%- endif -%}
+      {%- else -%}
+        stable
+      {%- endif -%}
 
 - name: Assert that all required facts are configured
   ansible.builtin.assert:
@@ -31,11 +67,27 @@
       - ocp_version_facts_minor is defined
       - ocp_version_facts_oc_client_pull_link is defined
       - ocp_version_facts_dev_version is defined or ocp_version_facts_z_stream is defined
-    fail_msg: "One or more required facts are missing"
-    success_msg: "All required facts are configured"
+      - ocp_version_facts_release_type is defined
+    fail_msg: "One or more required facts are missing. Check the debug output below."
+    success_msg: "All required facts are configured successfully"
 
-- name: Display ocp_version_facts
-  when: (vars[item] is defined) and (vars[item] is not none)
+- name: Display OpenShift version facts summary
+  ansible.builtin.debug:
+    msg: |
+      OpenShift Version Facts Summary:
+      ================================
+      Full Release: {{ ocp_version_facts_parsed_release }}
+      Major.Minor: {{ ocp_version_facts_major }}.{{ ocp_version_facts_minor }}
+      Z-Stream: {{ ocp_version_facts_z_stream | default('N/A') }}
+      Dev Version: {{ ocp_version_facts_dev_version | default('N/A') }}
+      Release Type: {{ ocp_version_facts_release_type }}
+      Pull Spec: {{ ocp_version_facts_pull_spec }}
+      OC Client Link: {{ ocp_version_facts_oc_client_pull_link }}
+
+- name: Display individual ocp_version_facts (detailed)
+  when:
+    - (vars[item] is defined)
+    - (vars[item] is not none)
   loop:
     - ocp_version_facts_pull_spec
     - ocp_version_facts_parsed_release
@@ -44,5 +96,6 @@
     - ocp_version_facts_oc_client_pull_link
     - ocp_version_facts_dev_version
     - ocp_version_facts_z_stream
+    - ocp_version_facts_release_type
   ansible.builtin.debug:
     msg: "{{ item }}: {{ lookup('vars', item) }}"

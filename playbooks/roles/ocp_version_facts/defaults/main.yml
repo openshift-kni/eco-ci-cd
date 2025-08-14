@@ -1,3 +1,4 @@
 ---
 # defaults file for ocp_version
 ocp_version_facts_release: '4.17'
+ocp_version_release_age_max_days: 10000

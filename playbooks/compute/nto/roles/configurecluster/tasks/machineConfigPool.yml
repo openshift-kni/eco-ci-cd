@@ -12,10 +12,9 @@
       apiVersion: v1
       kind: Node
       metadata:
-        name: "{{ item }}"
+        name: "worker0"
         labels:
           node-role.kubernetes.io/worker-cnf: ''
-  loop: "{{ worker_nodes_info.resources | map(attribute='metadata.name') }}"
 
 - name: Render Machine config pool
   ansible.builtin.set_fact:

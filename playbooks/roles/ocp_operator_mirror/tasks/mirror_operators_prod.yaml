@@ -1,0 +1,149 @@
+---
+- name: Derive operator catalog version (major.minor)
+  changed_when: false
+  ansible.builtin.set_fact:
+    catalog_version: "{{ ocp_operator_mirror_version.split('.')[0:2] | join('.') }}"
+
+- name: Map production catalogs to index images
+  changed_when: false
+  ansible.builtin.set_fact:
+    catalog_index_map:
+      redhat-operators: "registry.redhat.io/redhat/redhat-operator-index:v{{ catalog_version }}"
+      certified-operators: "registry.redhat.io/redhat/certified-operator-index:v{{ catalog_version }}"
+      community-operators: "registry.redhat.io/redhat/community-operator-index:v{{ catalog_version }}"
+
+- name: Build Red Hat packages
+  changed_when: false
+  loop: "{{ ocp_operator_mirror_operators_prod | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_redhat_catalog_name) | list }}"
+  loop_control:
+    loop_var: operator_item
+  vars:
+    make_pkg: >-
+      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
+      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_redhat_catalog_name]))}]} }}
+  ansible.builtin.set_fact:
+    pkgs_redhat: "{{ (pkgs_redhat | default([])) + [make_pkg] }}"
+
+- name: Build certified packages
+  changed_when: false
+  loop: "{{ ocp_operator_mirror_operators_prod | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_certified_catalog_name) | list }}"
+  loop_control:
+    loop_var: operator_item
+  vars:
+    make_pkg: >-
+      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
+      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_certified_catalog_name]))}]} }}
+  ansible.builtin.set_fact:
+    pkgs_cert: "{{ (pkgs_cert | default([])) + [make_pkg] }}"
+
+- name: Build community packages
+  changed_when: false
+  loop: "{{ ocp_operator_mirror_operators_prod | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_community_catalog_name) | list }}"
+  loop_control:
+    loop_var: operator_item
+  vars:
+    make_pkg: >-
+      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
+      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_community_catalog_name]))}]} }}
+  ansible.builtin.set_fact:
+    pkgs_comm: "{{ (pkgs_comm | default([])) + [make_pkg] }}"
+
+- name: Assemble operators for ImageSetConfiguration
+  changed_when: false
+  ansible.builtin.set_fact:
+    mirror_ops: >-
+      {{
+        ([] if (pkgs_redhat | default([])) | length == 0 else
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_redhat_catalog_name], 'packages': pkgs_redhat} ])
+        +
+        ([] if (pkgs_cert | default([])) | length == 0 else
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_certified_catalog_name], 'packages': pkgs_cert} ])
+        +
+        ([] if (pkgs_comm | default([])) | length == 0 else
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_community_catalog_name], 'packages': pkgs_comm} ])
+      }}
+
+- name: Build ImageSetConfiguration
+  changed_when: false
+  when: (mirror_ops | default([])) | length > 0
+  ansible.builtin.set_fact:
+    image_set_config:
+      apiVersion: mirror.openshift.io/v1alpha2
+      kind: ImageSetConfiguration
+      mirror:
+        operators: "{{ mirror_ops }}"
+
+- name: Show ImageSetConfiguration
+  when: (mirror_ops | default([])) | length > 0
+  ansible.builtin.debug:
+    var: image_set_config
+
+- name: Ensure ImageSetConfiguration.yaml does not exist
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_image_set_configuration_path }}"
+    state: absent
+
+- name: Write ImageSetConfiguration.yaml file
+  ansible.builtin.copy:
+    content: "{{ image_set_config | to_nice_yaml }}"
+    dest: "{{ ocp_operator_mirror_image_set_configuration_path }}"
+    mode: '0644'
+
+- name: Ensure oc-mirror workspace is empty
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_workspace_path }}"
+    state: absent
+
+- name: Run oc-mirror to push operators to internal registry # noqa: command-instead-of-shell
+  args:
+    chdir: /tmp
+  register: oc_mirror
+  changed_when: true
+  ansible.builtin.shell: >-
+    env -u REGISTRY_AUTH_FILE oc-mirror
+    --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+    -c "{{ ocp_operator_mirror_image_set_configuration_path }}"
+    --workspace file:///{{ ocp_operator_mirror_workspace_path }}
+    docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
+    --ignore-release-signature --v2
+
+- name: Show oc-mirror result
+  ansible.builtin.debug:
+    var: oc_mirror.stdout
+
+- name: Find CatalogSource (cs*) and ImageDigestMirrorSet (idms*) manifests
+  register: mirror_manifests
+  ansible.builtin.find:
+    paths: "{{ ocp_operator_mirror_workspace_path }}/{{ ocp_operator_mirror_working_dir_path }}"
+    patterns:
+      - "cs*.yaml"
+      - "idms*.yaml"
+    file_type: file
+
+- name: Extract manifest paths
+  ansible.builtin.set_fact:
+    manifest_paths: "{{ mirror_manifests.files | map(attribute='path') | list }}"
+
+- name: Apply CatalogSources manifests
+  loop: "{{ manifest_paths }}"
+  loop_control:
+    loop_var: manifest_item
+  kubernetes.core.k8s:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    state: present
+    src: "{{ manifest_item }}"
+  notify:
+    - Cleanup ocp_operator_mirror artifacts
+
+- name: Mutate ocp_operator_mirror_operators_prod catalogs in place
+  ansible.builtin.set_fact:
+    ocp_operator_mirror_operators_prod: >-
+      [{% set cs_ver = (catalog_version | replace('.', '-')) -%}
+      {% set map = {
+        ocp_operator_mirror_prod_redhat_catalog_name: 'cs-redhat-operator-index-v' ~ cs_ver,
+        ocp_operator_mirror_prod_certified_catalog_name: 'cs-' ~ ocp_operator_mirror_prod_certified_catalog_name ~ '-index-v' ~ cs_ver,
+        ocp_operator_mirror_prod_community_catalog_name: 'cs-' ~ ocp_operator_mirror_prod_community_catalog_name ~ '-index-v' ~ cs_ver
+      } -%}
+      {%- for op in ocp_operator_mirror_operators_prod -%}
+      {{ op | combine({'catalog': map.get(op.catalog, op.catalog)}) }}{{ ',' if not loop.last else '' }}
+      {%- endfor -%}]

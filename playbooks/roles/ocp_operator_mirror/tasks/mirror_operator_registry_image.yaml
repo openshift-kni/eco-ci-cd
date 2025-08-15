@@ -1,0 +1,63 @@
+---
+- name: Get ClusterVersion
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: cv
+
+- name: Save current release image
+  ansible.builtin.set_fact:
+    release_image: "{{ cv.resources[0].status.desired.image }}"
+
+- name: Get operator-registry image pull spec from payload
+  ansible.builtin.command:
+    cmd: oc adm release info "{{ release_image }}" --image-for=operator-registry
+  register: operator_registry_cmd
+  changed_when: false
+
+- name: Save operator-registry image
+  ansible.builtin.set_fact:
+    operator_registry_image: "{{ operator_registry_cmd.stdout | trim }}"
+    operator_registry_repo: "{{ (operator_registry_cmd.stdout | trim).split('@')[0] }}"
+
+- name: Show operator-registry image
+  ansible.builtin.debug:
+    var: operator_registry_image
+
+- name: Compute operator-registry mirror values
+  ansible.builtin.set_fact:
+    operator_registry_mirror_image: "{{ operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url) }}"
+    operator_registry_mirror_repo: "{{ (operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url)).split('@')[0] }}"
+
+- name: Check operator-registry image on mirror # noqa: command-instead-of-shell
+  ansible.builtin.shell: >-
+    env -u REGISTRY_AUTH_FILE skopeo inspect --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+    docker://{{ operator_registry_mirror_image }}
+  register: opreg_check
+  failed_when: false
+  changed_when: false
+
+- name: Copy operator-registry image to mirror (if missing) # noqa: command-instead-of-shell
+  ansible.builtin.shell: >-
+    env -u REGISTRY_AUTH_FILE skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+    docker://{{ operator_registry_image }}
+    docker://{{ operator_registry_mirror_image }}
+  when: opreg_check.rc != 0
+  changed_when: true
+
+- name: Ensure IDMS for ocp-v4.0-art-dev is present
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: ImageDigestMirrorSet
+      metadata:
+        name: ocp-art-mirror
+      spec:
+        imageDigestMirrors:
+          - source: "{{ operator_registry_repo }}"
+            mirrors:
+              - "{{ operator_registry_mirror_repo }}"

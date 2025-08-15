@@ -1,0 +1,21 @@
+ocp_operator_mirror_registry_service_name: container-registry
+ocp_operator_mirror_folder: operators
+ocp_operator_mirror_disable_default_sources: true
+ocp_operator_mirror_prod_redhat_catalog_name: redhat-operators
+ocp_operator_mirror_prod_certified_catalog_name: certified-operators
+ocp_operator_mirror_prod_community_catalog_name: community-operators
+ocp_operator_mirror_prod_catalog_sources:
+  - "{{ ocp_operator_mirror_prod_redhat_catalog_name }}"
+  - "{{ ocp_operator_mirror_prod_certified_catalog_name }}"
+  - "{{ ocp_operator_mirror_prod_community_catalog_name }}"
+ocp_operator_mirror_prod_default_channel_map:
+  redhat-operators: stable
+  certified-operators: stable
+  community-operators: stable
+ocp_operator_mirror_folders:
+  - openshift-release-dev
+  - operators
+ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/repositories
+ocp_operator_mirror_pull_secret_path: /tmp/auth.json
+ocp_operator_mirror_image_set_configuration_path: /tmp/ImageSetConfiguration.yaml
+ocp_operator_mirror_workspace_path: /tmp/oc-mirror-workspace

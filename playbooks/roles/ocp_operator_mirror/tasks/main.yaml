@@ -1,0 +1,64 @@
+---
+- name: Verify that required variables are present
+  ansible.builtin.assert:
+    that:
+      - (ocp_operator_mirror_registry_url | default('')) | length > 0
+      - (ocp_operator_mirror_registry_user | default('')) | length > 0
+      - (ocp_operator_mirror_registry_password | default('')) | length > 0
+      - (ocp_operator_mirror_version | default('')) | length > 0
+      - (ocp_operator_mirror_kubeconfig | default('')) | length > 0
+    fail_msg: >-
+      Missing required variables:
+      ocp_operator_mirror_registry_url,
+      ocp_operator_mirror_registry_user,
+      ocp_operator_mirror_registry_password,
+      ocp_operator_mirror_version,
+      ocp_operator_mirror_kubeconfig
+
+- name: Disable default OperatorHub sources
+  when: ocp_operator_mirror_disable_default_sources | bool
+  kubernetes.core.k8s:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    state: patched
+    api_version: config.openshift.io/v1
+    kind: OperatorHub
+    name: cluster
+    merge_type: merge
+    definition:
+      spec:
+        disableAllDefaultSources: true
+
+- name: Reset registry storage
+  ansible.builtin.include_tasks: reset_registry_storage.yaml
+
+- name: Configure registry authentication
+  ansible.builtin.include_tasks: set_auth.yaml
+
+- name: Mirror operator-registry image
+  ansible.builtin.include_tasks: mirror_operator_registry_image.yaml
+
+- name: Filter operators by catalog
+  ansible.builtin.set_fact:
+    ocp_operator_mirror_operators_prod: >-
+      {{ (ocp_operator_mirror_operators | default([]))
+         | selectattr('catalog','in', (ocp_operator_mirror_prod_catalog_sources | default([])))
+         | list }}
+
+- name: Mirror operators from production catalogs
+  ansible.builtin.include_tasks: mirror_operators_prod.yaml
+  when: ((ocp_operator_mirror_operators_prod | default([])) | length) > 0
+
+- name: Show filtered production operators
+  when: ((ocp_operator_mirror_operators_prod | default([])) | length) > 0
+  ansible.builtin.debug:
+    var: ocp_operator_mirror_operators_prod
+
+- name: Merge transformed production operators into role variable ocp_operators_mirror_disconnected_config
+  ansible.builtin.set_fact:
+    ocp_operators_mirror_disconnected_config: "{{ ocp_operator_mirror_operators_prod }}"
+  when: ((ocp_operator_mirror_operators_prod | default([])) | length) > 0
+
+- name: Show ocp_operators_mirror_disconnected_config
+  ansible.builtin.debug:
+    var: ocp_operators_mirror_disconnected_config
+  when: ((ocp_operators_mirror_disconnected_config | default([])) | length) > 0

@@ -1,0 +1,11 @@
+---
+- name: Cleanup ocp_operator_mirror artifacts
+  loop:
+    - "{{ ocp_operator_mirror_pull_secret_path }}"
+    - "{{ ocp_operator_mirror_image_set_configuration_path }}"
+    - "{{ ocp_operator_mirror_workspace_path }}"
+  loop_control:
+    loop_var: artifact
+  ansible.builtin.file:
+    path: "{{ artifact }}"
+    state: absent

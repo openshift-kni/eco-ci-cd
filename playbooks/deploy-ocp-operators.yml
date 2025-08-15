@@ -37,34 +37,36 @@
 ---
 - name: Deploy operator
   hosts: bastion
-  gather_facts: false
+  gather_facts: true
   # Refer to the variables below as an example.
-  # vars:
-    # version: "4.17"
-    # operators: # Refer as example
-    #   - name: sriov-network-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: openshift-sriov-network-operator
-    #     deploy_default_config: true
-    #   - name: ptp-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: openshift-ptp
-    #     ns_labels:
-    #       workload.openshift.io/allowed: management
-    #       name: openshift-ptp
-    #   - name: kubernetes-nmstate-operator
-    #     catalog: redhat-operators
-    #     nsname: openshift-nmstate
-    #   - name: sriov-fec
-    #     catalog: certified-operators
-    #     nsname: vran-acceleration-operators
-    #     channel: stable
-    #   - name: metallb-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: metallb-system
-    #     channel: stable
-    #     deploy_default_config: true
-    #     og_spec: {}
+  vars:
+    disconnected: false
+      # version: "4.17"
+      # operators: # Refer as example
+      #   - name: sriov-network-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: openshift-sriov-network-operator
+      #     deploy_default_config: true
+      #   - name: ptp-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: openshift-ptp
+      #     ns_labels:
+      #       workload.openshift.io/allowed: management
+      #       name: openshift-ptp
+      #   - name: kubernetes-nmstate-operator
+      #     catalog: redhat-operators
+      #     nsname: openshift-nmstate
+      #   - name: sriov-fec
+      #     catalog: certified-operators
+      #     nsname: vran-acceleration-operators
+      #     channel: stable
+      #   - name: metallb-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: metallb-system
+      #     channel: stable
+      #     deploy_default_config: true
+      #     og_spec: {}
+
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   tasks:
@@ -75,11 +77,33 @@
           - openshift
         state: present
 
+    - name: Mirror Operators to internal registry for disconnected installation
+      when: disconnected | bool
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: disconnected.registry.local:5000
+        ocp_operator_mirror_registry_user: "{{ ansible_user }}"
+        ocp_operator_mirror_registry_password: "{{ ansible_password }}"
+        ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+
+    - name: Select operators source
+      ansible.builtin.set_fact:
+        operator_input: >-
+          {{
+            ocp_operators_mirror_disconnected_config
+            if (((ocp_operators_mirror_disconnected_config | default([])) | length) > 0)
+            else (operators | from_json if (operators is string) else operators)
+          }}
+
     - name: Install Operators
       ansible.builtin.include_role:
         name: ocp_operator_deployment
       vars:
         ocp_operator_deployment_version: "{{ version }}"
-        ocp_operator_deployment_operators: "{{ operators | from_json }}"
+        ocp_operator_deployment_operators: "{{ operator_input }}"
         ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
         ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"

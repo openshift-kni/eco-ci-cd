@@ -1,0 +1,22 @@
+---
+- name: Stop registry service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ ocp_operator_mirror_registry_service_name }}"
+    state: stopped
+
+- name: Remove repositories from registry storage
+  become: true
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_registry_path }}/{{ repo_folder_name }}"
+    state: absent
+  loop: "{{ ocp_operator_mirror_folders }}"
+  loop_control:
+    loop_var: repo_folder_name
+
+- name: Start registry service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ ocp_operator_mirror_registry_service_name }}"
+    state: started
+    enabled: true

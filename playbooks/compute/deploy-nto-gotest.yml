@@ -71,9 +71,10 @@
           export KUBECONFIG="{{ kubeconfig }}"
           export ROLE_WORKER_CNF=worker-cnf
           export PERF_TEST_PROFILE=performance
-          export IMAGE_REGISTRY="registry.redhat.io/"
+          export IMAGE_REGISTRY="registry.stage.redhat.io/"
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
+          export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
 
           echo "Installing ginkgo and gomega..."
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
@@ -84,7 +85,11 @@
           echo "Running gotests...  "
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
             --output-dir="{{ artifact_dir }}" \
-            --require-suite test/e2e/performanceprofile/functests/0_config \
-              test/e2e/performanceprofile/functests/1_performance \
-              test/e2e/performanceprofile/functests/6_mustgather_testing \
-              test/e2e/performanceprofile/functests/10_performance_ppc
+            --require-suite ${TEST_FOLDER_PATH}/0_config \
+                            ${TEST_FOLDER_PATH}/1_performance \
+                            ${TEST_FOLDER_PATH}/2_performance_update \
+                            ${TEST_FOLDER_PATH}/3_performance_status \
+                            ${TEST_FOLDER_PATH}/6_mustgather_testing \
+                            ${TEST_FOLDER_PATH}/7_performance_kubelet_node \
+                            ${TEST_FOLDER_PATH}/8_performance_workloadhints \
+                            ${TEST_FOLDER_PATH}/10_performance_ppc

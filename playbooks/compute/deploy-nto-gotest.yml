@@ -84,6 +84,7 @@
 
           echo "Running gotests...  "
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
+            --timeout=24h \
             --output-dir="{{ artifact_dir }}" \
             --require-suite ${TEST_FOLDER_PATH}/0_config \
                             ${TEST_FOLDER_PATH}/1_performance \

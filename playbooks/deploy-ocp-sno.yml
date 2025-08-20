@@ -1,0 +1,566 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Test thoroughly in your environment before production use.
+#
+# This Ansible playbook automates deployment of a Single Node OpenShift (SNO) cluster.
+# It prepares a bastion for disconnected installs (optional), configures network settings
+# for IPv4-only/IPv6-only/dual-stack scenarios, sets up tooling (client and installer),
+# and generates manifests. It also adjusts node network configuration and can mirror
+# release artifacts to a local registry when disconnected.
+
+## Overview:
+# - Bastion preparation (disconnected): dnsmasq, custom DNS records, local registry bootstrap
+# - Network setup on bastion: render variables; IPv4-only/IPv6-only toggles
+# - Tooling setup: OpenShift client, installer extraction, HTTP store
+# - Mirroring (disconnected): mirror OpenShift release to local registry
+# - Masters network configuration: routes/DNS for disconnected; enforce IPv4/IPv6-only
+# - Agent ISO generation
+# - KVM node processing
+# - Virtual control plane setup and VM lifecycle (destroy/create)
+# - Boot ISO for masters
+# - Installation monitoring
+
+## Prerequisites:
+# - Ansible 2.10+ on the control node
+# - SSH access to bastion (and hypervisors/VM hosts if using VMs)
+# - Inventory with required host_vars/group_vars populated
+# - If disconnected: reachable local registry and permissions
+#
+# Required variables (examples):
+# - release: OpenShift version or pullspec (e.g., 4.17, quay.io/...:4.15.44-x86_64)
+# - cluster_name: cluster identifier used for generated artifacts
+# - pull_secret_string: base64-encoded OpenShift pull secret (JSON)
+#
+# Optional variables:
+# - ipv4_only, ipv6_only, disconnected (booleans; defaults are false)
+# - disconnected_registry_url, disconnected_registry_port
+# - share_http_iso_port, dest_iso_dir, repo_root_path
+
+## Roles Requirements
+# - ocp_version_facts
+# - redhatci.ocp.setup_http_store
+# - oc_client_install
+# - redhatci.ocp.extract_openshift_installer
+# - redhatci.ocp.generate_manifests
+# - redhatci.ocp.generate_agent_iso
+# - redhatci.ocp.process_kvm_nodes
+# - redhatci.ocp.setup_sushy_tools
+# - redhatci.ocp.destroy_vms
+# - redhatci.ocp.create_vms
+# - redhatci.ocp.boot_iso
+# - redhatci.ocp.monitor_agent_based_installer
+
+## Usage:
+# - Ensure required variables are defined in inventory or passed as --extra-vars
+# - Examples:
+#   Deploy from quay pullspec (connected):
+#     ansible-playbook ./playbooks/deploy-ocp-sno.yml -i ./inventories/ocp-deployment/deploy-ocp-sno.yml \
+#       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.17.9-x86_64 cluster_name=my-sno'
+#
+#   Deploy specific version (connected):
+#     ansible-playbook ./playbooks/deploy-ocp-sno.yml -i ./inventories/ocp-deployment/deploy-ocp-sno.yml \
+#       --extra-vars 'release=4.17.9 cluster_name=my-sno'
+#
+#   Disconnected + IPv6-only from quay pullspec:
+#     ansible-playbook ./playbooks/deploy-ocp-sno.yml -i ./inventories/ocp-deployment/deploy-ocp-sno.yml \
+#       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.17.9-x86_64 cluster_name=my-sno disconnected=true ipv6_only=true'
+#
+#   Disconnected + IPv4-only from quay pullspec:
+#     ansible-playbook ./playbooks/deploy-ocp-sno.yml -i ./inventories/ocp-deployment/deploy-ocp-sno.yml \
+#       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.17.9-x86_64 cluster_name=my-sno disconnected=true ipv4_only=true'
+#
+#   Disconnected dual-stack from quay pullspec:
+#     ansible-playbook ./playbooks/deploy-ocp-sno.yml -i ./inventories/ocp-deployment/deploy-ocp-sno.yml \
+#       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.17.9-x86_64 cluster_name=my-sno disconnected=true'
+#
+# Notes:
+# - The playbook fails early if ipv6_only=true and disconnected=false (scenario not supported).
+# - For disconnected mirroring, a temporary pull secret file is created on bastion.
+---
+- name: Set up dnsmasq with custom DNS records and forwarding on bastion
+  hosts: bastion
+  gather_facts: true
+  become: true
+  vars:
+    disconnected: false
+    registry_service_name: container-registry
+    ipv6_only: false
+    ipv4_only: false
+  tasks:
+
+    - name: Fail if IPv6-only is requested without disconnected mode
+      ansible.builtin.fail:
+        msg: "Scenario not supported: ipv6_only=true requires disconnected=true."
+      when:
+        - ipv6_only | bool
+        - not (disconnected | bool)
+
+    - name: Populate pull secret
+      ansible.builtin.set_fact:
+        pull_secret: "{{ pull_secret_string | b64decode }}"
+
+    - name: Prepare disconnected infrastructure
+      when: disconnected | bool
+      block:
+        - name: Ensure cluster name is set
+          ansible.builtin.assert:
+            that:
+              - cluster_name is defined
+            fail_msg: "Please provide cluster_name variable to playbook"
+
+        - name: Ensure firewalld is running
+          become: true
+          ansible.builtin.service:
+            name: firewalld
+            state: started
+
+        - name: Ensure DNS ports are open in firewalld
+          loop:
+            - 53/udp
+            - 53/tcp
+          loop_control:
+            loop_var: port
+          ansible.posix.firewalld:
+            port: "{{ port }}"
+            permanent: true
+            state: enabled
+            immediate: true
+
+        - name: Install dnsmasq
+          ansible.builtin.package:
+            name: dnsmasq
+            state: present
+
+        - name: Configure dnsmasq main configuration
+          notify: Restart dnsmasq
+          ansible.builtin.template:
+            src: dnsmasq.conf.j2
+            dest: /etc/dnsmasq.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Create custom DNS records
+          notify: Restart dnsmasq
+          ansible.builtin.copy:
+            dest: /etc/dnsmasq.d/custom-records.conf
+            content: |
+              address=/{{ disconnected_registry_url }}/{{ ansible_host }}
+              {% if ansible_default_ipv6.address is defined and ansible_default_ipv6.address | length %}
+              address=/{{ disconnected_registry_url }}/{{ ansible_default_ipv6.address }}
+              {% endif %}
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Add registry credentials to pull secret
+          ansible.builtin.set_fact:
+            pull_secret: >-
+              {{
+                pull_secret | combine({
+                  'auths': pull_secret.auths | combine({
+                    (disconnected_registry_url ~ ':' ~ disconnected_registry_port): {
+                      'auth': ((ansible_user ~ ':' ~ ansible_password) | b64encode)
+                    }
+                  })
+                }, recursive=True)
+              }}
+
+        - name: Stop registry service
+          become: true
+          ansible.builtin.systemd:
+            name: "{{ registry_service_name }}"
+            state: stopped
+
+        - name: Remove registry data directory
+          become: true
+          ansible.builtin.file:
+            path: /opt/registry/data/docker
+            state: absent
+
+        - name: Start registry service
+          become: true
+          ansible.builtin.systemd:
+            name: "{{ registry_service_name }}"
+            state: started
+
+  handlers:
+    - name: Restart dnsmasq
+      ansible.builtin.service:
+        name: dnsmasq
+        state: restarted
+
+- name: Set up OpenShift tooling and artifacts on bastion; mirror release when disconnected
+  hosts: bastion
+  gather_facts: true
+  vars:
+    ipv4_only: false
+    ipv6_only: false
+    disconnected: false
+    pull_secret_file: /tmp/pullsecret
+  tasks:
+
+    - name: Render bastion variables from inventory strings
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        extra_cluster_networks: "{{ extra_cluster_networks_string | from_yaml }}"
+        cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml }}"
+        extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
+        extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
+        api_vips: "{{ api_vips_string | from_yaml }}"
+        ingress_vips: "{{ ingress_vips_string | from_yaml }}"
+
+    - name: Set up IPv4-only cluster network configuration
+      delegate_to: bastion
+      when: ipv4_only
+      ansible.builtin.set_fact:
+        api_vips: >-
+          {{ api_vips | select('match', '^[0-9.]+$') | list }}
+        extra_cluster_networks: ""
+        extra_machine_networks: ""
+        extra_service_networks: ""
+        ingress_vips: >-
+          {{ ingress_vips | select('match', '^[0-9.]+$') | list }}
+
+    - name: Set up IPv6-only cluster network configuration
+      delegate_to: bastion
+      when: ipv6_only
+      ansible.builtin.set_fact:
+        api_vips: >-
+          {{ api_vips | reject('match', '^[0-9.]+$') | list }}
+        cluster_network_cidr: "{{ extra_cluster_networks[0]['cidr'] }}"
+        cluster_network_host_prefix: "{{ extra_cluster_networks[0]['host_prefix'] }}"
+        machine_network_cidr: "{{ extra_machine_networks[0]['cidr'] }}"
+        service_network_cidr: "{{ extra_service_networks[0]['cidr'] }}"
+        extra_cluster_networks: ""
+        extra_machine_networks: ""
+        extra_service_networks: ""
+        ingress_vips: >-
+          {{ ingress_vips | reject('match', '^[0-9.]+$') | list }}
+
+    - name: Set OpenShift installer extract path
+      ansible.builtin.set_fact:
+        openshift_installer_extract_dest_path: "{{ dest_iso_dir }}/wip/extract"
+
+    - name: Install dependencies required by the installer
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - nmstate
+        state: present
+
+#     # The role below sets follwing facts. Please note values are just examples
+#     # ocp_version_facts_pull_spec: quay.io/openshift-release-dev/ocp-release:4.15.44-x86_64
+#     # ocp_version_facts_parsed_release: "4.15.44"
+#     # ocp_version_facts_major: "4"
+#     # ocp_version_facts_minor: "15"
+#     # ocp_version_facts_oc_client_pull_link:
+#     #   "https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/4.15.44/openshift-client-linux-4.15.44.tar.gz"
+#     # ocp_version_facts_z_stream: "44"
+#     # ocp_version_facts_dev_version: "rc1"
+    - name: Set OpenShift version facts
+      vars:
+        ocp_version_facts_release: "{{ release }}"
+      ansible.builtin.import_role:
+        name: ocp_version_facts
+
+    - name: Set up HTTP storage
+      vars:
+        http_port: "{{ share_http_iso_port }}"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.setup_http_store
+
+    - name: Deploy or redeploy the OpenShift client
+      vars:
+        oc_client_install_url: "{{ ocp_version_facts_oc_client_pull_link }}"
+        oc_client_install_archive_dest_dir: "{{ dest_iso_dir }}"
+        oc_clinet_install_version: "{{ ocp_version_facts_parsed_release }}"
+      ansible.builtin.import_role:
+        name: oc_client_install
+
+    - name: Download and extract the OpenShift installer
+      vars:
+        openshift_version: "{{ ocp_version_facts_parsed_release }}"
+        release_image: "{{ ocp_version_facts_pull_spec }}"
+        extract_dest_path: "{{ openshift_installer_extract_dest_path }}"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.extract_openshift_installer
+
+    - name: Mirror OpenShift release (disconnected)
+      when: disconnected | bool
+      vars:
+        mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
+        mor_version: "{{ ocp_version_facts_parsed_release }}"
+        mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
+        mor_cache_dir: "/opt/cache"
+        mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
+        mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        mor_registry_path: "ocp4/openshift"
+        mor_auths_file: "{{ pull_secret_file }}"
+        mor_force: true
+        mor_install_type: "abi"
+        mor_is_type: "idms"
+        mor_mirror_disk_images: true
+        mor_mirror_container_images: true
+        mor_write_custom_config: true
+      ansible.builtin.include_role:
+        name: redhatci.ocp.mirror_ocp_release
+
+- name: Render masters variables
+  hosts: masters
+  gather_facts: false
+  vars:
+    ipv6_only: false
+    ipv4_only: false
+    disconnected: false
+  tasks:
+
+    - name: Render masters variables
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        vm_spec: "{{ vm_spec_string | from_yaml }}"
+        network_interfaces: "{{ network_interfaces_string | from_yaml }}"
+        network_config: "{{ network_config_string | from_yaml }}"
+        mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
+
+
+    - name: Remove IPv4 default route for dual-stack (disconnected)
+      delegate_to: bastion
+      when: disconnected | bool
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                'routes': {
+                  'config': (
+                    network_config.raw.routes.config
+                      | default([])
+                      | rejectattr('destination', 'equalto', '0.0.0.0/0')
+                      | list
+                  )
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Replace DNS servers with internal registry; set routes to internal CIDR blocks (disconnected)
+      delegate_to: bastion
+      when: (disconnected | bool)
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              "raw": network_config.raw | combine({
+                "dns-resolver": {
+                  "config": {
+                    "server": [ hostvars['bastion']['ansible_host'] ]
+                  },
+                },
+                "routes": {
+                  "config": (
+                    (network_config.raw.routes.config | default([])) + [
+                      {
+                        "destination": "192.168.0.0/16",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "172.16.0.0/12",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "10.0.0.0/8",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "0.0.0.0/0",
+                        "next-hop-address": "169.254.0.1",
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      }
+                    ]
+                  )
+                },
+              })
+            }, recursive=True)
+          }}
+
+    - name: Remove IPv6 section from each interface
+      when: ipv4_only
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                'interfaces': network_config.raw.interfaces
+                  | map('dict2items')
+                  | map('rejectattr', 'key', 'equalto', 'ipv6')
+                  | map('items2dict')
+                  | list,
+                'routes': {
+                  'config': network_config.raw.routes.config
+                    | default([])
+                    | rejectattr('destination', 'search', ':')
+                    | list
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Remove IPv4 configuration from each interface (IPv6‑only cluster)
+      when: ipv6_only
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                "dns-resolver": {
+                  "config": {
+                    "server": [ hostvars['bastion']['ipv6'] ]
+                  },
+                },
+                'interfaces': network_config.raw.interfaces
+                  | map('dict2items')
+                  | map('rejectattr', 'key', 'equalto', 'ipv4')
+                  | map('items2dict')
+                  | list,
+                'routes': {
+                  'config': network_config.raw.routes.config
+                    | default([])
+                    | rejectattr('destination', 'search', '\.')
+                    | list
+                }
+              })
+            }, recursive=True)
+          }}
+        ansible_host: >-
+              {{
+                network_config.raw.interfaces
+                | selectattr('ipv6', 'defined')
+                | map(attribute='ipv6.address')
+                | map('first')
+                | select('defined')
+                | map(attribute='ip')
+                | first
+              }}
+
+- name: Set up bastion environment and generate manifests for cluster deployment
+  hosts: bastion
+  gather_facts: false
+  vars:
+    release: "4.17"
+    disconnected: false
+  tasks:
+
+    - name: Ensure cluster name is set
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+        fail_msg: "Please provide cluster_name variable to playbook"
+
+    - name: Remove previously generated cluster artifacts
+      ansible.builtin.file:
+        path: "{{ repo_root_path }}/generated/{{ cluster_name }}"
+        state: absent
+
+    - name: Generate deployment manifests for OpenShift installation
+      when: disconnected | bool is false
+      vars:
+        single_node_openshift_enabled: true
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_manifests
+
+    - name: Generate deployment manifests for disconnected OpenShift installation
+      vars:
+        single_node_openshift_enabled: true
+        use_local_mirror_registry: true
+        mirror_registry: "disconnected.registry.local:5000"
+        mirror_certificate: "{{ disconnected_registry_cert }}"
+        ocp_registry_namespace: ocp4
+        ocp_registry_image: openshift
+      when: disconnected | bool
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_manifests
+
+    - name: Generate boot ISO for agent-based installer
+      vars:
+        gai_cluster_name: "{{ cluster_name }}"
+        gai_repo_root_path: "{{ repo_root_path }}"
+        gai_pull_secret: "{{ pull_secret }}"
+        gai_agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
+        gai_discovery_iso_name: "agent.iso"
+        gai_remote_http_src: true
+        gai_http_delegate_host: "{{ inventory_hostname }}"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_agent_iso
+
+    - name: Process KVM nodes to set facts
+      ansible.builtin.import_role:
+        name: redhatci.ocp.process_kvm_nodes
+
+- name: Set up Virtual Control Plane
+  hosts: vm_hosts
+  tasks:
+
+    - name: Mutate SNO node name
+      ansible.builtin.set_fact:
+        kvm_nodes: "{{ [dict(kvm_nodes[0], name=hostvars['master0']['hostname'])] + kvm_nodes[1:] }}"
+
+    - name: Enable CRB repository
+      become: true
+      changed_when: false
+      ansible.builtin.command: "dnf config-manager --enable rhosp-rhel-9.4-crb"
+
+    - name: Setup sushy tool to emulate OOB interface
+      vars:
+        cert_state: "QE"
+        cert_locality: TLV
+        cert_organization: RH
+        cert_country: US
+        cert_organizational_unit: QE
+        fetched_dest: "/tmp/artifacts"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.setup_sushy_tools
+
+    - name: Destroy pre-installed VMs
+      vars:
+        vm_bridge_interface: dummy
+      ansible.builtin.import_role:
+        name: redhatci.ocp.destroy_vms
+
+    - name: Create VMs
+      ansible.builtin.import_role:
+        name: redhatci.ocp.create_vms
+
+- name: Boot Virtual Machines
+  hosts: masters
+  gather_facts: false
+  serial: 1
+  tasks:
+
+    - name: Boot ISO
+      vars:
+        boot_iso_url: "http://{{ hostvars['bastion']['ansible_default_ipv4']['address'] }}:{{ share_http_iso_port }}/{{ agent_iso_name }}"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.boot_iso
+
+- name: Monitor installation process of agent-based installer
+  hosts: bastion
+  gather_facts: false
+  tasks:
+
+    - name: Monitor agent‑based installation
+      vars:
+        agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
+        mabi_retry_install_complete_check: true
+        cluster: "{{ cluster_name }}"
+      ansible.builtin.import_role:
+        name: redhatci.ocp.monitor_agent_based_installer

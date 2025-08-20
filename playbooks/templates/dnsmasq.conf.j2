@@ -1,0 +1,11 @@
+# Forward to all configured upstream DNS servers
+server={{ dns }}
+
+# Do NOT read /etc/hosts
+no-hosts
+
+# Do NOT read /etc/resolv.conf
+no-resolv
+
+# Include additional config files
+conf-dir=/etc/dnsmasq.d

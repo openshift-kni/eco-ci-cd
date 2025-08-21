@@ -42,3 +42,5 @@
 - name: "Deploy operator"
   ansible.builtin.include_tasks: deploy_operator.yaml
   loop: "{{ ocp_operator_deployment_operators }}"
+  loop_control:
+    loop_var: operator_item

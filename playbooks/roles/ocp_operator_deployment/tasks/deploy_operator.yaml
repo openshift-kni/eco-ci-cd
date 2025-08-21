@@ -3,7 +3,7 @@
   ansible.builtin.set_fact:
     operator_group_spec_config: >-
       {{
-        item.og_spec | default({'targetNamespaces': [item.nsname]})
+        operator_item.og_spec | default({'targetNamespaces': [operator_item.nsname]})
       }}
 
 - name: Deploy operator via olm
@@ -12,24 +12,24 @@
   ansible.builtin.include_role:
     name: redhatci.ocp.olm_operator
   vars:
-    operator: "{{ item.name }}"
-    source: "{{ item.catalog }}"
-    namespace: "{{ item.nsname }}"
-    operator_group_name: "{{ item.og_name | default(item.name) }}"
-    channel: "{{ item.channel | default('') }}"
+    operator: "{{ operator_item.name }}"
+    source: "{{ operator_item.catalog }}"
+    namespace: "{{ operator_item.nsname }}"
+    operator_group_name: "{{ operator_item.og_name | default(operator_item.name) }}"
+    channel: "{{ operator_item.channel | default('') }}"
     ns_labels:
-      "{{ item.ns_labels | default(ocp_operator_deployment_default_label) }}"
+      "{{ operator_item.ns_labels | default(ocp_operator_deployment_default_label) }}"
     operator_group_spec: "{{ operator_group_spec_config }}"
-    starting_csv: "{{ item.starting_csv | default('') }}"
-    subscription_name: "{{ item.subscription_name | default(undefined) }}"
-    install_approval: "{{ item.install_approval | default('Automatic') }}"
+    starting_csv: "{{ operator_item.starting_csv | default('') }}"
+    subscription_name: "{{ operator_item.subscription_name | default(undefined) }}"
+    install_approval: "{{ operator_item.install_approval | default('Automatic') }}"
 
 - name: Apply default operator configuration if exist
   kubernetes.core.k8s:
-    template: "{{ role_path }}/templates/{{ item.name }}-config.j2"
+    template: "{{ role_path }}/templates/{{ operator_item.name }}-config.j2"
     state: present
     force: true
   register: result
   when:
-    - item.deploy_default_config is defined
-    - item.deploy_default_config
+    - operator_item.deploy_default_config is defined
+    - operator_item.deploy_default_config

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for junit2json
+# task list: convert.yml converts xml into JSON
+
+- name: Read file content
+  ansible.builtin.set_fact:
+    junit2json_xml_report_content: "{{ lookup('ansible.builtin.file', xml_report) }}"
+
+- name: Setup JSON report file name
+  ansible.builtin.set_fact:
+    junit2_json_report_path: >-
+      {{ ((xml_report | regex_replace('\\.xml$', '.json'))
+        if xml_report.endswith('.xml')
+        else (xml_report + '.json')) | basename }} # noqa redhat-ci[no-role-prefix]
+
+- name: Set junit2_output_report_path
+  ansible.builtin.set_fact:
+    junit2_output_report_path: "{{ junit2_output_dir }}/{{ junit2_json_report_path }}"
+
+- name: Write data as JSON object to file
+  ansible.builtin.copy:
+    content: "{{ junit2json_xml_report_content | junit2obj | to_nice_json(indent=2) }}"
+    dest: "{{ junit2_output_report_path }}"
+    mode: "0644"
+  when: not junit2_out_str | bool
+
+- name: Write data as JSON string to file
+  ansible.builtin.copy:
+    content: "{{ junit2json_xml_report_content | junit2obj }}"
+    dest: "{{ junit2_output_report_path }}"
+    mode: "0644"
+  when: junit2_out_str | bool
+
+- name: Update resulting reports list junit2_json_reports_list
+  ansible.builtin.set_fact:
+    junit2_json_reports_list: "{{ junit2_json_reports_list + [junit2_output_report_path] }}"

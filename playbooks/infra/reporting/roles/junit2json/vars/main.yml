@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# vars file for junit2json
+
+junit2_json_reports_list: []

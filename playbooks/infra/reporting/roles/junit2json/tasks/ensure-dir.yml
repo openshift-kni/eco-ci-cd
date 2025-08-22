@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file ensure-dir.yml for role junit2json
+# Ensures folder_path exists
+
+- name: Collect folder_path stat
+  ansible.builtin.stat:
+    path: "{{ folder_path }}"
+  register: _ensure_dir_stat
+
+- name: Ensure missing folder_path is created
+  ansible.builtin.file:
+    path: "{{ folder_path }}"
+    state: directory
+    mode: "0750"
+  when:
+    - not(_ensure_dir_stat.stat.isdir | default(false))

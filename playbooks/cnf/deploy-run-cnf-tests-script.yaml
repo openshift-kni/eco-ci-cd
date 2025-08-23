@@ -178,9 +178,9 @@
             registry: "{{ container_registry }}"
             cnf_image_tag: "{{ container_registry }}/cnf-tests-rhel8:v{{ containers_version }}"
 
-    - name: Run CNF tests via makefile. OCP > 4.15
+    - name: Run CNF tests via makefile. OCP >= 4.15
       when:
-        - ocp_minor_version|int > 15
+        - ocp_minor_version|int >= 15
       block:
         - name: Clone cnf-feature-deploy project
           block:

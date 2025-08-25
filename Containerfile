@@ -20,6 +20,7 @@ RUN pip3 install --no-cache-dir \
     ncclient \
     requests \
     jira \
+    lxml \
     junitparser
 
 # Copy application files to eco-ci-cd folder

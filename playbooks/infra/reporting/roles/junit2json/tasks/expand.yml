@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for role `junit2json`
+
+- name: Print xml_report value
+  ansible.builtin.debug:
+    var: xml_report
+    verbosity: 2
+
+- name: Collect xml_report stat
+  ansible.builtin.stat:
+    path: "{{ xml_report }}"
+  register: _xml_report_stat
+
+- name: Verify xml_report exists and is a regular file
+  ansible.builtin.assert:
+    that:
+      - not(_xml_report_stat.stat.isdir)
+      - _xml_report_stat.stat.exists
+    fail_msg: |
+      Verification failed. REASON: The file "{{ xml_report }}" must be an existing regular file.
+
+- name: Update junit2_reports_list with a JUnit XML report item
+  ansible.builtin.set_fact:
+    junit2_reports_list: "{{ junit2_reports_list + [xml_report] }}"
+  when:
+    - _xml_report_stat.stat.exists

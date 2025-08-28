@@ -34,13 +34,14 @@
 
 - name: Set Image version
   ansible.builtin.set_fact:
-    nto_sha: "{{ (nto_deployment.resources[0].spec.template.spec.containers[0].image | split(':'))[1] }}"
+    nto_image: "{{ nto_deployment.resources[0].spec.template.spec.containers[0].image }}"
 
 - name: Generate performance profile
   ansible.builtin.shell: |
       set -o pipefail
       podman run --rm --tls-verify=false --entrypoint performance-profile-creator -v \
-            {{ must_gather_dir }}:{{ must_gather_dir }}:z {{ nto_image }}@sha256:{{ nto_sha }}  \
+            --authfile "{{ pull_secret_string | b64decode }}" \
+            {{ must_gather_dir }}:{{ must_gather_dir }}:z {{ nto_image }}  \
             --must-gather-dir-path {{ must_gather_dir }} --rt-kernel={{ rt_kernel }} \
             --mcp-name worker-cnf --reserved-cpu-count=4 --topology-manager-policy=single-numa-node \
             --power-consumption-mode ultra-low-latency --user-level-networking | tee /tmp/performanceprofile-spec.yaml

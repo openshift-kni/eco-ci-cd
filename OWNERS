@@ -1,14 +1,16 @@
 reviewers:
-- natifridman
-- shaior
 - ccardenosa
 - cplacani
-- kononovn
 - eifrach
+- kononovn
+- mvk
+- natifridman
+- shaior
 approvers:
-- natifridman
-- shaior
 - ccardenosa
 - cplacani
-- kononovn
 - eifrach
+- kononovn
+- mvk
+- natifridman
+- shaior

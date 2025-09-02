@@ -8,8 +8,8 @@ metadata:
 {% endif %}
 spec:
     cpu:
-        isolated: "{{ generated_ppc_cpu['isolated'] }}"
-        reserved: "{{ generated_ppc_cpu['reserved'] }}"
+        isolated: "4-23"
+        reserved: "0-3"
 {% if hugepages is defined %}
     hugepages:
         defaultHugepagesSize: {{ hugepages['size'] | default('1G') }}
@@ -31,7 +31,7 @@ spec:
     numa:
         topologyPolicy: single-numa-node
     realTimeKernel:
-        enabled:  {{ rt_kernel }}
+        enabled: false
     workloadHints:
         highPowerConsumption: {{ high_power_consumption }}
         perPodPowerManagement: {{ per_pod_power_management }}

@@ -10,21 +10,12 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     python3-pip \
     && dnf clean all
 
-# Install ansible and ansible-lint
-RUN pip3 install --no-cache-dir \
-    ansible \
-    ansible-lint \
-    netaddr \
-    jmespath \
-    paramiko \
-    ncclient \
-    requests \
-    jira \
-    lxml \
-    junitparser
-
 # Copy application files to eco-ci-cd folder
 COPY . .
+
+# Install ansible and ansible-lint
+RUN pip3 install --no-cache-dir -r requirements.txt
+
 # Install requirements
 RUN ansible-galaxy collection install -r requirements.yml
 

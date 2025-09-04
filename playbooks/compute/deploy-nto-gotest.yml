@@ -40,6 +40,7 @@
         path: "{{ artifact_dir }}"
         state: directory
         recurse: true
+      become: true
       loop:
         - "{{ gotest_dir }}"
         - "{{ artifact_dir }}"

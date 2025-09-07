@@ -28,7 +28,7 @@
 
     - name: Ensure test directory does not exist
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item  | basename }}"
         state: absent
       become: true
       loop:
@@ -38,7 +38,7 @@
     - name: Ensure test directory is present
       ansible.builtin.file:
         mode: "0760"
-        path: "{{ artifact_dir }}"
+        path: "{{ item }}"
         state: directory
         recurse: true
       become: true

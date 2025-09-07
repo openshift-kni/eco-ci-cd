@@ -30,6 +30,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
+      become: true
       loop:
         - "{{ gotest_dir }}"
         - "{{ artifact_dir }}"

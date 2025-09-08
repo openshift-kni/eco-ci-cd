@@ -1,8 +1,0 @@
-ansible
-ansible-lint
-jira
-jmespath
-jsonpatch
-junitparser
-ncclient
-netaddr

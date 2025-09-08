@@ -2,7 +2,18 @@
 skip_list:
   - var-naming[no-role-prefix]
 
+rulesdir:
+  - hack/rules
+
+use_default_rules: true
+
+display_relative_path: true
+
 # Define paths or files to ignore
 exclude_paths:
-  - "tests/dast"
-  - "*collections*"
+  - .git*
+  - .venv*
+  - collections
+  - hack
+  - inventories
+  - tests

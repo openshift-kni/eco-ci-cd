@@ -10,5 +10,27 @@ jobs:
     steps:
       - name: Code Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install ansible-lint
+        # Install ansible-lint from same branch as GHA
+        run: >
+          pip install ansible-lint==25.8.2
+
+      - name: Install requirements for plugins
+        run: >
+          pip install \
+            ansible \
+            jira \
+            jmespath \
+            jsonpatch \
+            junitparser \
+            kubernetes \
+            ncclient \
+            netaddr
       - name: Run ansible-lint
-        uses: ansible/ansible-lint@v25.8.2
+        run: ansible-lint -v

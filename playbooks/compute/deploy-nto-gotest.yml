@@ -28,14 +28,14 @@
 
     - name: Ensure test directory does not exist
       ansible.builtin.file:
-        path: "{{ item | basename }}"
+        path: "{{ item }}"
         state: absent
       become: true
       loop:
         - "{{ gotest_dir }}"
         - "{{ artifact_dir }}"
 
-    - name: Ensure test directory is present
+    - name: Ensure artifact directory is present
       ansible.builtin.file:
         mode: "0766"
         path: "{{ artifact_dir }}"
@@ -80,7 +80,7 @@
           cd {{ gotest_dir }}
           go mod vendor && go mod tidy && make vet
 
-          echo "Running gotests...  "
+          echo "Running gotests..."
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
           {% if label_filter is defined %}
             --label-filter={{ label_filter }} && !hypershift \

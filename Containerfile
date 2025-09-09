@@ -8,25 +8,21 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     sshpass \
     python3 \
     python3-pip \
+    python3-wheel \
     && dnf clean all
 
-# Install ansible and ansible-lint
-RUN pip3 install --no-cache-dir \
-    ansible \
-    ansible-lint \
-    netaddr \
-    jmespath \
-    paramiko \
-    ncclient \
-    requests \
-    jira \
-    lxml \
-    junitparser
+# Copy python requirements file to /eco-ci-cd
+COPY pip.txt .
+# Install python dependencies
+RUN python3 -m pip install --prefer-binary --no-cache-dir --no-compile --use-pep517 -r pip.txt
+
+# Copy files affecting ansible-galaxy to /eco-ci-cd
+COPY requirements.yml ansible.cfg /eco-ci-cd/
+# Install galaxy requirements
+RUN ansible-galaxy collection install --no-cache --pre -r requirements.yml
 
 # Copy application files to eco-ci-cd folder
 COPY . .
-# Install requirements
-RUN ansible-galaxy collection install -r requirements.yml
 
 # Set entrypoint to bash
 ENTRYPOINT ["/bin/bash"]

@@ -1,5 +1,7 @@
 # eco-ci-cd
 
+
+
 Comprehensive Ansible automation framework for Telco Verification CI/CD pipelines, providing end-to-end OpenShift cluster deployment, CNF testing, and infrastructure management capabilities.
 
 ## Overview

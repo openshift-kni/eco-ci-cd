@@ -83,7 +83,7 @@
           echo "Running gotests..."
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
           {% if label_filter is defined %}
-            --label-filter={{ label_filter }} && !hypershift \
+            --label-filter="{{ label_filter }} && !hypershift" \
           {% endif %}
             --timeout=24h \
             --output-dir={{ artifact_dir }} \

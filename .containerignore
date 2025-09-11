@@ -1,0 +1,24 @@
+# .dockerignore - Negative ignore pattern: Allow only essential files
+# Ignore everything first
+**
+
+# Copy these directories
+!playbooks/
+!inventories/
+!scripts/
+
+# Copy these files
+!pip.txt
+!requirements.yml
+!ansible.cfg
+
+# Yet exclude specific subdirs even from allowed directories
+**/unit/
+**/fixtures/
+
+# Also exclude common unwanted patterns from allowed dirs
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.DS_Store
+**/*.log

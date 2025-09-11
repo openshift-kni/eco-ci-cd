@@ -1,8 +1,0 @@
-.ansible
-.vscode
-.gitignore
-*.md
-.idea
-*__pycache__*
-tests
-.github

@@ -52,3 +52,28 @@ jobs:
             echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
           fi
           pytest -v
+
+  sanity:
+    name: Ansible Playbooks Sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          py_exec="python${{ env.PYTHON_VERSION }}"
+          "${py_exec}" -m pip install --upgrade pip
+          test -f pip.txt && "${py_exec}" -m pip install -r pip.txt
+          test -f requirements.yml && ansible-galaxy install -r requirements.yml
+
+      - name: Make sanity tests script executable
+        run: chmod +x hack/sanity_tests.sh
+
+      - name: Run Ansible Playbook Sanity Checks
+        run: ./hack/sanity_tests.sh

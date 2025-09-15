@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - "*"
+# workflow level env variables
+env:
+  PYTHON_VERSION: "3.11"
+  PIPELINE_DEBUG: false
 
 jobs:
   ansible-lint:
@@ -17,3 +21,34 @@ jobs:
         uses: ansible/ansible-lint@v25
         with:
           args: "-v"
+
+  pytest:
+    name: Python Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          py="python${{ env.PYTHON_VERSION }}"
+          "${py}" -m pip install --upgrade pip
+          test -f pip-dev.txt && "${py}" -m pip install -r pip-dev.txt
+
+      - name: Run pytest
+        run: |
+          if [[ "{{ env.PIPELINE_DEBUG }}" = "debug" ]]; then
+            echo "Runtime information:"
+            python3 --version
+            pytest --version
+            echo "pip packages:"
+            echo "----8<--------8<-------8<--------8<-------8<--------8<----------8<--------8<----"
+            pip freeze --all
+            echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
+          fi
+          pytest -v

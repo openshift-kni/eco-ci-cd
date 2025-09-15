@@ -6,3 +6,4 @@ skip_list:
 exclude_paths:
   - "tests/dast"
   - "*collections*"
+  - ".venv"

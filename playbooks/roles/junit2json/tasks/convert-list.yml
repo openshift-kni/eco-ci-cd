@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file for junit2json
+# task list: convert-list.yml converts XML reports to JSON
+
+- name: Convert XML file to JSON
+  ansible.builtin.include_tasks:
+    file: convert.yml
+  vars:
+    j2j_xml_file: "{{ item }}"
+  loop: "{{ junit2_reports_list }}"

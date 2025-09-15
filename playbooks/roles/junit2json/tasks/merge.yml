@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file merge.yml for role junit2json
+# merges multiple XMLs into 1 and converts it into JSON
+
+- name: Merge multiple JSON report files into single consolidated report
+  ansible.builtin.set_fact:
+    junit2_result_merged_file: "{{ junit2_output_dir }}/{{ junit2_output_merged_report }}"
+
+- name: Merge multiple JSON report files into single consolidated report
+  ansible.builtin.set_fact:
+    junit2_result_merged_data: "{{ junit2_json_reports_list | reportsmerger }}"
+
+- name: Write merged data to file
+  ansible.builtin.copy:
+    content: "{{ junit2_result_merged_data | to_nice_json(indent=2) }}"
+    dest: "{{ junit2_result_merged_file }}"
+    mode: "0644"
+
+- name: Debug merged data
+  ansible.builtin.debug:
+    var: junit2_result_merged_data
+    verbosity: 2
+
+- name: Debug merged file path
+  ansible.builtin.debug:
+    var: junit2_result_merged_file
+    verbosity: 2

@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+---
+# tasks file process-dummy.yml for role junit2json
+# Refer to this role [doc/dummy_variables.md](doc/dummy_variables.md) for more details
+# Loads and sets dummy variables to prevent template evaluation errors in test data
+#
+# Parameters:
+#   j2j_dummy_var_action: "set" (default) - set dummy variables, "clear" - unset dummy variables
+
+- name: Load dummy variables configuration
+  ansible.builtin.include_vars:
+    file: dummy_variables.yml
+
+- name: Merge custom dummy variables with defaults
+  ansible.builtin.set_fact:
+    junit2_dummy_variables: "{{ junit2_dummy_variables | combine(junit2_custom_dummy_variables, recursive=True) }}"
+  when:
+    - junit2_custom_dummy_variables | length > 0
+    - junit2_dummy_variables | default({}) | length > 0
+
+- name: Debug dummy variables being set
+  ansible.builtin.debug:
+    var: junit2_dummy_variables
+    verbosity: 2
+  when:
+    - junit2_dummy_debug | bool
+    - junit2_dummy_variables | default({}) | length > 0
+
+- name: Check for conflicting variables before setting dummy variables
+  ansible.builtin.fail:
+    msg: |
+      ERROR: The dummy variable '{{ item.key }}' is already defined.
+      Current value: {{ vars[item.key] }}
+      Attempted dummy value: {{ item.value }}
+
+      This is due to a conflict between an actual ansible builtin variable and dummy variable
+      Please remove this variable from your team's dummy_variables.yml
+  loop: "{{ junit2_dummy_variables | default({}) | dict2items }}"
+  when:
+    - j2j_dummy_var_action | default("set") == "set"
+    - vars[item.key] is defined
+    - junit2_dummy_variables | default({}) | length > 0
+
+- name: Set dummy variables for template strings in test data
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ item.value }}" # noqa redhat-ci[no-role-prefix]
+  loop: "{{ junit2_dummy_variables | default({}) | dict2items }}"
+  when:
+    - j2j_dummy_var_action | default("set") == "set"
+    - vars[item.key] is not defined
+    - junit2_dummy_variables | default({}) | length > 0
+
+- name: Clear dummy variables
+  ansible.builtin.set_fact:
+    "{{ item.key }}": null # noqa redhat-ci[no-role-prefix]
+  loop: "{{ junit2_dummy_variables | default({}) | dict2items }}"
+  when:
+    - j2j_dummy_var_action | default("set") == "clear"
+    - vars[item.key] is defined
+    - junit2_dummy_variables | default({}) | length > 0

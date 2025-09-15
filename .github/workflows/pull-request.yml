@@ -4,6 +4,17 @@ on:
   pull_request:
     branches:
       - "*"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: false
+        type: boolean
+# workflow level env variables
+env:
+  PYTHON_VERSION: "3.11"
+
 jobs:
   ansible-lint:
     runs-on: ubuntu-latest
@@ -12,3 +23,34 @@ jobs:
         uses: actions/checkout@v5
       - name: Run ansible-lint
         uses: ansible/ansible-lint@v25
+
+  python-pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        env:
+          PY: "python${{ env.PYTHON_VERSION }}"
+        run: |
+          "${PY}" -m pip install --upgrade pip
+          test -f pip-dev.txt && "${PY}" -m pip install -r pip-dev.txt
+
+      - name: Run pytest
+        run: |
+          if [[ "${{ github.event.inputs.debug }}" = "true" ]]; then
+            echo "Runtime information:"
+            python3 --version
+            pytest --version
+            echo "pip packages:"
+            echo "----8<--------8<-------8<--------8<-------8<--------8<----------8<--------8<----"
+            pip freeze --all
+            echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
+          fi
+          pytest -v

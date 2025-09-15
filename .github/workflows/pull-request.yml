@@ -54,3 +54,41 @@ jobs:
             echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
           fi
           pytest -v
+
+  ansible-playbook-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        env:
+          PY: "python${{ env.PYTHON_VERSION }}"
+        run: |
+          "${PY}" -m pip install --upgrade pip
+          test -f pip.txt && "${PY}" -m pip install -r pip.txt
+          test -f requirements.yml && ansible-galaxy install -r requirements.yml
+
+      - name: Run Ansible Playbook Sanity Checks
+        run: |
+          if [[ "${{ github.event.inputs.debug }}" = "true" ]]; then
+            echo "Runtime information:"
+            python3 --version
+            ansible --version
+            echo "pip packages:"
+            echo "----8<--------8<-------8<--------8<-------8<--------8<----------8<--------8<----"
+            pip freeze --all
+            echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
+            for item in role collection; do
+              echo "ansible-galaxy ${item}s:"
+              echo "----8<--------8<-------8<--------8<-------8<--------8<----------8<--------8<----"
+              ansible-galaxy ${item} list
+              echo "---->8-------->8------->8-------->8------->8-------->8---------->8-------->8----"
+            done
+          fi
+          ./hack/sanity_tests.sh

@@ -24,6 +24,17 @@ jobs:
       - name: Run ansible-lint
         uses: ansible/ansible-lint@v25
 
+  containerfile-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@v5
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Containerfile
+
   python-pytest:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,26 @@
+---
+# Hadolint configuration file
+# See: https://github.com/hadolint/hadolint#configure
+
+# TODO: slowly reduce the list `ignored:`
+# Rules to ignore
+ignored:
+  - DL3006 # Ignore untagged BASE image
+  - DL3041 # Specify version with `dnf install -y <package>=<version>`
+  - DL3013 # Pin versions in pip. Instead of `pip install <package>` use `pip install <package>==<version>`
+
+# Set failure threshold (error, warning, info, style)
+failure-threshold: error
+
+# Trusted registries for base images
+trusted-registries:
+  - registry.access.redhat.com
+  - quay.io
+  - docker.io
+
+# Override default shell
+override:
+  error: []
+  warning: []
+  info: []
+  style: []

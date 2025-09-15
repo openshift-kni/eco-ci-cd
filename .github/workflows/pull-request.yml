@@ -22,6 +22,18 @@ jobs:
         with:
           args: "-v"
 
+  hadolint:
+    name: Containerfile linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@v4
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Containerfile
+
   pytest:
     name: Python Unit Tests
     runs-on: ubuntu-latest

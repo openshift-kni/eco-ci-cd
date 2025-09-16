@@ -1,0 +1,11 @@
+---
+- name: Check if the file exists and append to the output list
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: file_stat
+  loop: "{{ junit2_input_reports_list }}"
+
+- name: Append to the final list if the file exists
+  ansible.builtin.set_fact:
+    junit2_reports_list: "{{ junit2_reports_list + [item.stat.path] }}"
+  loop: "{{ file_stat.results | selectattr('stat.exists') }}"

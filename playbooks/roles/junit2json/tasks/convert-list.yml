@@ -3,6 +3,12 @@
 # tasks file for junit2json
 # task list: convert-list.yml converts XML reports to JSON
 
+- name: Ensure output directory exists
+  ansible.builtin.file:
+    path: "{{ junit2_output_dir }}"
+    state: directory
+    mode: "0755"
+
 - name: Convert XML file to JSON
   ansible.builtin.include_tasks:
     file: convert.yml

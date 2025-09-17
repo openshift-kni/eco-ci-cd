@@ -9,7 +9,7 @@
       - ((rs_collector_auth_token | default('') | length) > 0)
         or
         ((rs_collector_auth_headers | default([]) | length) > 0)
-      - rs_collector_url | regex_search('^https://')
+      - rs_collector_url is match('^https://')
       - rs_collector_url | length > 0
       - rs_combined_event_path | length > 0
     fail_msg: "One or more required conditions are not met"

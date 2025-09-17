@@ -399,6 +399,7 @@
           - koji
           - make
           - pip
+          - skopeo
         state: present
 
     - name: Download GO archive
@@ -465,6 +466,27 @@
           - kubernetes
         state: present
 
+    - name: Download oc-mirror archive
+      ansible.builtin.get_url:
+        url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+        dest: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+        mode: '0644'
+
+    - name: Extract oc-mirror archive
+      ansible.builtin.unarchive:
+        src: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+        dest: /tmp
+        remote_src: true
+
+    - name: Install oc-mirror binary
+      ansible.builtin.copy:
+        remote_src: true
+        src: /tmp/oc-mirror
+        dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+        mode: '0755'
+      notify:
+        - Cleanup oc-mirror artifacts
+
   handlers:
 
     - name: Remove golang archive
@@ -472,6 +494,16 @@
       ansible.builtin.file:
         state: absent
         path: "/tmp/{{ golang_pkg }}"
+
+    - name: Cleanup oc-mirror artifacts
+      ansible.builtin.file:
+        path: "{{ oc_mirror_artifact_item }}"
+        state: absent
+      loop:
+        - "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+        - "/tmp/oc-mirror"
+      loop_control:
+        loop_var: oc_mirror_artifact_item
 
     - name: Restart chrony
       ansible.builtin.systemd_service:

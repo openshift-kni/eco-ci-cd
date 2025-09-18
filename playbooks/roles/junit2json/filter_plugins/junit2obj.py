@@ -14,7 +14,7 @@
 
 from __future__ import absolute_import, division, print_function
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 import xml.etree.ElementTree as etree
 
 __metaclass__ = type

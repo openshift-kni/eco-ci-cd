@@ -3,9 +3,9 @@
 # before deploying to production.
 
 ## Overview:
-# This Ansible playbook automates the deployment of multiple OpenShift operators using
-# the **Operator Lifecycle Manager (OLM)**. It includes tasks to install necessary dependencies,
-# configure variables, and deploy the specified operators into the designated namespaces.
+# This Ansible playbook deploys multiple OpenShift operators using Operator Lifecycle Manager (OLM).
+# It supports both connected and disconnected flows. In disconnected mode, it mirrors operator
+# content to an internal registry and applies the generated CatalogSources/IDMS.
 
 ## Prerequisites:
 # - Ansible 2.9+ installed on the control node.
@@ -15,56 +15,73 @@
 # - pre-configured hosts_vars and grup_vars directories
 # - installed openshift cluster
 # - KUBECONFIG file
+# - Internal registry URL/credentials for disconnected mode (if disconnected=true)
+
+## Roles Used
+# - ocp_operator_mirror (disconnected mirroring)
+# - ocp_operator_deployment (installs operators)
 
 ## Roles Requirements
 # The playbook uses the following roles:
 # - redhatci.ocp.olm_operator
 # - redhatci.ocp.catalog_source
 
+## Variables
+# - disconnected (bool): set true to mirror & use internal registry, default is false
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - version (str): OCP major.minor used to pick catalog index images (e.g., 4.19)
+# - operators (list or JSON string): operator specs with fields such as:
+#     name, catalog, nsname, channel, og_name, deploy_default_config
+
 ## Usage:
 # - Ensure all required variables are defined in the inventory or host_vars/group_vars.
 # - Execute the playbook using Ansible's command-line tool:
-#
+
 # ansible-playbook ./playbooks/deploy-ocp-operators.yaml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
 # --extra-vars 'kubeconfig="/path/to/kubeconfig" \
+# disconnected=true \
 # version="4.16" operators=[
 # {"name":"sriov-network-operator","catalog":"redhat-operators","nsname":"openshift-sriov-network-operator","deploy_default_config":"true"},\
 # {"name":"metallb-operator","catalog":"redhat-operators","nsname":"metallb-system","channel":"stable","og_spec":{},deploy_default_config: "true"}]
-#
+
 # Notes:
 # - This playbook assumes the OCP cluster and bastion hosts are pre-installed and ready.
 # - Test in a non-production environment before deploying.
+# - operators can be a native YAML list or a JSON string; the play normalizes it.
+# - when disconnected=true, the play mirrors operators first, then installs from mirrored catalogs.
 ---
 - name: Deploy operator
   hosts: bastion
-  gather_facts: false
+  gather_facts: true
   # Refer to the variables below as an example.
-  # vars:
-    # version: "4.17"
-    # operators: # Refer as example
-    #   - name: sriov-network-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: openshift-sriov-network-operator
-    #     deploy_default_config: true
-    #   - name: ptp-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: openshift-ptp
-    #     ns_labels:
-    #       workload.openshift.io/allowed: management
-    #       name: openshift-ptp
-    #   - name: kubernetes-nmstate-operator
-    #     catalog: redhat-operators
-    #     nsname: openshift-nmstate
-    #   - name: sriov-fec
-    #     catalog: certified-operators
-    #     nsname: vran-acceleration-operators
-    #     channel: stable
-    #   - name: metallb-operator
-    #     catalog: redhat-operators-stage
-    #     nsname: metallb-system
-    #     channel: stable
-    #     deploy_default_config: true
-    #     og_spec: {}
+  vars:
+    disconnected: false
+      # version: "4.17"
+      # operators: # Refer as example
+      #   - name: sriov-network-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: openshift-sriov-network-operator
+      #     deploy_default_config: true
+      #   - name: ptp-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: openshift-ptp
+      #     ns_labels:
+      #       workload.openshift.io/allowed: management
+      #       name: openshift-ptp
+      #   - name: kubernetes-nmstate-operator
+      #     catalog: redhat-operators
+      #     nsname: openshift-nmstate
+      #   - name: sriov-fec
+      #     catalog: certified-operators
+      #     nsname: vran-acceleration-operators
+      #     channel: stable
+      #   - name: metallb-operator
+      #     catalog: redhat-operators-stage
+      #     nsname: metallb-system
+      #     channel: stable
+      #     deploy_default_config: true
+      #     og_spec: {}
+
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   tasks:
@@ -75,11 +92,33 @@
           - openshift
         state: present
 
+    - name: Mirror Operators to internal registry for disconnected installation
+      when: disconnected | bool
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: disconnected.registry.local:5000
+        ocp_operator_mirror_registry_user: "{{ ansible_user }}"
+        ocp_operator_mirror_registry_password: "{{ ansible_password }}"
+        ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+
+    - name: Select operators source
+      ansible.builtin.set_fact:
+        operator_input: >-
+          {{
+            ocp_operators_mirror_disconnected_config
+            if (((ocp_operators_mirror_disconnected_config | default([])) | length) > 0)
+            else (operators | from_json if (operators is string) else operators)
+          }}
+
     - name: Install Operators
       ansible.builtin.include_role:
         name: ocp_operator_deployment
       vars:
         ocp_operator_deployment_version: "{{ version }}"
-        ocp_operator_deployment_operators: "{{ operators | from_json }}"
+        ocp_operator_deployment_operators: "{{ operator_input }}"
         ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
         ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"

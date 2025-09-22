@@ -1,0 +1,16 @@
+galaxy_info:
+  author: Nikita Kononov
+  description: >
+    Ansible role that mirrors OpenShift operator catalogs and packages to an internal registry
+    and configures the cluster (CatalogSources and ImageDigestMirrorSets) for disconnected use.
+    Disclaimer: This role is provided as-is, without guarantees of support or maintenance.
+  company: Red Hat
+  license: Apache-2.0
+  standalone: true
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - ocp
+    - operators
+    - mirror
+    - disconnected
+dependencies: []

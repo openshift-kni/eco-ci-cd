@@ -1,0 +1,37 @@
+- name: Ensure auth.json is absent
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_pull_secret_path }}"
+    state: absent
+
+- name: Add disconnected registry entry
+  no_log: true
+  ansible.builtin.set_fact:
+    pull_secret: >-
+      {{
+        ocp_operator_mirror_pull_secret | combine({
+          'auths': ocp_operator_mirror_pull_secret.auths | combine({
+            (ocp_operator_mirror_registry_url): {
+              'auth': ((ocp_operator_mirror_registry_user ~ ':' ~ ocp_operator_mirror_registry_password) | b64encode)
+            }
+          })
+        }, recursive=True)
+      }}
+
+- name: Stat pull secret dir
+  ansible.builtin.stat:
+    path: "{{ ocp_operator_mirror_pull_secret_path | dirname }}"
+  register: pull_secret_dir_stat
+
+- name: Create pull secret dir when missing (do not change perms if exists)
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_pull_secret_path | dirname }}"
+    state: directory
+    mode: '0700'
+  when: not pull_secret_dir_stat.stat.exists
+
+- name: Write auth.json
+  no_log: true
+  ansible.builtin.copy:
+    content: "{{ pull_secret | to_nice_json }}"
+    dest: "{{ ocp_operator_mirror_pull_secret_path }}"
+    mode: '0600'

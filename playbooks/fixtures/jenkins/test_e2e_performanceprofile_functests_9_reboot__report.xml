@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <testsuites tests="5" disabled="2" errors="0" failures="0" time="6.061852835">
+      <testsuite name="Performance Addon Operator Reboot" package="/home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot" tests="5" disabled="0" skipped="2" errors="0" failures="0" time="6.061852835" timestamp="2024-12-08T01:51:52">
+          <properties>
+              <property name="SuiteSucceeded" value="true"></property>
+              <property name="SuiteHasProgrammaticFocus" value="false"></property>
+              <property name="SpecialSuiteFailureReason" value=""></property>
+              <property name="SuiteLabels" value="[]"></property>
+              <property name="RandomSeed" value="1733599714"></property>
+              <property name="RandomizeAllSpecs" value="false"></property>
+              <property name="LabelFilter" value=""></property>
+              <property name="FocusStrings" value=""></property>
+              <property name="SkipStrings" value=""></property>
+              <property name="FocusFiles" value=""></property>
+              <property name="SkipFiles" value=""></property>
+              <property name="FailOnPending" value="false"></property>
+              <property name="FailFast" value="false"></property>
+              <property name="FlakeAttempts" value="2"></property>
+              <property name="DryRun" value="false"></property>
+              <property name="ParallelTotal" value="1"></property>
+              <property name="OutputInterceptorMode" value=""></property>
+          </properties>
+          <testcase name="[BeforeSuite]" classname="Performance Addon Operator Reboot" status="passed" time="0.035336943">
+              <system-err>&gt; Enter [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:30 @ 12/08/24 01:51:52.799&#xA;&lt; Exit [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:30 @ 12/08/24 01:51:52.834 (35ms)&#xA;</system-err>
+          </testcase>
+          <testcase name="[It] [disruptive][node][kubelet][devicemanager] Device management tests Verify that pods requesting devices are correctly recovered on node restart" classname="Performance Addon Operator Reboot" status="skipped" time="0.000705274">
+              <skipped message="skipped - Need an explicit target node name, got none (env var: &#34;DEVICE_RECOVERY_TARGET_NODE&#34;)"></skipped>
+              <system-err>&gt; Enter [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.834&#xA;[SKIPPED] Need an explicit target node name, got none (env var: &#34;DEVICE_RECOVERY_TARGET_NODE&#34;)&#xA;In [BeforeEach] at: /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:73 @ 12/08/24 01:51:52.835&#xA;&lt; Exit [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.835 (1ms)&#xA;</system-err>
+          </testcase>
+          <testcase name="[It] [disruptive][node][kubelet][devicemanager] Device management tests Verify that pods requesting devices are not disrupted by a kubelet restart" classname="Performance Addon Operator Reboot" status="skipped" time="0.000424261">
+              <skipped message="skipped - Need an explicit target node name, got none (env var: &#34;DEVICE_RECOVERY_TARGET_NODE&#34;)"></skipped>
+              <system-err>&gt; Enter [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.835&#xA;[SKIPPED] Need an explicit target node name, got none (env var: &#34;DEVICE_RECOVERY_TARGET_NODE&#34;)&#xA;In [BeforeEach] at: /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:73 @ 12/08/24 01:51:52.836&#xA;&lt; Exit [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.836 (0s)&#xA;</system-err>
+          </testcase>
+          <testcase name="[AfterSuite]" classname="Performance Addon Operator Reboot" status="passed" time="6.024287209">
+              <system-err>&gt; Enter [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:41 @ 12/08/24 01:51:52.836&#xA;&lt; Exit [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:41 @ 12/08/24 01:51:58.86 (6.024s)&#xA;</system-err>
+          </testcase>
+          <testcase name="[ReportAfterSuite] e2e serial suite" classname="Performance Addon Operator Reboot" status="passed" time="3.3419e-05">
+              <system-err>&gt; Enter [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:55 @ 12/08/24 01:51:58.86&#xA;&lt; Exit [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:55 @ 12/08/24 01:51:58.86 (0s)&#xA;</system-err>
+          </testcase>
+      </testsuite>
+  </testsuites>

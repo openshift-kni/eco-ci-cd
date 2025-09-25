@@ -1,0 +1,335 @@
+{
+  "event": {
+    "metadata": {
+      "ci": {
+        "runner": {
+          "arch": [
+            "amd64",
+            "x86_64"
+          ],
+          "containers": "podman",
+          "executor": "2",
+          "name": "build-agent-linux-05",
+          "os": "linux"
+        },
+        "type": "jenkins",
+        "url": "https://ci.telco-v10n.fake.redhat.com"
+      },
+      "is_ci": true,
+      "job": {
+        "build": "152",
+        "build_url": "https://ci.telco-v10n.fake.redhat.com/job/cnf-run-kuku-ruku_ocp-4.18/job/feature%2Fnew-ui-component/152/",
+        "cause": [
+          "USERIDCAUSE",
+          "SCMTRIGGER"
+        ],
+        "name": "cnf-run-kuku-ruku_ocp-4.18/feature%2Fnew-ui-component",
+        "url": "https://ci.telco-v10n.fake.redhat.com/job/cnf-run-kuku-ruku_ocp-4.18/job/feature%2Fnew-ui-component/"
+      },
+      "pipeline": {},
+      "source": {
+        "actor": "sergioc",
+        "actor_name": "Sergio Constanza",
+        "change": {
+          "base_ref": "main",
+          "head_ref": "feature/new-ui-component",
+          "number": "87"
+        },
+        "change_url": "https://github.com/acme-corp/cnf-testing/pull/87",
+        "event_payload": {},
+        "owner": "",
+        "ref": "feature/new-ui-component",
+        "ref_name": "feature/new-ui-component",
+        "ref_type": "branch",
+        "repo": "",
+        "repo_path": "",
+        "repo_url": "https://github.com/acme-corp/cnf-testing.git",
+        "server_url": "",
+        "sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+      }
+    },
+    "test": {
+      "errors": 0,
+      "failures": 0,
+      "schema_version": "1.0.0",
+      "skipped": 2,
+      "test_suites": [
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "Performance Addon Operator configuration",
+          "properties": {
+            "DryRun": "false",
+            "FailFast": "false",
+            "FailOnPending": "false",
+            "FlakeAttempts": "2",
+            "FocusFiles": "",
+            "FocusStrings": "",
+            "LabelFilter": "",
+            "OutputInterceptorMode": "",
+            "ParallelTotal": "1",
+            "RandomSeed": "1733599714",
+            "RandomizeAllSpecs": "false",
+            "SkipFiles": "",
+            "SkipStrings": "",
+            "SpecialSuiteFailureReason": "",
+            "SuiteHasProgrammaticFocus": "false",
+            "SuiteLabels": "[]",
+            "SuiteSucceeded": "true"
+          },
+          "skipped": 0,
+          "test_cases": [
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[BeforeSuite]",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:30 @ 12/08/24 00:34:34.234\n< Exit [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:30 @ 12/08/24 00:34:34.266 (32ms)\n",
+              "time": 0.03215296
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[It] Status testing of performance profile [rfe_id:28881][performance] Performance Addons detailed status [test_id:30894] Tuned status name tied to Performance Profile",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.267\n< Exit [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.272 (6ms)\n> Enter [It] [test_id:30894] Tuned status name tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:59 @ 12/08/24 00:34:34.272\n< Exit [It] [test_id:30894] Tuned status name tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:59 @ 12/08/24 00:34:34.29 (17ms)\n> Enter [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:34:34.29\n< Exit [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:34:34.29 (0s)\n",
+              "time": 0.023077217
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[It] Status testing of performance profile [rfe_id:28881][performance] Performance Addons detailed status [test_id:33791] Should include the generated runtime class name",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.29\n< Exit [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.298 (8ms)\n> Enter [It] [test_id:33791] Should include the generated runtime class name - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:78 @ 12/08/24 00:34:34.298\n< Exit [It] [test_id:33791] Should include the generated runtime class name - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:78 @ 12/08/24 00:34:34.315 (17ms)\n> Enter [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:34:34.315\n< Exit [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:34:34.315 (0s)\n",
+              "time": 0.024941002
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[It] Status testing of performance profile [rfe_id:28881][performance] Performance Addons detailed status [test_id:29673] Machine config pools status tied to Performance Profile",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.315\n< Exit [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:34:34.323 (8ms)\n> Enter [It] [test_id:29673] Machine config pools status tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:94 @ 12/08/24 00:34:34.323\nSTEP: Creating bad MachineConfig - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:96 @ 12/08/24 00:34:34.323\nSTEP: Wait for MCP condition to be Degraded - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:101 @ 12/08/24 00:34:34.333\nDec  8 00:34:34.362: [INFO]: MCP \"worker-cnf\" is targeting 1 node(s)\nSTEP: Deleting bad MachineConfig and waiting when Degraded state is removed - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:112 @ 12/08/24 00:35:04.398\nDec  8 00:35:04.435: [INFO]: MCP \"worker-cnf\" is targeting 1 node(s)\n< Exit [It] [test_id:29673] Machine config pools status tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:94 @ 12/08/24 00:35:04.443 (30.12s)\n> Enter [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:35:04.443\n< Exit [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:35:04.443 (0s)\n",
+              "time": 30.127881175
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[It] Status testing of performance profile [rfe_id:28881][performance] Performance Addons detailed status [test_id:40402] Tuned profile status tied to Performance Profile",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:35:04.443\n< Exit [BeforeEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:37 @ 12/08/24 00:35:04.449 (6ms)\n> Enter [It] [test_id:40402] Tuned profile status tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:119 @ 12/08/24 00:35:04.449\nSTEP: Waiting for performance profile condition to be Degraded - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:148 @ 12/08/24 00:35:04.463\nSTEP: Deleting bad Tuned and waiting when Degraded state is removed - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:151 @ 12/08/24 00:35:04.468\n< Exit [It] [test_id:40402] Tuned profile status tied to Performance Profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:119 @ 12/08/24 00:35:34.489 (30.039s)\n> Enter [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:35:34.489\n< Exit [AfterEach] Status testing of performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/status.go:50 @ 12/08/24 00:35:34.493 (4ms)\n",
+              "time": 30.049557312
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[AfterSuite]",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:40 @ 12/08/24 00:35:34.493\n< Exit [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:40 @ 12/08/24 00:35:40.508 (6.015s)\n",
+              "time": 6.015423144
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[ReportAfterSuite] e2e serial suite",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:54 @ 12/08/24 00:35:40.508\n< Exit [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/3_performance_status/test_suite_performance_status_test.go:54 @ 12/08/24 00:35:40.508 (0s)\n",
+              "time": 0.000056319
+            }
+          ],
+          "tests": 7,
+          "time": 66.273,
+          "timestamp": "2024-12-08T00:34:34"
+        },
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "Performance Addon Operator Reboot",
+          "properties": {
+            "DryRun": "false",
+            "FailFast": "false",
+            "FailOnPending": "false",
+            "FlakeAttempts": "2",
+            "FocusFiles": "",
+            "FocusStrings": "",
+            "LabelFilter": "",
+            "OutputInterceptorMode": "",
+            "ParallelTotal": "1",
+            "RandomSeed": "1733599714",
+            "RandomizeAllSpecs": "false",
+            "SkipFiles": "",
+            "SkipStrings": "",
+            "SpecialSuiteFailureReason": "",
+            "SuiteHasProgrammaticFocus": "false",
+            "SuiteLabels": "[]",
+            "SuiteSucceeded": "true"
+          },
+          "skipped": 2,
+          "test_cases": [
+            {
+              "classname": "Performance Addon Operator Reboot",
+              "name": "[BeforeSuite]",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:30 @ 12/08/24 01:51:52.799\n< Exit [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:30 @ 12/08/24 01:51:52.834 (35ms)\n",
+              "time": 0.035336943
+            },
+            {
+              "classname": "Performance Addon Operator Reboot",
+              "name": "[It] [disruptive][node][kubelet][devicemanager] Device management tests Verify that pods requesting devices are correctly recovered on node restart",
+              "result": [
+                {
+                  "message": "skipped - Need an explicit target node name, got none (env var: \"DEVICE_RECOVERY_TARGET_NODE\")",
+                  "status": "skipped"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.834\n[SKIPPED] Need an explicit target node name, got none (env var: \"DEVICE_RECOVERY_TARGET_NODE\")\nIn [BeforeEach] at: /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:73 @ 12/08/24 01:51:52.835\n< Exit [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.835 (1ms)\n",
+              "time": 0.000705274
+            },
+            {
+              "classname": "Performance Addon Operator Reboot",
+              "name": "[It] [disruptive][node][kubelet][devicemanager] Device management tests Verify that pods requesting devices are not disrupted by a kubelet restart",
+              "result": [
+                {
+                  "message": "skipped - Need an explicit target node name, got none (env var: \"DEVICE_RECOVERY_TARGET_NODE\")",
+                  "status": "skipped"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.835\n[SKIPPED] Need an explicit target node name, got none (env var: \"DEVICE_RECOVERY_TARGET_NODE\")\nIn [BeforeEach] at: /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:73 @ 12/08/24 01:51:52.836\n< Exit [BeforeEach] [disruptive][node][kubelet][devicemanager] Device management tests - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/devices.go:70 @ 12/08/24 01:51:52.836 (0s)\n",
+              "time": 0.000424261
+            },
+            {
+              "classname": "Performance Addon Operator Reboot",
+              "name": "[AfterSuite]",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:41 @ 12/08/24 01:51:52.836\n< Exit [AfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:41 @ 12/08/24 01:51:58.86 (6.024s)\n",
+              "time": 6.024287209
+            },
+            {
+              "classname": "Performance Addon Operator Reboot",
+              "name": "[ReportAfterSuite] e2e serial suite",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:55 @ 12/08/24 01:51:58.86\n< Exit [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/9_reboot/test_suite_reboot_test.go:55 @ 12/08/24 01:51:58.86 (0s)\n",
+              "time": 0.000033419
+            }
+          ],
+          "tests": 5,
+          "time": 6.061,
+          "timestamp": "2024-12-08T01:51:52"
+        },
+        {
+          "errors": 0,
+          "failures": 0,
+          "name": "Performance Addon Operator configuration",
+          "properties": {
+            "DryRun": "false",
+            "FailFast": "false",
+            "FailOnPending": "false",
+            "FlakeAttempts": "2",
+            "FocusFiles": "",
+            "FocusStrings": "",
+            "LabelFilter": "",
+            "OutputInterceptorMode": "",
+            "ParallelTotal": "1",
+            "RandomSeed": "1733599714",
+            "RandomizeAllSpecs": "false",
+            "SkipFiles": "",
+            "SkipStrings": "",
+            "SpecialSuiteFailureReason": "",
+            "SuiteHasProgrammaticFocus": "false",
+            "SuiteLabels": "[]",
+            "SuiteSucceeded": "true"
+          },
+          "skipped": 0,
+          "test_cases": [
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[BeforeSuite]",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:60 @ 12/07/24 21:28:37.344\n< Exit [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:60 @ 12/07/24 21:28:37.344 (0s)\n",
+              "time": 0.000071124
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[It] [performance][config] Performance configuration Should successfully deploy the performance profile",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [BeforeEach] [performance][config] Performance configuration - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/utils/utils.go:24 @ 12/07/24 21:28:37.344\n< Exit [BeforeEach] [performance][config] Performance configuration - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/utils/utils.go:24 @ 12/07/24 21:28:37.361 (18ms)\n> Enter [It] Should successfully deploy the performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:48 @ 12/07/24 21:28:37.361\nSTEP: Getting MCP for profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:67 @ 12/07/24 21:28:37.362\nSTEP: Creating the PerformanceProfile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:76 @ 12/07/24 21:28:37.371\nDec  7 21:28:37.392: [WARNING]: A PerformanceProfile with name performance already exists! If created externally, tests might have unexpected behaviour\nSTEP: MCP is already unpaused - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:90 @ 12/07/24 21:28:37.392\nSTEP: Waiting for the MCP to pick the PerformanceProfile's MC - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:101 @ 12/07/24 21:28:37.392\nDec  7 21:28:37.397: [INFO]: Waiting for profile performance to be picked up by the worker-cnf machine config pool\nDec  7 21:28:37.404: [INFO]: Profile performance picked up by the worker-cnf machine config pool\nSTEP: Waiting for MCP being updated - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:110 @ 12/07/24 21:28:37.404\nDec  7 21:28:37.429: [INFO]: MCP \"worker-cnf\" is targeting 1 node(s)\nSTEP: Printing the updated profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:114 @ 12/07/24 21:28:37.446\n< Exit [It] Should successfully deploy the performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:48 @ 12/07/24 21:28:37.446 (85ms)\n",
+              "time": 0.10261885
+            },
+            {
+              "classname": "Performance Addon Operator configuration",
+              "name": "[ReportAfterSuite] e2e serial suite",
+              "result": [
+                {
+                  "message": "passed",
+                  "status": "passed"
+                }
+              ],
+              "system_err": "> Enter [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:65 @ 12/07/24 21:28:37.447\n< Exit [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:65 @ 12/07/24 21:28:37.447 (0s)\n",
+              "time": 0.000040724
+            }
+          ],
+          "tests": 3,
+          "time": 0.103,
+          "timestamp": "2024-12-07T21:28:37"
+        }
+      ],
+      "tests": 15,
+      "time": 72.437
+    }
+  },
+  "host": "https://httpbingo.org/status/403",
+  "source": "https://ci.telco-v10n.fake.redhat.com",
+  "sourcetype": "_json"
+}

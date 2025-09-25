@@ -141,8 +141,8 @@
       [{% set cs_ver = (catalog_version | replace('.', '-')) -%}
       {% set map = {
         ocp_operator_mirror_prod_redhat_catalog_name: 'cs-redhat-operator-index-v' ~ cs_ver,
-        ocp_operator_mirror_prod_certified_catalog_name: 'cs-' ~ ocp_operator_mirror_prod_certified_catalog_name ~ '-index-v' ~ cs_ver,
-        ocp_operator_mirror_prod_community_catalog_name: 'cs-' ~ ocp_operator_mirror_prod_community_catalog_name ~ '-index-v' ~ cs_ver
+        ocp_operator_mirror_prod_certified_catalog_name: 'cs-certified-operator-index-v' ~ cs_ver,
+        ocp_operator_mirror_prod_community_catalog_name: 'cs-community-operator-index-v' ~ cs_ver
       } -%}
       {%- for op in ocp_operator_mirror_operators_prod -%}
       {{ op | combine({'catalog': map.get(op.catalog, op.catalog)}) }}{{ ',' if not loop.last else '' }}

@@ -15,6 +15,17 @@
       ocp_operator_mirror_version,
       ocp_operator_mirror_kubeconfig
 
+- name: Verify that required variables are present for ART operators
+  when: ((ocp_operator_mirror_operators | default([]))| selectattr('catalog','search','art') | list) | length > 0
+  ansible.builtin.assert:
+    that:
+      - (ocp_operator_mirror_fbc_image_base | default('')) | length > 0
+      - (ocp_operator_mirror_art_images_share | default('')) | length > 0
+    fail_msg: >-
+      Missing required variables:
+      ocp_operator_mirror_fbc_image_base,
+      ocp_operator_mirror_art_images_share
+
 - name: Disable default OperatorHub sources
   when: ocp_operator_mirror_disable_default_sources | bool
   kubernetes.core.k8s:
@@ -37,12 +48,23 @@
 - name: Mirror operator-registry image
   ansible.builtin.include_tasks: mirror_operator_registry_image.yaml
 
-- name: Filter operators by catalog
+- name: Filter operators by catalog prod
   ansible.builtin.set_fact:
     ocp_operator_mirror_operators_prod: >-
       {{ (ocp_operator_mirror_operators | default([]))
          | selectattr('catalog','in', (ocp_operator_mirror_prod_catalog_sources | default([])))
          | list }}
+
+- name: Filter operators by catalog art
+  ansible.builtin.set_fact:
+    ocp_operator_mirror_operators_art: >-
+      {{ (ocp_operator_mirror_operators | default([]))
+         | selectattr('catalog','search','art')
+         | list }}
+
+- name: Mirror operators from art catalogs
+  ansible.builtin.include_tasks: mirror_operators_art.yaml
+  when: ((ocp_operator_mirror_operators_art | default([])) | length) > 0
 
 - name: Mirror operators from production catalogs
   ansible.builtin.include_tasks: mirror_operators_prod.yaml
@@ -53,10 +75,12 @@
   ansible.builtin.debug:
     var: ocp_operator_mirror_operators_prod
 
-- name: Merge transformed production operators into role variable ocp_operators_mirror_disconnected_config
+- name: Build merged operators list
   ansible.builtin.set_fact:
-    ocp_operators_mirror_disconnected_config: "{{ ocp_operator_mirror_operators_prod }}"
-  when: ((ocp_operator_mirror_operators_prod | default([])) | length) > 0
+    ocp_operators_mirror_disconnected_config: >-
+      {{ (ocp_operators_mirror_disconnected_config | default([]))
+         + (ocp_operator_mirror_operators_prod | default([]))
+         + (ocp_operator_mirror_operators_art | default([])) }}
 
 - name: Show ocp_operators_mirror_disconnected_config
   ansible.builtin.debug:

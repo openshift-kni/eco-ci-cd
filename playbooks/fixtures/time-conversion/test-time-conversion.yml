@@ -1,0 +1,31 @@
+---
+# Variables for test_time_conversion.yml playbook
+
+# Splunk configuration for testing
+splunk_url: https://httpbingo.org/status/403
+splunk_token: 0f5f7d4c-8d68-41ac-8374-79592a78d5a3 # not real
+splunk_channel: 25027c3b-6ec5-4b22-bc71-0a5bcd94da1e # not real
+splunk_index: myindex-devel
+
+junit2_input_reports_list:
+  - "{{ playbook_dir }}/fixtures/time-test/simple_test.xml"
+junit2_output_dir: "{{ playbook_dir }}/output"
+junit2_output_file: "{{ junit2_output_dir }}/simple_test.json"
+junit2_do_merge: false
+
+# Metadata generation
+rmg_existing_metadata_path: "{{ playbook_dir }}/fixtures/time-test/metadata.json"
+rmg_metadata_output_path: "{{ playbook_dir }}/output/metadata.json"
+
+# Report combination
+rc_metadata_path: "{{ rmg_metadata_output_path }}"
+rc_report_path: "{{ junit2_output_file }}"
+rc_combined_event_path: "{{ playbook_dir }}/output/combined-event.json"
+
+# Report sending
+rs_event_save: true
+rs_do_send: false
+rs_event_dump_file: "{{ playbook_dir }}/output/actual-event.json"
+rs_collector_auth_token: "{{ splunk_token }}"
+rs_collector_url: "{{ splunk_url }}"
+rs_combined_event_path: "{{ rc_combined_event_path }}"

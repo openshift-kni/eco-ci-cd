@@ -1,1 +1,2 @@
 ocp_operator_mirror_working_dir_path: working-dir/cluster-resources/
+ocp_operator_mirror_fbc_tmp_container_prefix: fbc_tmp_

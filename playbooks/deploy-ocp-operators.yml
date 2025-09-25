@@ -104,6 +104,8 @@
         ocp_operator_mirror_version: "{{ version }}"
         ocp_operator_mirror_operators: "{{ operators }}"
         ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base }}"
+        ocp_operator_mirror_art_images_share: "{{ art_share_image }}"
 
     - name: Select operators source
       ansible.builtin.set_fact:

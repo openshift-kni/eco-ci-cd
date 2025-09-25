@@ -15,7 +15,9 @@ ocp_operator_mirror_prod_default_channel_map:
 ocp_operator_mirror_folders:
   - openshift-release-dev
   - operators
+  - openshift4
 ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/repositories
 ocp_operator_mirror_pull_secret_path: /tmp/auth.json
 ocp_operator_mirror_image_set_configuration_path: /tmp/ImageSetConfiguration.yaml
 ocp_operator_mirror_workspace_path: /tmp/oc-mirror-workspace
+ocp_operator_mirror_fbc_extract_dir: /tmp/fbc/

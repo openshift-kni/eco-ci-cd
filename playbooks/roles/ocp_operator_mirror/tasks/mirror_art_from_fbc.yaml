@@ -1,0 +1,225 @@
+- name: Set extract directory path
+  ansible.builtin.set_fact:
+    extract_dir: "{{ ocp_operator_mirror_fbc_extract_dir }}/{{ operator.name }}-{{ ocp_operator_mirror_version }}"
+  changed_when: false
+
+- name: Remove extract directory if present
+  ansible.builtin.file:
+    path: "{{ extract_dir }}"
+    state: absent
+
+- name: Create extract directory
+  ansible.builtin.file:
+    path: "{{ extract_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Remove FBC index image (if present)
+  containers.podman.podman_image:
+    name: "{{ ocp_operator_mirror_fbc_image_base }}"
+    tag: "ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    state: absent
+    force: true
+
+- name: Pull FBC index image
+  containers.podman.podman_image:
+    name: "{{ ocp_operator_mirror_fbc_image_base }}"
+    tag: "ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    state: present
+    force: true
+
+- name: Mirror FBC index image to internal registry (if missing)
+  changed_when: true
+  ansible.builtin.command: >-
+    skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+    "docker://{{ ocp_operator_mirror_fbc_image_base }}:ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    "docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
+
+- name: Create temporary container
+  containers.podman.podman_container:
+    name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"
+    image: "{{ ocp_operator_mirror_fbc_image_base }}:ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    state: created
+
+- name: Copy /configs from container
+  ansible.builtin.command:
+    argv:
+      - podman
+      - cp
+      - "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}:/configs"
+      - "{{ extract_dir }}/"
+  changed_when: true
+
+- name: Remove temporary container
+  containers.podman.podman_container:
+    name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"
+    state: absent
+
+- name: Find package directory under /configs
+  ansible.builtin.find:
+    paths: "{{ extract_dir }}/configs"
+    file_type: directory
+    depth: 1
+  register: fbc_pkg_dirs
+
+- name: Fail if package directory count is not 1
+  ansible.builtin.fail:
+    msg: "Expected exactly one directory under /configs in {{ fbc_image }}, found {{ fbc_pkg_dirs.matched | default(0) }}"
+  when: (fbc_pkg_dirs.matched | default(0)) | int != 1
+
+- name: Set catalog.yaml path
+  ansible.builtin.set_fact:
+    catalog_path: "{{ (fbc_pkg_dirs.files | first).path }}/catalog.yaml"
+
+- name: Read catalog.yaml
+  ansible.builtin.slurp:
+    src: "{{ catalog_path }}"
+  register: cat
+
+- name: Parse catalog.yaml into documents
+  changed_when: false
+  ansible.builtin.set_fact:
+    docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
+
+- name: Detect package name from catalog
+  changed_when: false
+  ansible.builtin.set_fact:
+    package: "{{ (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first) }}"
+
+- name: Assert package is present in catalog
+  ansible.builtin.assert:
+    that:
+      - package is defined
+      - package | length > 0
+    fail_msg: "No package found in catalog. Packages seen: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}"
+
+- name: Collect all entry names for package/channel
+  changed_when: false
+  ansible.builtin.set_fact:
+    entry_names: >-
+      {{
+        (docs
+          | selectattr('schema','equalto','olm.channel')
+          | selectattr('package','equalto', package)
+          | selectattr('name','equalto', operator.channel)
+          | map(attribute='entries') | first | default([])
+          | map(attribute='name') | list)
+      }}
+
+- name: Ensure channel has entries
+  ansible.builtin.assert:
+    that:
+      - (entry_names | default([])) | length > 0
+    fail_msg: >-
+      No entries for package '{{ package }}' channel '{{ operator.channel }}'.
+      Available channels: {{
+        docs | selectattr('schema','equalto','olm.channel')
+             | selectattr('package','equalto', package)
+             | map(attribute='name') | list
+      }}
+
+- name: Filter entry names by version substring (optional)
+  changed_when: false
+  ansible.builtin.set_fact:
+    filtered_names: >-
+      {{
+        (entry_names | select('search', ocp_operator_mirror_bundle_version) | list)
+        if (ocp_operator_mirror_bundle_version is defined and (ocp_operator_mirror_bundle_version | length) > 0)
+        else entry_names
+      }}
+
+- name: Ensure version filter matches at least one entry
+  ansible.builtin.fail:
+    msg: "No bundle entry matched version filter '{{ ocp_operator_mirror_bundle_version }}' in channel '{{ operator.channel }}'"
+  when: filtered_names | length == 0
+
+- name: Select bundle (latest or filtered)
+  changed_when: false
+  ansible.builtin.set_fact:
+    chosen_name: "{{ (filtered_names | sort | last) }}"
+
+- name: Collect images from selected bundle
+  changed_when: false
+  ansible.builtin.set_fact:
+    chosen_images: >-
+      {{
+        (docs
+        | selectattr('schema','equalto','olm.bundle')
+        | selectattr('name','equalto', chosen_name))
+        | first
+        | combine({})
+        | dict2items
+        | selectattr('key','in',['image','relatedImages'])
+        | map(attribute='value')
+      }}
+
+- name: Build unique image list
+  changed_when: false
+  ansible.builtin.set_fact:
+    image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
+
+- name: Collect unique source repositories (strip digests)
+  changed_when: false
+  ansible.builtin.set_fact:
+    source_repos: "{{ image_list | map('regex_replace', '@.*', '') | list | unique }}"
+
+- name: Set mirror mapping for each repository
+  changed_when: false
+  ansible.builtin.set_fact:
+    image_digest_mirrors: >-
+      {{
+        (image_digest_mirrors | default([]))
+        + [ {
+          'source': item,
+          'mirrors': [
+            item | regex_replace('^[^/]+', ocp_operator_mirror_registry_url)
+          ]
+        } ]
+      }}
+  loop: "{{ source_repos }}"
+
+- name: Apply ImageDigestMirrorSet for ART images
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: ImageDigestMirrorSet
+      metadata:
+        name: "operators-art-mirror-{{ operator.name }}"
+      spec:
+        imageDigestMirrors: "{{ image_digest_mirrors }}"
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig | default(omit) }}"
+
+- name: Build source/destination image pairs (map prod digest to ART share; preserve original repo for destination)
+  changed_when: false
+  ansible.builtin.set_fact:
+    image_pairs: >-
+      {{
+        (image_pairs | default([])) + [
+          {
+            'src': (
+              (image | regex_search('@sha256:[0-9a-f]{64}'))
+              | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)
+            ),
+            'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
+          }
+        ]
+      }}
+  loop: "{{ image_list }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image }}"
+
+- name: Ensure CatalogSource for mirrored index is present
+  kubernetes.core.k8s:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: CatalogSource
+      metadata:
+        name: "{{ operator.catalog }}"
+        namespace: "openshift-marketplace"
+      spec:
+        sourceType: grpc
+        image: "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"

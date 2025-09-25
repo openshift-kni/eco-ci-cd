@@ -1,0 +1,19 @@
+- name: Resolve catalog paths for ART operators and build image pairs
+  ansible.builtin.include_tasks: mirror_art_from_fbc.yaml
+  loop: "{{ ocp_operator_mirror_operators_art }}"
+  loop_control:
+    loop_var: operator
+
+- name: Mirror images with skopeo
+  ansible.builtin.command: >-
+    skopeo copy --authfile "{{ ocp_operator_mirror_pull_secret_path }}" --all --src-tls-verify=false --dest-tls-verify=false
+    docker://{{ image.src }} docker://{{ image.dst }}
+  loop: "{{ image_pairs }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image.src }} -> {{ image.dst }}"
+  register: mirror_cmd
+  retries: 3
+  delay: 3
+  until: mirror_cmd.rc == 0
+  changed_when: true

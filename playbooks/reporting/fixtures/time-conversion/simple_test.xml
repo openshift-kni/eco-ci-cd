@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="TimeConversionTest" tests="2" failures="0" errors="0" time="125.456" timestamp="2024-12-18T10:30:45">
+  <testsuite name="Time Conversion Validation" tests="2" failures="0" errors="0" skipped="0" time="125.456" timestamp="2024-12-18T10:30:45">
+    <testcase classname="TimeTest" name="test_timestamp_conversion" time="60.123">
+      <system-out>Testing timestamp conversion from datetime to unix timestamp</system-out>
+    </testcase>
+    <testcase classname="TimeTest" name="test_splunk_format" time="65.333">
+      <system-out>Verifying Splunk event format includes correct time field</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

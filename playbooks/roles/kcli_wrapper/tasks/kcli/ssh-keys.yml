@@ -1,0 +1,6 @@
+---
+- name: Generate SSH keys
+  when: kcli_wrp_ssh_key.filename is defined
+  community.crypto.openssh_keypair:
+    path: "{{ kcli_wrp_ssh_key.filename }}"
+    size: "{{ kcli_wrp_ssh_key.size | default(2048) }}"

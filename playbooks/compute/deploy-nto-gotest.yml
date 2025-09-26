@@ -73,6 +73,7 @@
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
           export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
+          export MUSTGATHER_DIR="/mustgather"
 
           echo "Installing ginkgo and gomega..."
           go install github.com/onsi/ginkgo/v2/ginkgo@latest

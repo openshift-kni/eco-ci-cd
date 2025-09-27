@@ -17,12 +17,21 @@
     dest: "{{ registry_gui_nginx_config_dir }}/nginx.conf"
     mode: "0644"
 
+- name: Deploy temporary authfile for container pull
+  ansible.builtin.copy:
+    content: "{{ registry_gui_pull_secret }}"
+    mode: "0644"
+    dest: "{{ registry_gui_local_auth_file_path }}"
+  notify:
+    - Remove registry auth file
+
 - name: Deploy Nginx Load Balancer container
   containers.podman.podman_container:
     name: "{{ registry_gui_nginx_lb_container_name }}"
     image: "{{ registry_gui_nginx_lb_image }}"
     state: stopped
     detach: true
+    authfile: "{{ registry_gui_local_auth_file_path }}"
     network: host
     volumes:
       - "{{ registry_gui_nginx_config_dir }}/nginx.conf:/etc/nginx/nginx.conf:z"

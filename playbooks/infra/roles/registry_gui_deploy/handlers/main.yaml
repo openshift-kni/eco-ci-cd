@@ -12,3 +12,9 @@
   ansible.builtin.file:
     path: "{{ registry_gui_local_pull_secret_path }}"
     state: absent
+
+- name: Remove registry auth file
+  become: true
+  ansible.builtin.file:
+    path: "{{ registry_gui_local_auth_file_path }}"
+    state: absent

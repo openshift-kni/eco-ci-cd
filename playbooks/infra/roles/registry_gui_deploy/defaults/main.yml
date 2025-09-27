@@ -6,6 +6,7 @@ registry_gui_web_port: 80
 registry_gui_secret: "dummy"
 registry_gui_local_pull_secret_path: /tmp/htpasswd
 registry_gui_local_cert_path: /tmp/artifacts
+registry_gui_local_auth_file_path: /tmp/registry_gui_local_auth.json
 registry_gui_registry_ui_image: docker.io/joxit/docker-registry-ui:2.5.7
 registry_gui_registry_ui_container_name: ocpdiscon-registry-ui
 registry_gui_nginx_lb_container_name: ocpdiscon-nginx-lb

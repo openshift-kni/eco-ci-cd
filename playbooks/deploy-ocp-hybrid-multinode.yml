@@ -17,6 +17,11 @@
 # - VM and BM booting: Deploys instances and boots nodes using an agent-based installer.
 # - Installation monitoring: Ensures the installation process completes successfully.
 # - Deploying additional cluster-wide trusted registries.
+# - Optional internal registry flow: when `internal_registry: true`, configure DNS for the
+#     internal registry, add auth to the cluster pull-secret, and trust the registry CA by
+#     creating `openshift-config/<internal_registry_name>` ConfigMap with key `host..port`
+#     (colon replaced by two dots) and patching `image.config.openshift.io/cluster` with
+#     `spec.additionalTrustedCA.name`.
 
 ## Prerequisites:
 # - Ansible 2.10+ installed on the control node.
@@ -28,6 +33,7 @@
 
 # optional variables:
 # - extra_manifests: list of extra manifests for OCP installation
+# - internal_registry (bool): enable internal registry preparation and CA trust
 
 ## Roles Requirements
 # The playbook uses role:
@@ -59,6 +65,9 @@
 #       --extra-vars 'release=quay.io/openshift-release-dev/ocp-release:4.15.44-x86_64'
 #   Deploy specific version:
 #     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml --extra-vars 'release=4.17.9'
+#   Deploy with trusted internal registry:
+#     ansible-playbook ./playbooks/deploy-ocp-hybrid-multinode.yml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml
+#       --extra-vars "release=4.17.9 internal_registry=true"
 
 ## Optional Environment Variables (for each worker node):
 # - <inventory_hostname>_EXTERNAL_INTERFACE:   Name of the external network interface. Example worker0_EXTERNAL_INTERFACE=eth2
@@ -74,6 +83,8 @@
 - name: Render nodes variables
   hosts: nodes
   gather_facts: false
+  vars:
+    internal_registry: false
   tasks:
     - name: Render nodes variables
       delegate_to: bastion
@@ -90,6 +101,22 @@
     - name: Process KVM nodes to set facts
       ansible.builtin.import_role:
         name: redhatci.ocp.process_kvm_nodes
+
+    - name: Replace DNS servers with internal registry
+      when: (internal_registry | bool)
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              "raw": network_config.raw | combine({
+                "dns-resolver": {
+                  "config": {
+                    "server": [ hostvars['bastion']['ansible_host'] ]
+                  },
+                },
+              })
+            }, recursive=True)
+          }}
 
 # Process optional environment Variables if present
 - name: Mutate worker network configuration if env variables are present
@@ -158,8 +185,10 @@
 - name: Setup bastion environment and generate manifests for cluster deployment
   hosts: bastion
   vars:
+    internal_registry: false
     release: "4.17"
     pull_secret: "{{ pull_secret_string | b64decode }}"
+    registry_service_name: container-registry
   tasks:
 
     - name: Render bastion variables
@@ -171,6 +200,102 @@
         extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
         api_vips: "{{ api_vips_string | from_yaml }}"
         ingress_vips: "{{ ingress_vips_string | from_yaml }}"
+
+    - name: Prepare disconnected infrastructure
+      become: true
+      when: internal_registry | bool
+      block:
+        - name: Ensure cluster name is set
+          ansible.builtin.assert:
+            that:
+              - cluster_name is defined
+            fail_msg: "Please provide cluster_name variable to playbook"
+
+        - name: Ensure firewalld is running
+          become: true
+          ansible.builtin.service:
+            name: firewalld
+            state: started
+
+        - name: Ensure DNS ports are open in firewalld
+          loop:
+            - 53/udp
+            - 53/tcp
+          loop_control:
+            loop_var: port
+          ansible.posix.firewalld:
+            port: "{{ port }}"
+            permanent: true
+            state: enabled
+            immediate: true
+
+        - name: Install dnsmasq
+          ansible.builtin.package:
+            name: dnsmasq
+            state: present
+
+        - name: Restart dnsmasq
+          ansible.builtin.service:
+            name: dnsmasq
+            enabled: true
+            state: stopped
+
+        - name: Configure dnsmasq main configuration
+          ansible.builtin.template:
+            src: dnsmasq.conf.j2
+            dest: /etc/dnsmasq.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Create custom DNS records
+          ansible.builtin.copy:
+            dest: /etc/dnsmasq.d/custom-records.conf
+            content: |
+              address=/{{ disconnected_registry_url }}/{{ ansible_host }}
+              {% if ansible_default_ipv6.address is defined and ansible_default_ipv6.address | length %}
+              address=/{{ disconnected_registry_url }}/{{ ansible_default_ipv6.address }}
+              {% endif %}
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Restart dnsmasq
+          ansible.builtin.service:
+            name: dnsmasq
+            enabled: true
+            state: started
+
+        - name: Add registry credentials to pull secret
+          ansible.builtin.set_fact:
+            pull_secret: >-
+              {{
+                pull_secret | combine({
+                  'auths': pull_secret.auths | combine({
+                    (disconnected_registry_url ~ ':' ~ disconnected_registry_port): {
+                      'auth': ((ansible_user ~ ':' ~ ansible_password) | b64encode)
+                    }
+                  })
+                }, recursive=True)
+              }}
+
+        - name: Stop registry service
+          become: true
+          ansible.builtin.systemd:
+            name: "{{ registry_service_name }}"
+            state: stopped
+
+        - name: Remove registry data directory
+          become: true
+          ansible.builtin.file:
+            path: /opt/registry/data/docker
+            state: absent
+
+        - name: Start registry service
+          become: true
+          ansible.builtin.systemd:
+            name: "{{ registry_service_name }}"
+            state: started
 
     - name: Set openshift-installer path fact
       ansible.builtin.set_fact:
@@ -338,6 +463,9 @@
 - name: Monitor installation process of agent-based installer
   hosts: bastion
   gather_facts: false
+  vars:
+    internal_registry: false
+    internal_registry_name: internal-registry-ca
   tasks:
 
     - name: Monitor agent based installation
@@ -369,5 +497,40 @@
       environment:
         K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
       vars:
-        pull_secret: "{{ pull_secret_raw }}"
+        ocp_pull_secret: "{{ pull_secret_raw }}"
         trusted_registries: "{{ additional_trusted_registries }}"
+
+    - name: Configure trusted CA for internal registry
+      when: internal_registry | default(false) | bool
+      block:
+        - name: Build additional trusted registries map
+          ansible.builtin.set_fact:
+            additional_trusted_registries: "{{ dict([(registry_key_name, disconnected_registry_cert)]) }}"
+          vars:
+            registry_hostport: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+            registry_key_name: "{{ registry_hostport | regex_replace(':', '..') }}"
+
+        - name: Create/Update trusted CA ConfigMap
+          kubernetes.core.k8s:
+            state: present
+            kubeconfig: "{{ kubeconfig }}"
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ internal_registry_name }}"
+                namespace: openshift-config
+              data: "{{ additional_trusted_registries }}"
+
+        - name: Patch Image config to use additionalTrustedCA
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: config.openshift.io/v1
+            kind: Image
+            name: cluster
+            state: present
+            merge_type: [merge]
+            definition:
+              spec:
+                additionalTrustedCA:
+                  name: "{{ internal_registry_name }}"

@@ -7,5 +7,10 @@
       ansible.builtin.debug:
         msg: "Do some pre-test activities"
 
-- name: Import main report send playbook
-  import_playbook: report-send.yml
+- name: Validate report send playbook
+  ansible.builtin.import_playbook: validate-report-send.yml
+  when:
+    - lookup('file', 'validate-report-send.yml', errors='ignore') != ''
+
+- name: Import the main report send playbook
+  ansible.builtin.import_playbook: report-send.yml

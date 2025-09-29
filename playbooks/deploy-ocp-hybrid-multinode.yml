@@ -503,9 +503,18 @@
     - name: Configure trusted CA for internal registry
       when: internal_registry | default(false) | bool
       block:
+        # In Prow environment, the disconnected registry certificate is in raw string format, we need to re-format it.
+        # Based on the env variable SHARED_DIR, we can determine if we are in Prow environment.
+        - name: Format disconnected registry certifcate if needed
+          when: lookup('env', 'SHARED_DIR') | length > 0
+          ansible.builtin.set_fact:
+            disconnected_registry_cert_formatted: "-----BEGIN CERTIFICATE-----\n
+              {{ disconnected_registry_cert.strip('-----BEGIN CERTIFICATE-----').
+              strip('-----END CERTIFICATE-----') | regex_replace('\\s+', '\n')}}\n-----END CERTIFICATE-----"
+
         - name: Build additional trusted registries map
           ansible.builtin.set_fact:
-            additional_trusted_registries: "{{ dict([(registry_key_name, disconnected_registry_cert)]) }}"
+            additional_trusted_registries: "{{ dict([(registry_key_name, disconnected_registry_cert_formatted | default(disconnected_registry_cert))]) }}"
           vars:
             registry_hostport: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
             registry_key_name: "{{ registry_hostport | regex_replace(':', '..') }}"

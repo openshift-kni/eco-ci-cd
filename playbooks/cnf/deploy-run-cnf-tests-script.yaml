@@ -250,7 +250,7 @@
           ansible.builtin.set_fact:
             dynamic_tuning_branch: "{{ 'release-' + version if tuning_github_response.status == 200 else 'master' }}"
 
-        - name: Update all submodules
+        - name: Update all submodules # noqa command-instead-of-module
           changed_when: false
           environment:
             METALLB_OPERATOR_TARGET_COMMIT: "{{ dynamic_metallb_branch }}"
@@ -258,7 +258,8 @@
             CLUSTER_NODE_TUNING_OPERATOR_TARGET_COMMIT: "{{ dynamic_tuning_branch }}"
             PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
           ansible.builtin.shell: |
-            make init-git-submodules
+            git submodule update --init --force
+            cnf-tests/hack/init-git-submodules.sh
           args:
             chdir: "{{ cnf_test_dir }}/{{ cnftests_git_dest }}"
 

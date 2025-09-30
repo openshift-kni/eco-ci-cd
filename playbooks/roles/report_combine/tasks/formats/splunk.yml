@@ -8,6 +8,29 @@
       test: "{{ rc_test_data }}"
       metadata: "{{ rc_meta_data }}"
 
+- name: Set default metadata based event time
+  ansible.builtin.set_fact:
+    rc_event_time: >-
+      {{
+        (((rc_event.metadata.job.created_at.replace('Z', '+00:00') | to_datetime).timestamp() * 1000) | int / 1000.0) | string
+      }}
+  when:
+    - rc_event_time | default('') | length == 0
+    - rc_event.metadata.job is defined
+    - rc_event.metadata.job.created_at | default('') | length > 0
+
+- name: Generate fallback event time if metadata does not have it
+  ansible.builtin.set_fact:
+    rc_event_time: "{{ ansible_date_time.epoch }}.{{ '%03d' | format((ansible_date_time.microsecond | int / 1000) | int) }}"
+  when:
+    - rc_event_time | default('') | length == 0
+
+- name: Ensure rc_event_time can be converted to a float
+  ansible.builtin.assert:
+    that:
+      - rc_event_time | float is defined
+    fail_msg: "Event time {{ rc_event_time }} cannot be converted to a float"
+
 - name: Create Splunk-specific event payload
   ansible.builtin.set_fact:
     rc_combined_event:
@@ -15,20 +38,7 @@
       "event": "{{ rc_event }}"
       "host": "{{ rc_event_host }}"
       "sourcetype": "{{ rc_event_sourcetype }}"
-
-- name: Add optional timestamp if available in metadata
-  ansible.builtin.set_fact:
-    rc_combined_event: "{{ rc_combined_event | combine({'time': rc_event_time}) }}"
-  vars:
-    rc_event_time: >-
-      {{
-        (rc_meta_data.job.created_at | to_datetime('%Y-%m-%dT%H:%M:%S.%f')).strftime('%s') | int
-          if (rc_meta_data.job.created_at is defined) else omit
-      }}
-  when:
-    - rc_meta_data.job is defined
-    - rc_meta_data.job.created_at is defined
-    - rc_meta_data.job.created_at | length > 0
+      "time": "{{ rc_event_time | float }}"
 
 - name: Print Splunk event structure
   ansible.builtin.debug:

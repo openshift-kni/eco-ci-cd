@@ -243,13 +243,21 @@
         return_content: true
       register: ca_cert
 
+    - name: Set up external registry CA data
+      ansible.builtin.set_fact:
+        cm_data: "{{ {internal_container_registry_name: ca_cert.content} }}"
+
     - name: Set up additional trusted CA for container repo using configmap
       kubernetes.core.k8s:
         state: present
-        definition: "{{ lookup('template', 'templates/configmap_ca.j2') }}"
-      vars:
-        registry_tls_certificate: "{{ ca_cert.content }}"
-        config_map_name: "{{ trusted_ca_config_map_name }}"
+        merge_type: [merge]
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ trusted_ca_config_map_name }}"
+            namespace: openshift-config
+          data: "{{ cm_data }}"
 
     - name: Apply image.config.openshift.io configuration change
       kubernetes.core.k8s_json_patch:

@@ -465,7 +465,7 @@
   gather_facts: false
   vars:
     internal_registry: false
-    internal_registry_name: internal-registry-ca
+    trusted_ca_config_map_name: "external-registry"
   tasks:
 
     - name: Monitor agent based installation
@@ -512,34 +512,36 @@
               {{ disconnected_registry_cert.strip('-----BEGIN CERTIFICATE-----').
               strip('-----END CERTIFICATE-----') | regex_replace('\\s+', '\n')}}\n-----END CERTIFICATE-----"
 
-        - name: Build additional trusted registries map
+        - name: Set up external registry CA data
           ansible.builtin.set_fact:
-            additional_trusted_registries: "{{ dict([(registry_key_name, disconnected_registry_cert_formatted | default(disconnected_registry_cert))]) }}"
-          vars:
-            registry_hostport: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
-            registry_key_name: "{{ registry_hostport | regex_replace(':', '..') }}"
+            configmap_data: >-
+              {{
+                {
+                  ((disconnected_registry_url ~ '..' ~ disconnected_registry_port)):(disconnected_registry_cert_formatted | default(disconnected_registry_cert))
+                }
+              }}
 
-        - name: Create/Update trusted CA ConfigMap
+        - name: Set up additional trusted CA for container repo using configmap
           kubernetes.core.k8s:
-            state: present
             kubeconfig: "{{ kubeconfig }}"
+            state: present
+            merge_type: [merge]
             definition:
               apiVersion: v1
               kind: ConfigMap
               metadata:
-                name: "{{ internal_registry_name }}"
+                name: "{{ trusted_ca_config_map_name }}"
                 namespace: openshift-config
-              data: "{{ additional_trusted_registries }}"
+              data: "{{ configmap_data }}"
 
-        - name: Patch Image config to use additionalTrustedCA
-          kubernetes.core.k8s:
-            kubeconfig: "{{ kubeconfig }}"
-            api_version: config.openshift.io/v1
+        - name: Apply image.config.openshift.io configuration change
+          kubernetes.core.k8s_json_patch:
+            api: config.openshift.io/v1
             kind: Image
+            kubeconfig: "{{ kubeconfig }}"
             name: cluster
-            state: present
-            merge_type: [merge]
-            definition:
-              spec:
-                additionalTrustedCA:
-                  name: "{{ internal_registry_name }}"
+            patch:
+              - op: add
+                path: /spec/additionalTrustedCA
+                value:
+                  name: "{{ trusted_ca_config_map_name }}"

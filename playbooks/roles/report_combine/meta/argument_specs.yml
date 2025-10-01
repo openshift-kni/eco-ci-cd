@@ -29,6 +29,11 @@ argument_specs:
         required: false
         default: "splunk"
         choices: ["splunk", "generic"]
+      rc_event_time:
+        description: Event time in epoch float format as string
+        type: str
+        required: false
+        default: ""
       rc_event_source:
         description: Event source identifier
         type: str

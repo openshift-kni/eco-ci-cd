@@ -13,6 +13,7 @@ rc_combined_event_path: "{{ playbook_dir }}/output/combined-event.json"
 rc_event_source: "{{ ansible_hostname }}"
 rc_event_host: "{{ ansible_hostname }}"
 rc_event_sourcetype: "_json"
+rc_event_time: ""
 
 # Collector-specific formatting
 rc_collector_format: "splunk"

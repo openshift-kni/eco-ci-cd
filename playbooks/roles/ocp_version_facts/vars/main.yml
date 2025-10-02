@@ -5,6 +5,6 @@ ocp_version_facts_client_prefix: openshift-client-linux-
 registry: quay.io
 repository: openshift-release-dev/ocp-release
 ocp_release_streams:
+  - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/4-stable/tags
   - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/4-dev-preview/tags
   - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/4.20.0-0.nightly/tags
-  - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/4-stable/tags

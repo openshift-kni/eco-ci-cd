@@ -1,0 +1,25 @@
+---
+- name: Push CI JUnit XML report data to collector
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Convert JUnit reports to JSON
+      ansible.builtin.include_role:
+        name: junit2json
+      tags:
+        - junit2json
+    - name: Detect metadata
+      ansible.builtin.include_role:
+        name: report_metadata_gen
+      tags:
+        - report_metadata_gen
+    - name: Combine tests and metadata
+      ansible.builtin.include_role:
+        name: report_combine
+      tags:
+        - report_combine
+    - name: Upload reports to collector (splunk)
+      ansible.builtin.include_role:
+        name: report_send
+      tags:
+        - report_send

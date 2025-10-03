@@ -88,7 +88,7 @@
     - name: Install requirements
       ansible.builtin.pip:
         name:
-          - kubernetes
+          - kubernetes==33.1.0
           - openshift
         state: present
 

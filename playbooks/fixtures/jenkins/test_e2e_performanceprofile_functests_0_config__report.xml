@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <testsuites tests="3" disabled="0" errors="0" failures="0" time="0.103067045">
+      <testsuite name="Performance Addon Operator configuration" package="/home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config" tests="3" disabled="0" skipped="0" errors="0" failures="0" time="0.103067045" timestamp="2024-12-07T21:28:37">
+          <properties>
+              <property name="SuiteSucceeded" value="true"></property>
+              <property name="SuiteHasProgrammaticFocus" value="false"></property>
+              <property name="SpecialSuiteFailureReason" value=""></property>
+              <property name="SuiteLabels" value="[]"></property>
+              <property name="RandomSeed" value="1733599714"></property>
+              <property name="RandomizeAllSpecs" value="false"></property>
+              <property name="LabelFilter" value=""></property>
+              <property name="FocusStrings" value=""></property>
+              <property name="SkipStrings" value=""></property>
+              <property name="FocusFiles" value=""></property>
+              <property name="SkipFiles" value=""></property>
+              <property name="FailOnPending" value="false"></property>
+              <property name="FailFast" value="false"></property>
+              <property name="FlakeAttempts" value="2"></property>
+              <property name="DryRun" value="false"></property>
+              <property name="ParallelTotal" value="1"></property>
+              <property name="OutputInterceptorMode" value=""></property>
+          </properties>
+          <testcase name="[BeforeSuite]" classname="Performance Addon Operator configuration" status="passed" time="7.1124e-05">
+              <system-err>&gt; Enter [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:60 @ 12/07/24 21:28:37.344&#xA;&lt; Exit [BeforeSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:60 @ 12/07/24 21:28:37.344 (0s)&#xA;</system-err>
+          </testcase>
+          <testcase name="[It] [performance][config] Performance configuration Should successfully deploy the performance profile" classname="Performance Addon Operator configuration" status="passed" time="0.10261885">
+              <system-err>&gt; Enter [BeforeEach] [performance][config] Performance configuration - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/utils/utils.go:24 @ 12/07/24 21:28:37.344&#xA;&lt; Exit [BeforeEach] [performance][config] Performance configuration - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/utils/utils.go:24 @ 12/07/24 21:28:37.361 (18ms)&#xA;&gt; Enter [It] Should successfully deploy the performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:48 @ 12/07/24 21:28:37.361&#xA;STEP: Getting MCP for profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:67 @ 12/07/24 21:28:37.362&#xA;STEP: Creating the PerformanceProfile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:76 @ 12/07/24 21:28:37.371&#xA;Dec  7 21:28:37.392: [WARNING]: A PerformanceProfile with name performance already exists! If created externally, tests might have unexpected behaviour&#xA;STEP: MCP is already unpaused - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:90 @ 12/07/24 21:28:37.392&#xA;STEP: Waiting for the MCP to pick the PerformanceProfile&#39;s MC - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:101 @ 12/07/24 21:28:37.392&#xA;Dec  7 21:28:37.397: [INFO]: Waiting for profile performance to be picked up by the worker-cnf machine config pool&#xA;Dec  7 21:28:37.404: [INFO]: Profile performance picked up by the worker-cnf machine config pool&#xA;STEP: Waiting for MCP being updated - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:110 @ 12/07/24 21:28:37.404&#xA;Dec  7 21:28:37.429: [INFO]: MCP &#34;worker-cnf&#34; is targeting 1 node(s)&#xA;STEP: Printing the updated profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:114 @ 12/07/24 21:28:37.446&#xA;&lt; Exit [It] Should successfully deploy the performance profile - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/config.go:48 @ 12/07/24 21:28:37.446 (85ms)&#xA;</system-err>
+          </testcase>
+          <testcase name="[ReportAfterSuite] e2e serial suite" classname="Performance Addon Operator configuration" status="passed" time="4.0724e-05">
+              <system-err>&gt; Enter [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:65 @ 12/07/24 21:28:37.447&#xA;&lt; Exit [ReportAfterSuite] TOP-LEVEL - /home/jenkins/workspace/CNF/cnf-compute-4.16/cluster-node-tuning-operator/test/e2e/performanceprofile/functests/0_config/test_suite_performance_config_test.go:65 @ 12/07/24 21:28:37.447 (0s)&#xA;</system-err>
+          </testcase>
+      </testsuite>
+  </testsuites>

@@ -265,11 +265,11 @@
 
         - name: Print dpdk-base image version
           ansible.builtin.debug:
-            msg: dpdk-base-rhel9:v{{ containers_version }}
+            msg: dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 20) else '9' }}:v{{ containers_version }}
 
         - name: Print cnf_tests_version image version
           ansible.builtin.debug:
-            msg: cnf_tests_version:v{{ containers_version }}
+            msg: dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}
 
         - name: Prepare execute shell script
           ansible.builtin.template:

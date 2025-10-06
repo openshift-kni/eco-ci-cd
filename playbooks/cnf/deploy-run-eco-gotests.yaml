@@ -117,11 +117,19 @@
             name: quay.io/ocp-edge-qe/eco-gotests
             tag: v{{ version }}.0
 
+        - name: Set tag to specific version
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "v{{ version }}.0"
+
       rescue:
         - name: Pull latest version of eco-gotests image as fallback
           containers.podman.podman_image:
             name: quay.io/ocp-edge-qe/eco-gotests
             tag: latest
+
+        - name: Set tag to latest
+          ansible.builtin.set_fact:
+            eco_gotests_tag: latest
 
     - name: Prepare execute shell script
       ansible.builtin.template:

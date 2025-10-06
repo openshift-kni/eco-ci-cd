@@ -25,6 +25,6 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   -v {{ kubeconfig }}:/kubeconfig/kubeconfig:Z \
   -v {{ eco_gotests_report_path }}:/tmp/reports:Z \
-  {{ eco_gotests_image }}:v{{ version }}.0 \
+  {{ eco_gotests_image }}:{{ eco_gotests_tag }} \
   --timeout={{ test_timeout }} \
   --keep-going

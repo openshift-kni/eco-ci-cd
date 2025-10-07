@@ -212,7 +212,7 @@
 
     - name: Set up IPv4-only cluster network configuration
       delegate_to: bastion
-      when: ipv4_only
+      when: ipv4_only | bool
       ansible.builtin.set_fact:
         api_vips: >-
           {{ api_vips | select('match', '^[0-9.]+$') | list }}
@@ -224,7 +224,7 @@
 
     - name: Set up IPv6-only cluster network configuration
       delegate_to: bastion
-      when: ipv6_only
+      when: ipv6_only | bool
       ansible.builtin.set_fact:
         api_vips: >-
           {{ api_vips | reject('match', '^[0-9.]+$') | list }}
@@ -392,7 +392,7 @@
           }}
 
     - name: Remove IPv6 section from each interface
-      when: ipv4_only
+      when: ipv4_only | bool
       delegate_to: bastion
       ansible.builtin.set_fact:
         network_config: >-
@@ -415,7 +415,7 @@
           }}
 
     - name: Remove IPv4 configuration from each interface (IPv6‑only cluster)
-      when: ipv6_only
+      when: ipv6_only | bool
       delegate_to: bastion
       ansible.builtin.set_fact:
         network_config: >-
@@ -472,7 +472,7 @@
         state: absent
 
     - name: Generate deployment manifests for OpenShift installation
-      when: disconnected | bool is false
+      when: (disconnected | bool) is false
       vars:
         single_node_openshift_enabled: true
       ansible.builtin.import_role:

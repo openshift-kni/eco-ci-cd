@@ -523,7 +523,11 @@
 
     - name: Mutate SNO node name
       ansible.builtin.set_fact:
-        kvm_nodes: "{{ [dict(kvm_nodes[0], name=hostvars['master0']['hostname'])] + kvm_nodes[1:] }}"
+        kvm_nodes: >-
+          {{
+            [dict(kvm_nodes[0], name=hostvars['master0']['hostname']
+            | default(hostvars['master0']['inventory_hostname']))] + kvm_nodes[1:]
+          }}
 
     - name: Enable CRB repository
       become: true

@@ -6,15 +6,42 @@
       - node-role.kubernetes.io/worker
   register: worker_nodes_info
 
-- name: Apply CNF label to all worker nodes
+- name: Retrieve master nodes (for SNO case)
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/master
+  register: master_nodes_info
+
+- name: Check if this is SNO (single node with master+worker roles)
+  ansible.builtin.set_fact:
+    is_sno: "{{
+      master_nodes_info.resources |
+      length == 1 and worker_nodes_info.resources |
+      length == 1 and master_nodes_info.resources[0].metadata.name == worker_nodes_info.resources[0].metadata.name }}"
+
+- name: Apply CNF label to worker0 node (multinode case)
   kubernetes.core.k8s:
+    kind: Node
+    name: "{{ worker_nodes_info.resources[0].metadata.name }}"
+    state: patched
     definition:
-      apiVersion: v1
-      kind: Node
       metadata:
-        name: "worker0"
         labels:
           node-role.kubernetes.io/worker-cnf: ''
+  when: not is_sno and worker_nodes_info.resources | length > 0
+
+- name: Apply CNF label to master node (SNO case)
+  kubernetes.core.k8s:
+    kind: Node
+    name: "{{ item.metadata.name }}"
+    state: patched
+    definition:
+      metadata:
+        labels:
+          node-role.kubernetes.io/worker-cnf: ''
+  loop: "{{ master_nodes_info.resources }}"
+  when: is_sno
 
 - name: Render Machine config pool
   ansible.builtin.set_fact:

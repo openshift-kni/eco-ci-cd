@@ -1,0 +1,16 @@
+---
+- name: Test activities before main report processing
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Do some pre-test activities
+      ansible.builtin.debug:
+        msg: "Do some pre-test activities"
+
+- name: Validate report send playbook
+  ansible.builtin.import_playbook: validate-report-send.yml
+  when:
+    - lookup('file', 'validate-report-send.yml', errors='ignore') != ''
+
+- name: Import the main report send playbook
+  ansible.builtin.import_playbook: report-send.yml

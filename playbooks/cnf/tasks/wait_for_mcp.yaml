@@ -8,15 +8,16 @@
     name: "{{ mcp_name }}"
   register: mcp_updating_status
   until: >
-    mcp_updating_status.resources[0].status.conditions
-    | selectattr('type', 'equalto', 'Updating')
-    | map(attribute='status')
-    | list
-    | first
-    | default(false)
-    | bool
-  retries: 2
-  delay: 60
+    (mcp_updating_status.resources | length > 0) and
+    (
+      ((mcp_updating_status.resources[0].status | default({})).conditions | default([]))
+      | selectattr('type', 'equalto', 'Updating')
+      | selectattr('status', 'equalto', 'True')
+      | list
+      | length
+    ) > 0
+  retries: 5
+  delay: 20
   ignore_errors: true
 
 - name: Fail if cluster mcp is not in progressing state
@@ -35,13 +36,14 @@
     name: "{{ mcp_name }}"
   register: mcp_updated_status
   until: >
-    mcp_updated_status.resources[0].status.conditions
-    | selectattr('type', 'equalto', 'Updated')
-    | map(attribute='status')
-    | list
-    | first
-    | default(false)
-    | bool
+    (mcp_updated_status.resources | length > 0) and
+    (
+      ((mcp_updated_status.resources[0].status | default({})).conditions | default([]))
+      | selectattr('type', 'equalto', 'Updated')
+      | selectattr('status', 'equalto', 'True')
+      | list
+      | length
+    ) > 0
   retries: 30
   delay: 60
   ignore_errors: true

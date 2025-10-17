@@ -1,38 +1,113 @@
 ---
-- name: Wait for MCP
-  block:
-    - name: Wait for MCP to start
-      kubernetes.core.k8s_info:
-        api_version: machineconfiguration.openshift.io/v1
-        kind: MachineConfigPool
-        name: "worker-cnf"
-      register: mcp_restart
-      until: >
-        mcp_restart.resources is defined and
-        mcp_restart.resources | length > 0 and
-        mcp_restart.resources[0].status.updatedMachineCount != mcp_restart.resources[0].status.machineCount
-      retries: 6
-      delay: 10
-      vars:
-        ansible_failed_result:
-          retries: 0
-      ignore_errors: true
-      listen: Wait for MCP
+- name: Detect if deployment is SNO
+  ansible.builtin.include_tasks: ../tasks/detect_sno.yml
+  listen: Wait for MCP
 
-    - name: Wait until the MCP is fully updated
-      kubernetes.core.k8s_info:
-        api_version: machineconfiguration.openshift.io/v1
-        kind: MachineConfigPool
-        name: "worker-cnf"
-      register: mcp_status
-      until: >
-        mcp_status.resources is defined and
-        mcp_status.resources | length > 0 and
-        mcp_status.resources[0].status.updatedMachineCount == mcp_status.resources[0].status.machineCount and
-        mcp_status.resources[0].status.degradedMachineCount == 0
-      retries: "{{ mcp_wait_retries }}"
-      delay: "{{ mcp_wait_delay }}"
-      vars:
-        ansible_failed_result:
-          retries: 0
-      listen: Wait for MCP
+- name: Debug - is_sno value
+  ansible.builtin.debug:
+    msg: "is_sno is set to: {{ is_sno | default('UNDEFINED') }}"
+  listen: Wait for MCP
+
+- name: Determine MCP name based on deployment type
+  ansible.builtin.set_fact:
+    mcp_name: "{{ 'master' if (is_sno | default(false)) else 'worker-cnf' }}"
+  listen: Wait for MCP
+
+- name: Debug - mcp_name value
+  ansible.builtin.debug:
+    msg: "mcp_name is set to: {{ mcp_name }}"
+  listen: Wait for MCP
+
+- name: Get initial MCP state
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ mcp_name }}"
+  register: mcp_initial
+  listen: Wait for MCP
+
+- name: Debug - Initial MCP state
+  ansible.builtin.debug:
+    msg:
+      - "Initial MCP '{{ mcp_name }}' state:"
+      - "  Machine count: {{ mcp_initial.resources[0].status.machineCount | default('N/A') }}"
+      - "  Updated machines: {{ mcp_initial.resources[0].status.updatedMachineCount | default('N/A') }}"
+      - "  Ready machines: {{ mcp_initial.resources[0].status.readyMachineCount | default('N/A') }}"
+      - "  Degraded machines: {{ mcp_initial.resources[0].status.degradedMachineCount | default('N/A') }}"
+      - "  Updating: {{ mcp_initial.resources[0].status.conditions
+        | selectattr('type', 'equalto', 'Updating')
+        | map(attribute='status') | first | default('Unknown') }}"
+  when: mcp_initial.resources | length > 0
+  listen: Wait for MCP
+
+- name: Wait for MCP to start updating
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ mcp_name }}"
+  register: mcp_restart
+  until: >
+    mcp_restart.resources is defined and
+    mcp_restart.resources | length > 0 and
+    (mcp_restart.resources[0].status.updatedMachineCount != mcp_restart.resources[0].status.machineCount or
+     (mcp_restart.resources[0].status.conditions
+      | selectattr('type', 'equalto', 'Updating')
+      | map(attribute='status') | list | first | default('False')) == 'True')
+  retries: 30
+  delay: 20
+  vars:
+    ansible_failed_result:
+      retries: 0
+  ignore_errors: true
+  listen: Wait for MCP
+
+- name: Debug - MCP update started
+  ansible.builtin.debug:
+    msg:
+      - "MCP '{{ mcp_name }}' update started:"
+      - "  Machine count: {{ mcp_restart.resources[0].status.machineCount | default('N/A') }}"
+      - "  Updated machines: {{ mcp_restart.resources[0].status.updatedMachineCount | default('N/A') }}"
+  when: mcp_restart is defined and mcp_restart.resources is defined and mcp_restart.resources | length > 0
+  listen: Wait for MCP
+
+- name: Wait until the MCP is fully updated
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ mcp_name }}"
+  register: mcp_status
+  until: >
+    mcp_status.resources is defined and
+    mcp_status.resources | length > 0 and
+    mcp_status.resources[0].status.updatedMachineCount == mcp_status.resources[0].status.machineCount and
+    mcp_status.resources[0].status.degradedMachineCount == 0 and
+    (mcp_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Updated')
+    | map(attribute='status') | list | first | default('False')) == 'True' and
+    (mcp_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Updating')
+    | map(attribute='status') | list | first | default('False')) == 'False'
+  retries: "{{ mcp_wait_retries }}"
+  delay: "{{ mcp_wait_delay }}"
+  vars:
+    ansible_failed_result:
+      retries: 0
+  listen: Wait for MCP
+
+- name: Debug - Final MCP state
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "MCP '{{ mcp_name }}' update completed:"
+      - "=========================================="
+      - "  Machine count: {{ mcp_status.resources[0].status.machineCount | default('N/A') }}"
+      - "  Updated machines: {{ mcp_status.resources[0].status.updatedMachineCount | default('N/A') }}"
+      - "  Ready machines: {{ mcp_status.resources[0].status.readyMachineCount | default('N/A') }}"
+      - "  Degraded machines: {{ mcp_status.resources[0].status.degradedMachineCount | default('N/A') }}"
+      - "  Updated status: {{ mcp_status.resources[0].status.conditions
+        | selectattr('type', 'equalto', 'Updated')
+        | map(attribute='status') | first | default('Unknown') }}"
+      - "  Updating status: {{ mcp_status.resources[0].status.conditions
+        | selectattr('type', 'equalto', 'Updating')
+        | map(attribute='status') | first | default('Unknown') }}"
+      - "=========================================="
+  when: mcp_status.resources | length > 0
+  listen: Wait for MCP

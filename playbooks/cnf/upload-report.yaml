@@ -102,6 +102,7 @@
       ansible.builtin.copy:
         src: "{{ processed_report_dir }}/"
         dest: "{{ reports_directory }}/"
+        remote_src: "{{ (lookup('ansible.builtin.env', 'SHARED_DIR') | default('')) | length == 0 }}"
         mode: "0777"
 
     - name: List report files
@@ -119,6 +120,7 @@
       ansible.builtin.copy:
         src: "{{ junit_report_dir }}/"
         dest: "{{ reports_directory }}/"
+        remote_src: "{{ (lookup('ansible.builtin.env', 'SHARED_DIR') | default('')) | length == 0 }}"
         mode: "0777"
 
     - name: List junit report files

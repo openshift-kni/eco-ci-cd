@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "job": {
+      "created_at": "2024-12-17T16:40:37.843936",
+      "duration": 5843,
+      "id": "8d872420-198a-48a0-9285-fae789a71979",
+      "name": "op-deploy-cloudran-site-new-version",
+      "status": "success",
+      "status_reason": "",
+      "tags": [
+        "stage:deploy_sno",
+        "inventory:tb3slcm3",
+        "agent:openshift-app",
+        "op",
+        "ztp",
+        "deploy",
+        "gitlab-193801",
+        "cluster:hubmgmt3"
+      ],
+      "team_id": "713ecb86-0157-4445-ad90-c7aa7d0306a0",
+      "topic_id": "9be2a178-c9e5-4921-8d9d-d929851d658a"
+    },
+    "pipeline": {
+      "created_at": "2024-12-17T16:33:28.494976",
+      "id": "5e4ea1de-a2c9-4f1e-847e-da4c8bb3e2ab",
+      "name": "pipeline"
+    }
+  }
+}

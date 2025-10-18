@@ -1,0 +1,9 @@
+---
+- name: Test time conversion from datetime to unix timestamp
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Convert JUnit XML to JSON
+      ansible.builtin.include_role:
+        name: junit2json

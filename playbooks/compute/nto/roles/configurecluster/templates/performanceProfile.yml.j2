@@ -23,11 +23,11 @@ spec:
 {% endif %}
 {% endif %}
     machineConfigPoolSelector:
-        machineconfiguration.openshift.io/role: worker-cnf
+        machineconfiguration.openshift.io/role: {{ 'master' if (is_sno | bool) else 'worker-cnf' }}
     net:
         userLevelNetworking: true
     nodeSelector:
-        node-role.kubernetes.io/worker-cnf: ""
+        node-role.kubernetes.io/{{ 'master' if (is_sno | bool) else 'worker-cnf' }}: ""
     numa:
         topologyPolicy: single-numa-node
     realTimeKernel:

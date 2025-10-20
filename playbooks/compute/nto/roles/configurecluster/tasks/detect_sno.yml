@@ -1,0 +1,21 @@
+---
+- name: Retrieve worker nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: worker_nodes_info
+
+- name: Retrieve master nodes (for SNO case)
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/master
+  register: master_nodes_info
+
+- name: Check if this is SNO (single node with master+worker roles)
+  ansible.builtin.set_fact:
+    is_sno: "{{
+      master_nodes_info.resources |
+      length == 1 and worker_nodes_info.resources |
+      length == 1 and master_nodes_info.resources[0].metadata.name == worker_nodes_info.resources[0].metadata.name }}"

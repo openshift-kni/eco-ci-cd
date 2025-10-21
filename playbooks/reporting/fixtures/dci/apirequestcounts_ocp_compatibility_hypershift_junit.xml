@@ -1,0 +1,7 @@
+<?xml version="1.0" ?>
+<testsuites disabled="0" errors="0" failures="0" tests="2" time="0.0">
+	<testsuite disabled="0" errors="0" failures="0" name="Workload Compatibility with OCP Versions" skipped="0" tests="2" time="0">
+		<testcase classname="Workload Compatibility with OCP-4.18" name="Check compatibility with OCP-4.18"/>
+		<testcase classname="Workload Compatibility with OCP-4.19" name="Check compatibility with OCP-4.19"/>
+	</testsuite>
+</testsuites>

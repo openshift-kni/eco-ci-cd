@@ -21,6 +21,8 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   {% if eco_cnf_core_net_switch_pass is defined and eco_cnf_core_net_switch_pass | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_PASS='{{ eco_cnf_core_net_switch_pass }}' \
   {% endif %}
+  {% if switch_lag_names is defined and switch_lag_names | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_LAGS={{ switch_lag_names }} \
+  {% endif %}
   {% if additional_test_env_variables is defined and additional_test_env_variables | length > 0 %}{{ additional_test_env_variables }} \
   {% endif %}
   -v {{ kubeconfig }}:/kubeconfig/kubeconfig:Z \

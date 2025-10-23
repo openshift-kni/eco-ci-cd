@@ -1,0 +1,135 @@
+---
+# This playbook configures LVM storage on OpenShift master nodes and creates
+# LocalVolume resources for local storage operator.
+#
+# Prerequisites:
+#   - SSH access to master nodes
+#   - Valid kubeconfig for cluster authentication
+#   - Local Storage Operator must be installed
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/configure-lvm-storage.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig"
+#
+# What it does:
+#   1. Creates LVM volume group and logical volumes on master nodes
+#   2. Creates OpenShift LocalVolume CRs to expose the volumes to the cluster
+#   3. Sets local-sc as the default storage class
+
+- name: Configure LVM storage on master nodes
+  hosts: masters
+  become: true
+  remote_user: core
+  gather_facts: false
+
+  tasks:
+    - name: Create volume group new_vol_group on /dev/vda
+      community.general.lvg:
+        vg: new_vol_group
+        pvs: /dev/vda
+        state: present
+
+    - name: Create logical volume vol1 (20GB)
+      community.general.lvol:
+        vg: new_vol_group
+        lv: vol1
+        size: 20G
+        state: present
+
+    - name: Create logical volume vol2 (20GB)
+      community.general.lvol:
+        vg: new_vol_group
+        lv: vol2
+        size: 20G
+        state: present
+
+- name: Create LocalVolume resources on bastion
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Validate kubeconfig variable is defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+        fail_msg: |
+          Variable 'kubeconfig' must be defined.
+          Pass it with --extra-vars 'kubeconfig=/path/to/kubeconfig'
+
+    - name: Get Kubernetes node name for master
+      kubernetes.core.k8s_info:
+        kind: Node
+      register: k8s_nodes
+
+    - name: Set kubernetes node name
+      ansible.builtin.set_fact:
+        k8s_node_name: "{{ k8s_nodes.resources[0].metadata.name }}"
+
+    - name: Display Kubernetes node name being used
+      ansible.builtin.debug:
+        msg: "Using Kubernetes node name: {{ k8s_node_name }}"
+
+    - name: Create LocalVolume for vol1
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: local.storage.openshift.io/v1
+          kind: LocalVolume
+          metadata:
+            name: local-disks
+            namespace: openshift-local-storage
+          spec:
+            nodeSelector:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: kubernetes.io/hostname
+                      operator: In
+                      values:
+                        - "{{ k8s_node_name }}"
+            storageClassDevices:
+              - storageClassName: local-sc
+                forceWipeDevicesAndDestroyAllData: true
+                volumeMode: Filesystem
+                fsType: xfs
+                devicePaths:
+                  - /dev/new_vol_group/vol1
+
+    - name: Create LocalVolume for vol2
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: local.storage.openshift.io/v1
+          kind: LocalVolume
+          metadata:
+            name: local-disks2
+            namespace: openshift-local-storage
+          spec:
+            nodeSelector:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: kubernetes.io/hostname
+                      operator: In
+                      values:
+                        - "{{ k8s_node_name }}"
+            storageClassDevices:
+              - storageClassName: local-sc
+                forceWipeDevicesAndDestroyAllData: true
+                volumeMode: Filesystem
+                fsType: xfs
+                devicePaths:
+                  - /dev/new_vol_group/vol2
+
+    - name: Make local-sc the default storage class
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: local-sc
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"

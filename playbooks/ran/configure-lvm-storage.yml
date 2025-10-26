@@ -17,6 +17,20 @@
 #   2. Creates OpenShift LocalVolume CRs to expose the volumes to the cluster
 #   3. Sets local-sc as the default storage class
 
+- name: Pre-flight validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate kubeconfig variable is defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+        fail_msg: |
+          Variable 'kubeconfig' must be defined.
+          Pass it with --extra-vars 'kubeconfig=/path/to/kubeconfig'
+
 - name: Configure LVM storage on master nodes
   hosts: masters
   become: true
@@ -24,6 +38,13 @@
   gather_facts: false
 
   tasks:
+    - name: Remove any existing volume group on /dev/vda
+      community.general.lvg:
+        vg: new_vol_group
+        pvs: /dev/vda
+        state: absent
+        force: true
+
     - name: Create volume group new_vol_group on /dev/vda
       community.general.lvg:
         vg: new_vol_group
@@ -51,15 +72,6 @@
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
 
   tasks:
-    - name: Validate kubeconfig variable is defined
-      ansible.builtin.assert:
-        that:
-          - kubeconfig is defined
-          - kubeconfig | length > 0
-        fail_msg: |
-          Variable 'kubeconfig' must be defined.
-          Pass it with --extra-vars 'kubeconfig=/path/to/kubeconfig'
-
     - name: Get Kubernetes node name for master
       kubernetes.core.k8s_info:
         kind: Node
@@ -133,3 +145,18 @@
             name: local-sc
             annotations:
               storageclass.kubernetes.io/is-default-class: "true"
+
+    - name: Wait for LocalVolume resources to be created and ready
+      kubernetes.core.k8s_info:
+        kind: LocalVolume
+        namespace: openshift-local-storage
+        name: "{{ item }}"
+      register: lv_resources
+      until:
+        - lv_resources.resources | length > 0
+        - lv_resources.resources[0].status is defined
+      retries: 30
+      delay: 10
+      loop:
+        - local-disks
+        - local-disks2

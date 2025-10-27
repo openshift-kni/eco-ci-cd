@@ -44,6 +44,12 @@
     ocp_release_version_file_name: "cluster_version"
     cluster_name_file_name: "cluster_name"
     cluster_release_map:
+      "4.21":
+        cluster_name: kni-qe-92
+        nics:
+          - mlx_cx_6
+          - intel_710
+          - intel_810
       "4.20":
         cluster_name: hlxcl7
         nics:
@@ -51,11 +57,11 @@
           - intel_810
           - mlx_cx_6
       "4.19":
-        cluster_name: kni-qe-92
+        cluster_name: hlxcl3
         nics:
-          - mlx_cx_6
           - intel_710
           - intel_810
+          - mlx_cx_6
       "4.18":
         cluster_name: hlxcl2
         nics:
@@ -74,6 +80,7 @@
           - intel_710
           - intel_810
           - mlx_cx_6
+      # Disabled
       "4.15":
         cluster_name: hlxcl3
         nics:

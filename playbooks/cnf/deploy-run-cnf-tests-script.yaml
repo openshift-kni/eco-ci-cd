@@ -55,6 +55,7 @@
     container_registry: "{{ internal_container_registry_name }}/openshift4"
     features: "sctp"
     role_worker_cnf: "workercnf"
+    latest_version: 21
   tasks:
 
     - name: Gather cluster network information
@@ -121,8 +122,11 @@
         mode: "0777"
 
     - name: Set containers version
+      vars:
+        major: "{{ (version | split('.'))[0] }}"
+        minor: "{{ (version | split('.'))[1] | int }}"
       ansible.builtin.set_fact:
-        containers_version: "{{ version }}"
+        containers_version: "{{ (minor == (latest_minor_version | int)) | ternary(major ~ '.' ~ (minor - 1), version) }}"
 
     # TODO: Remove this block when OCP 4.14 reaches end-of-life
     - name: Run CNF tests via podman image. OCP < 4.15

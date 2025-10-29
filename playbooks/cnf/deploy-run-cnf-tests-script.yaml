@@ -126,7 +126,7 @@
         major: "{{ (version | split('.'))[0] }}"
         minor: "{{ (version | split('.'))[1] | int }}"
       ansible.builtin.set_fact:
-        containers_version: "{{ (minor == (latest_minor_version | int)) | ternary(major ~ '.' ~ (minor - 1), version) }}"
+        containers_version: "{{ ((minor | int) == (latest_minor_version | int)) | ternary(major ~ '.' ~ ((minor | int) - 1), version) }}"
 
     # TODO: Remove this block when OCP 4.14 reaches end-of-life
     - name: Run CNF tests via podman image. OCP < 4.15

@@ -55,7 +55,7 @@
     container_registry: "{{ internal_container_registry_name }}/openshift4"
     features: "sctp"
     role_worker_cnf: "workercnf"
-    latest_version: 21
+    latest_minor_version: 21
   tasks:
 
     - name: Gather cluster network information

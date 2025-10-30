@@ -1,8 +1,8 @@
-import requests
 import os
 import sys
 import logging
 import argparse
+import subprocess
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -10,14 +10,16 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-def send_to_slack(webhook_url, release_info, prow_job_url, phase1_prow_url=None):
-    """Send release info to Slack channel
+def construct_message(release_info, prow_job_url, phase1_prow_url=None):
+    """Construct the Slack message content
     
     Args:
-        webhook_url (str): Slack webhook URL
         release_info (dict): Release information dictionary
         prow_job_url (str): Current/main Prow job URL
         phase1_prow_url (str, optional): Phase 1 Prow job URL if available
+    
+    Returns:
+        str: Formatted message to send to Slack
     """
     
     # Determine job labels based on whether this is a multi-phase workflow
@@ -50,19 +52,58 @@ def send_to_slack(webhook_url, release_info, prow_job_url, phase1_prow_url=None)
 • *CNF Image:* `{release_info['test_env']['cnf_image_version']}`
 • *DPDK Image:* `{release_info['test_env']['dpdk_image_version']}`
 """
+    
+    return message
 
-    payload = {"text": message}
+
+def send_to_slack(webhook_url, message):
+    """Send message to Slack by calling the send-slack-notification.py script
+    
+    Args:
+        webhook_url (str): Slack webhook URL
+        message (str): Formatted message to send
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    
+    # Get the path to the send-slack-notification.py script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Go up one level: scripts/network/ -> scripts/
+    scripts_dir = os.path.dirname(script_dir)
+    notification_script = os.path.join(scripts_dir, "slack-notification", "send-slack-notification.py")
+    
+    # Build the command to call the notification script
+    cmd = [
+        sys.executable,  # Use the same Python interpreter
+        notification_script,
+        "--webhook-url", webhook_url,
+        "--custom-message", message
+    ]
     
     try:
-        response = requests.post(webhook_url, json=payload, timeout=30)
-        response.raise_for_status()
+        logging.info("Calling send-slack-notification.py script...")
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
         
-        # Log the workflow type for debugging
-        workflow_type = "multi-phase" if has_phase1 else "single-phase"
-        logging.info(f"✅ Message sent to Slack! ({workflow_type} workflow)")
+        # Log output from the notification script
+        if result.stdout:
+            logging.info(f"Script output: {result.stdout}")
+        
+        logging.info("✅ Message sent to Slack successfully!")
         return True
-    except requests.exceptions.RequestException as e:
+        
+    except subprocess.CalledProcessError as e:
         logging.error(f"❌ Failed to send message to Slack: {e}")
+        if e.stderr:
+            logging.error(f"Error output: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        logging.error(f"❌ Could not find notification script at: {notification_script}")
         return False
 
 def parse_arguments():
@@ -166,14 +207,21 @@ def main():
     # Construct the relevant information for the slack message
     release_info = create_release_info(args, rhel_version)
     
-    # Send notification to Slack
-    message_sent = send_to_slack(args.webhook_url, release_info, current_prow_url, phase1_prow_url)
+    # Construct the message
+    message = construct_message(release_info, current_prow_url, phase1_prow_url)
+    
+    # Log the workflow type for debugging
+    workflow_type = "multi-phase" if phase1_prow_url else "single-phase"
+    logging.info(f"Constructed message for {workflow_type} workflow")
+    
+    # Send notification to Slack via the notification script
+    message_sent = send_to_slack(args.webhook_url, message)
     
     if not message_sent:
         logging.error("❌ Error: Slack notification failed.")
         sys.exit(1)
     
-    logging.info("✅ Slack notification sent successfully!")
+    logging.info("✅ Slack notification process completed successfully!")
 
 if __name__ == "__main__":
     main()

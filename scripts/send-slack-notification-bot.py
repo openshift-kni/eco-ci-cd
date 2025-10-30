@@ -88,7 +88,7 @@ def parse_arguments():
 def parse_version(version_string):
     """Parse version string and return major, minor components and determine RHEL version."""
     try:
-        major, minor, *_ = map(int, version_string.split('.'))
+        major, minor = int(version_string.split('.')[0]), int(version_string.split('.')[1])
         rhel_version = "rhel8" if (major, minor) <= (4, 15) else "rhel9"
         logging.info(f"Detected version {version_string}, using '{rhel_version}' images.")
         return major, minor, rhel_version

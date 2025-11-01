@@ -13,7 +13,10 @@
 
 - name: Get operator-registry image pull spec from payload
   ansible.builtin.command:
-    cmd: oc adm release info "{{ release_image }}" --image-for=operator-registry
+    cmd: >
+      oc adm release info
+      {{ ('-a ' ~ ocp_operator_mirror_pull_secret_path) if 'ci' in release_image else '' }}
+      "{{ release_image }}" --image-for=operator-registry
   register: operator_registry_cmd
   changed_when: false
 

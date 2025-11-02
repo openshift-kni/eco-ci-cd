@@ -10,8 +10,11 @@ import jinja2
 def construct_message(args: argparse.Namespace):
     """Construct the message to send to Slack"""
 
+    tagged_users = " ".join([f"<@{user}>" for user in args.users])
+
     environment = jinja2.Environment(loader=jinja2.BaseLoader)
     template = environment.from_string("""
+
 Failed Job:
 {% if args.version %}
     Release: {{args.version}} {% endif -%}
@@ -20,9 +23,10 @@ Failed Job:
 {% if args.link %}
     Link to failed job: {{args.link}} {% endif -%}
 
-{% for user in args.users %}@{{ user }} {% endfor %}
-    """)
-    return template.render(args=args)
+{{ tagged_users }}
+
+""")
+    return template.render(args=args, tagged_users=tagged_users)
 
 
 def log_config(debug: bool):

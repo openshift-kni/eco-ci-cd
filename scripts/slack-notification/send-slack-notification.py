@@ -20,7 +20,7 @@ Failed Job:
 {% if args.link %}
     Link to failed job: {{args.link}} {% endif -%}
 
-{% for user in args.users_to_tag %}@{{ user }} {% endfor %}
+{% for user in args.users %}@{{ user }} {% endfor %}
     """)
     return template.render(args=args)
 

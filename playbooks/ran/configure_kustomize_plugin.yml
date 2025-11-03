@@ -1,0 +1,198 @@
+---
+# This playbook configures the kustomize plugin for ZTP (Zero Touch Provisioning)
+# on OpenShift clusters.
+#
+# Prerequisites:
+#   - SSH access to bastion node
+#   - Valid kubeconfig for cluster authentication
+#   - ACM (Advanced Cluster Management) must be installed
+#   - OpenShift GitOps operator must be installed
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/configure_kustomize_plugin.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=v4.19"
+#
+# What it does:
+#   1. Mirrors ztp-site-generator image to disconnected registry
+#   2. Extracts and configures ArgoCD deployment patches
+#   3. Patches OpenShift GitOps ArgoCD instance
+#   4. Restarts GitOps deployments to apply changes
+
+- name: Pre-flight validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - ocp_version is defined
+          - ocp_version | length > 0
+        fail_msg: |
+          Variables 'kubeconfig' and 'ocp_version' must be defined.
+          Pass them with --extra-vars 'kubeconfig=/path/to/kubeconfig ocp_version=v4.xy'
+
+- name: Configure kustomize plugin
+  hosts: bastion
+  gather_facts: true
+  vars:
+    site_generate_image: 'registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:{{ ocp_version }}'
+
+  tasks:
+    - name: Mirror ztp-site-generator image to disconnected registry
+      ansible.builtin.shell: |
+        skopeo copy --all \
+          docker://{{ site_generate_image }} \
+          docker://disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
+      environment:
+        REGISTRY_AUTH_FILE: /etc/containers/auth.json
+        
+    - name: cleanup ztp-workdir dir
+      ansible.builtin.file:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/"
+        state: absent
+
+    - name: ensure ztp-wordir directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out"
+        state: directory
+
+    - name: export argocd directory ztp-site-generator container image
+      ansible.builtin.shell: |
+        podman run --rm disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }} extract /home/ztp --tar | tar x -C {{ ansible_facts['user_dir'] }}/ztp-workdir/out
+
+    - name: replace image in argocd-openshift-gitops-patch.json
+      ansible.builtin.replace:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        # Note: Downstream will have something like "registry.redhat.io/openshift4/ztp-site-generate-rhel8:v4.14.0-71"
+        #       Upstream will have something like   "quay.io/openshift-kni/ztp-site-generator:latest"
+        #       This regex should work for either:
+        regexp: '("image": ")[^"]*/ztp-site-generat[^"]*(")'
+        replace: "\\1disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
+
+    - name: Get multicluster-operators-hub-subscription deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: multicluster-operators-hub-subscription
+        namespace: open-cluster-management
+        kubeconfig: "{{ kubeconfig }}"
+      register: multicluster_deployment
+
+    - name: Verify multicluster-operators-hub-subscription deployment exists
+      ansible.builtin.assert:
+        that:
+          - multicluster_deployment.resources | length > 0
+        fail_msg: "Deployment 'multicluster-operators-hub-subscription' not found in namespace 'open-cluster-management'. Ensure ACM is installed."
+
+    - name: Extract multicluster-operators-hub-subscription image
+      ansible.builtin.set_fact:
+        multicluster_subs_image:
+          stdout: "{{ multicluster_deployment.resources[0].spec.template.spec.containers | selectattr('name', 'equalto', 'multicluster-operators-hub-subscription') | map(attribute='image') | first }}"
+
+    - name: replace multicluster-operators-hub-subscription image in argocd-openshift-gitops-patch.json
+      ansible.builtin.replace:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        regexp: "registry.redhat.io/rhacm2/multicluster-operators-subscription-rhel\\d:v.*\\d"
+        replace: "{{ multicluster_subs_image.stdout }}"
+
+    - name: replace args for rhel8 images in argocd-openshift-gitops-patch.json
+      ansible.builtin.replace:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        regexp: '"mkdir -p /.*"'
+        replace: '"mkdir -p /.config/kustomize/plugin/ && cp -r /etc/kustomize/plugin/policy.open-cluster-management.io /.config/kustomize/plugin/"'
+      when:
+        - multicluster_subs_image.stdout.find("rhel8") != -1
+
+    - name: replace args for rhel9 images in argocd-openshift-gitops-patch.json
+      ansible.builtin.replace:
+        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        regexp: '"mkdir -p /.*"'
+        replace: '"mkdir -p /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator && cp /policy-generator/PolicyGenerator-not-fips-compliant /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator/PolicyGenerator"'
+      when:
+        - multicluster_subs_image.stdout.find("rhel9") != -1
+
+    - name: Load ArgoCD patch file
+      ansible.builtin.slurp:
+        src: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+      register: argocd_patch_content
+
+    - name: Patch gitops argocd
+      kubernetes.core.k8s:
+        api_version: argoproj.io/v1beta1
+        kind: ArgoCD
+        name: openshift-gitops
+        namespace: openshift-gitops
+        definition: "{{ argocd_patch_content.content | b64decode | from_json }}"
+        state: patched
+        kubeconfig: "{{ kubeconfig }}"
+
+     ## Reload deployments to ensure any ztp-site-generator image changes are picked up
+    - name: Delete gitops-repo-server pods to force restart
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-gitops
+        label_selectors:
+          - app.kubernetes.io/name=openshift-gitops-repo-server
+        state: absent
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Delete gitops-redis pods to force restart
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-gitops
+        label_selectors:
+          - app.kubernetes.io/name=openshift-gitops-redis
+        state: absent
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Delete gitops-applicationset-controller pods to force restart
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-gitops
+        label_selectors:
+          - app.kubernetes.io/name=openshift-gitops-applicationset-controller
+        state: absent
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Wait for gitops-repo-server deployment to create pods
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openshift-gitops-repo-server
+        namespace: openshift-gitops
+        kubeconfig: "{{ kubeconfig }}"
+      register: gitops_reposerver_deployment
+      retries: 40
+      delay: 5
+      until: "gitops_reposerver_deployment.resources[0].status.readyReplicas | default(0) == 1"
+
+    - name: Wait for gitops-redis deployment to create pods
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openshift-gitops-redis
+        namespace: openshift-gitops
+        kubeconfig: "{{ kubeconfig }}"
+      register: gitops_redis_deployment_ready
+      retries: 40
+      delay: 5
+      until: "gitops_redis_deployment_ready.resources[0].status.readyReplicas | default(0) == 1"
+
+    - name: Wait for applicationset-controller deployment to create pods
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openshift-gitops-applicationset-controller
+        namespace: openshift-gitops
+        kubeconfig: "{{ kubeconfig }}"
+      register: gitops_applicationset_deployment_ready
+      retries: 40
+      delay: 5
+      until: "gitops_applicationset_deployment_ready.resources[0].status.readyReplicas | default(0) == 1"

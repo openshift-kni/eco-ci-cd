@@ -21,7 +21,7 @@ Failed Job:
 {% if args.job_name %}
     Job: {{args.job_name}} {% endif -%}
 {% if args.link %}
-    <{{args.link}}|Link to failed job> {% endif -%}
+    <{{args.link}}|Link to failed job> {% endif %}
 
 {{ tagged_users }}
 

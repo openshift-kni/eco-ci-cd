@@ -106,6 +106,7 @@
         name: ocp_version_facts
       vars:
         ocp_version_facts_release: "{{ release }}"
+        ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
 
     - name: Set cluster name
       ansible.builtin.set_fact:

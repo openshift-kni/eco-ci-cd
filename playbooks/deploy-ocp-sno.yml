@@ -35,6 +35,7 @@
 # - ipv4_only, ipv6_only, disconnected (booleans; defaults are false)
 # - disconnected_registry_url, disconnected_registry_port
 # - share_http_iso_port, dest_iso_dir, repo_root_path
+# - custom_manifest: list of paths to extra manifests for day0 OCP installation (comma separated list of manifests)
 
 ## Roles Requirements
 # - ocp_version_facts
@@ -500,6 +501,19 @@
             ocp_registry_image: openshift
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
+
+    - name: Copy custom manifests
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+        remote_src: true
+      when:
+        - custom_manifest is defined
+        - custom_manifest | length > 0
+      loop: "{{ custom_manifest.split(',') }}"
 
     - name: Generate boot ISO for agent-based installer
       vars:

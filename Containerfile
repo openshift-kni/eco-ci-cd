@@ -1,15 +1,14 @@
-FROM registry.access.redhat.com/ubi9/ubi
+FROM registry.access.redhat.com/ubi9/python-312-minimal 
 
 WORKDIR /eco-ci-cd
 
+USER root
 # Install required packages
-RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
+RUN microdnf update && \
+    microdnf -y install \
     git \
     sshpass \
-    python3 \
-    python3-pip \
-    python3-wheel \
-    && dnf clean all
+    && microdnf clean all
 
 # Copy python requirements file to /eco-ci-cd
 COPY pip.txt .
@@ -21,6 +20,7 @@ COPY requirements.yml ansible.cfg /eco-ci-cd/
 # Install galaxy requirements
 RUN ansible-galaxy collection install --no-cache --pre -r requirements.yml
 
+USER 1001
 # Copy application files to eco-ci-cd folder
 COPY . .
 

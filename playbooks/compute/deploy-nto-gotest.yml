@@ -79,7 +79,10 @@
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
           cd {{ gotest_dir }}
-          go mod vendor && go mod tidy && make vet
+          go mod vendor && go mod tidy
+          {% if ocp_version is version('4.15', '>=') %}
+          make vet
+          {% endif %}
 
           echo "Running gotests..."
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \

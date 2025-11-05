@@ -11,29 +11,45 @@
 # Usage:
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
 #     playbooks/ran/configure_acm.yml \
-#     --extra-vars "kubeconfig=/path/to/kubeconfig"
+#     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
+#
+# Required variables:
+#   kubeconfig: Path to kubeconfig file for cluster authentication
+#   ocp_version: OpenShift version for spoke clusters (e.g., "4.19", "4.18", "4.17")
+#
+# Note: rhcos_version and rhcos_iso_url are automatically fetched from:
+#   https://github.com/openshift/assisted-service/blob/master/data/default_os_images.json
+#   This ensures you use officially tested RHCOS images for spoke cluster deployments.
 #
 # What it does:
-#   1. Creates MultiClusterHub resource and waits for it to be running
-#   2. Creates mirror registry ConfigMap for disconnected environments
-#   3. Creates AgentServiceConfig for Assisted Installer
-#   4. Waits for assisted-service pods to be ready
-#   5. Applies Provisioning resource for Metal3
-#   6. Waits for metal3 pods to be running
+#   1. Fetches RHCOS image info from assisted-service official defaults
+#   2. Creates MultiClusterHub resource and waits for it to be running
+#   3. Creates mirror registry ConfigMap for disconnected environments
+#   4. Creates AgentServiceConfig for Assisted Installer with correct RHCOS ISO
+#   5. Waits for assisted-service pods to be ready
+#   6. Applies Provisioning resource for Metal3
+#   7. Waits for metal3 pods to be running
 
 - name: Pre-flight validation
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Validate kubeconfig variable is defined
+    - name: Validate required variables are defined
       ansible.builtin.assert:
         that:
           - kubeconfig is defined
           - kubeconfig | length > 0
+          - ocp_version is defined
+          - ocp_version | length > 0
         fail_msg: |
-          Variable 'kubeconfig' must be defined.
-          Pass it with --extra-vars 'kubeconfig=/path/to/kubeconfig'
+          Required variables must be defined:
+            - kubeconfig: Path to kubeconfig file
+            - ocp_version: OpenShift version (e.g., "4.19", "4.18")
+          
+          Usage:
+            ansible-playbook playbooks/ran/configure_acm.yml \
+              --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
 
 - name: OpenShift MultiClusterHub and Assisted Service Configuration
   hosts: bastion
@@ -46,13 +62,47 @@
     timeout_mch: 600
     timeout_assisted_service: 300
     timeout_metal3: 300
+    # RHCOS OS Image configuration for spoke cluster deployments
+    # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
+    # rhcos_version and rhcos_iso_url are auto-fetched from assisted-service defaults
+    rhcos_version: ""  # Auto-populated from assisted-service
+    rhcos_iso_url: ""  # Auto-populated from assisted-service
 
   tasks:
+
+    ## Fetch RHCOS OS Image information from assisted-service defaults
+    # -----------------------------------------------------------------------------
+
+    - name: Fetch default OS images from assisted-service
+      ansible.builtin.uri:
+        url: https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json
+        return_content: true
+      register: os_images_response
+
+    - name: Parse OS images JSON
+      ansible.builtin.set_fact:
+        os_images_data: "{{ os_images_response.content | from_json }}"
+
+    - name: Find matching RHCOS image for OCP {{ ocp_version }} (x86_64)
+      ansible.builtin.set_fact:
+        matched_os_image: "{{ os_images_data | selectattr('openshift_version', 'equalto', ocp_version) | selectattr('cpu_architecture', 'equalto', 'x86_64') | first }}"
+
+    - name: Set RHCOS version and URL from official defaults
+      ansible.builtin.set_fact:
+        rhcos_version: "{{ matched_os_image.version }}"
+        rhcos_iso_url: "{{ matched_os_image.url }}"
+
+    - name: Display RHCOS configuration
+      ansible.builtin.debug:
+        msg: |
+          Using RHCOS configuration for OCP {{ ocp_version }}:
+            Version: {{ rhcos_version }}
+            ISO URL: {{ rhcos_iso_url }}
 
     ## MultiClusterHub Resource Creation and Wait
     # -----------------------------------------------------------------------------
 
-    - name: Create MultiClusterHub Resource
+    - name: 🚀 Create MultiClusterHub Resource
       kubernetes.core.k8s:
         state: present
         api_version: operator.open-cluster-management.io/v1
@@ -161,9 +211,9 @@
             mirrorRegistryRef:
               name: mirror-registry-ca
             osImages:
-              - openshiftVersion: "4.17"
-                version: "417.94.202410090854-0"
-                url: "https://rhcos.mirror.openshift.com/art/storage/prod/streams/4.17-9.4/builds/417.94.202410090854-0/x86_64/rhcos-417.94.202410090854-0-live.x86_64.iso"
+              - openshiftVersion: "{{ ocp_version }}"
+                version: "{{ rhcos_version }}"
+                url: "{{ rhcos_iso_url }}"
                 cpuArchitecture: "x86_64"
 
     ## Wait for assisted-service Pod

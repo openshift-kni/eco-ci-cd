@@ -57,8 +57,6 @@
 - name: Render performance Profile
   ansible.builtin.set_fact:
     performance_profile: "{{ lookup('template', 'performanceProfile.yml.j2') }}"
-  vars:
-    is_sno: "{{ is_sno | default(false) }}"
 
 - name: Save Machine config pool
   ansible.builtin.copy:
@@ -76,4 +74,4 @@
       type: "Available"
       status: "True"
   notify:
-    - Wait for MCP
+    - wait for mcp update

@@ -14,17 +14,27 @@
     state: directory
     mode: '0755'
 
+- name: Compute FBC tag
+  changed_when: false
+  ansible.builtin.set_fact:
+    fbc_tag: >-
+      {{
+        operator.fbc_iib_repo
+        if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
+        else 'ocp__' ~ ocp_operator_mirror_version ~ '__' ~ operator.fbc_iib_repo
+      }}
+
 - name: Remove FBC index image (if present)
   containers.podman.podman_image:
-    name: "{{ ocp_operator_mirror_fbc_image_base }}"
-    tag: "ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
+    tag: "{{ fbc_tag }}"
     state: absent
     force: true
 
 - name: Pull FBC index image
   containers.podman.podman_image:
-    name: "{{ ocp_operator_mirror_fbc_image_base }}"
-    tag: "ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
+    tag: "{{ fbc_tag }}"
     state: present
     force: true
 
@@ -32,13 +42,13 @@
   changed_when: true
   ansible.builtin.command: >-
     skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
-    "docker://{{ ocp_operator_mirror_fbc_image_base }}:ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    "docker://{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}:{{ fbc_tag }}"
     "docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
 
 - name: Create temporary container
   containers.podman.podman_container:
     name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"
-    image: "{{ ocp_operator_mirror_fbc_image_base }}:ocp__{{ ocp_operator_mirror_version }}__{{ operator.fbc_iib_repo }}"
+    image: "{{ (operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base)) }}:{{ fbc_tag }}"
     state: created
 
 - name: Copy /configs from container
@@ -158,10 +168,26 @@
   ansible.builtin.set_fact:
     image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
 
+- name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
+  changed_when: false
+  ansible.builtin.set_fact:
+    image_list: "{{ image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
+  when: "((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0"
+
 - name: Collect unique source repositories (strip digests)
   changed_when: false
   ansible.builtin.set_fact:
     source_repos: "{{ image_list | map('regex_replace', '@.*', '') | list | unique }}"
+
+- name: Select source repositories for mirror mapping
+  changed_when: false
+  ansible.builtin.set_fact:
+    loop_source_repos: >-
+      {{
+        (source_repos | map('replace', 'registry.stage.redhat.io', 'registry.redhat.io') | list)
+        if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
+        else source_repos
+      }}
 
 - name: Set mirror mapping for each repository
   changed_when: false
@@ -176,31 +202,32 @@
           ]
         } ]
       }}
-  loop: "{{ source_repos }}"
+  loop: "{{ loop_source_repos }}"
 
-- name: Apply ImageDigestMirrorSet for ART images
+- name: Apply ImageDigestMirrorSet for fbc images
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: config.openshift.io/v1
       kind: ImageDigestMirrorSet
       metadata:
-        name: "operators-art-mirror-{{ operator.name }}"
+        name: "operators-fbc-mirror-{{ operator.name }}"
       spec:
         imageDigestMirrors: "{{ image_digest_mirrors }}"
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig | default(omit) }}"
 
-- name: Build source/destination image pairs (map prod digest to ART share; preserve original repo for destination)
+- name: Build source/destination image pairs (map prod digest to FBC share; preserve original repo for destination)
   changed_when: false
   ansible.builtin.set_fact:
     image_pairs: >-
       {{
         (image_pairs | default([])) + [
           {
-            'src': (
-              (image | regex_search('@sha256:[0-9a-f]{64}'))
-              | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)
-            ),
+            'src': (image
+                    if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
+                    else ((image | regex_search('@sha256:[0-9a-f]{64}'))
+                          | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)))
+            ,
             'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
           }
         ]

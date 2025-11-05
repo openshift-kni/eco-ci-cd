@@ -1,6 +1,6 @@
-- name: Resolve catalog paths for ART operators and build image pairs
-  ansible.builtin.include_tasks: mirror_art_from_fbc.yaml
-  loop: "{{ ocp_operator_mirror_operators_art }}"
+- name: Resolve catalog paths for FBC operators and build image pairs
+  ansible.builtin.include_tasks: mirror_from_fbc.yaml
+  loop: "{{ ocp_operator_mirror_operators_fbc }}"
   loop_control:
     loop_var: operator
 

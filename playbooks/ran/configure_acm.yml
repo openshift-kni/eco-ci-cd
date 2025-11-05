@@ -1,0 +1,278 @@
+---
+# This playbook configures Advanced Cluster Management (ACM) MultiClusterHub and 
+# Assisted Service on OpenShift clusters.
+#
+# Prerequisites:
+#   - Valid kubeconfig for cluster authentication
+#   - ACM operator must be installed
+#   - Multicluster Engine operator must be installed
+#   - Storage class available for persistent volumes
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/configure_acm.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
+#
+# Required variables:
+#   kubeconfig: Path to kubeconfig file for cluster authentication
+#   ocp_version: OpenShift version for spoke clusters (e.g., "4.19", "4.18", "4.17")
+#
+# Note: rhcos_version and rhcos_iso_url are automatically fetched from:
+#   https://github.com/openshift/assisted-service/blob/master/data/default_os_images.json
+#   This ensures you use officially tested RHCOS images for spoke cluster deployments.
+#
+# What it does:
+#   1. Fetches RHCOS image info from assisted-service official defaults
+#   2. Creates MultiClusterHub resource and waits for it to be running
+#   3. Creates mirror registry ConfigMap for disconnected environments
+#   4. Creates AgentServiceConfig for Assisted Installer with correct RHCOS ISO
+#   5. Waits for assisted-service pods to be ready
+#   6. Applies Provisioning resource for Metal3
+#   7. Waits for metal3 pods to be running
+
+- name: Pre-flight validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - ocp_version is defined
+          - ocp_version | length > 0
+        fail_msg: |
+          Required variables must be defined:
+            - kubeconfig: Path to kubeconfig file
+            - ocp_version: OpenShift version (e.g., "4.19", "4.18")
+          
+          Usage:
+            ansible-playbook playbooks/ran/configure_acm.yml \
+              --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
+
+- name: OpenShift MultiClusterHub and Assisted Service Configuration
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    mch_namespace: open-cluster-management
+    mce_namespace: multicluster-engine
+    timeout_mch: 600
+    timeout_assisted_service: 300
+    timeout_metal3: 300
+    # RHCOS OS Image configuration for spoke cluster deployments
+    # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
+    # rhcos_version and rhcos_iso_url are auto-fetched from assisted-service defaults
+    rhcos_version: ""  # Auto-populated from assisted-service
+    rhcos_iso_url: ""  # Auto-populated from assisted-service
+
+  tasks:
+
+    ## Fetch RHCOS OS Image information from assisted-service defaults
+    # -----------------------------------------------------------------------------
+
+    - name: Fetch default OS images from assisted-service
+      ansible.builtin.uri:
+        url: https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json
+        return_content: true
+      register: os_images_response
+
+    - name: Parse OS images JSON
+      ansible.builtin.set_fact:
+        os_images_data: "{{ os_images_response.content | from_json }}"
+
+    - name: Find matching RHCOS image for OCP {{ ocp_version }} (x86_64)
+      ansible.builtin.set_fact:
+        matched_os_image: "{{ os_images_data | selectattr('openshift_version', 'equalto', ocp_version) | selectattr('cpu_architecture', 'equalto', 'x86_64') | first }}"
+
+    - name: Set RHCOS version and URL from official defaults
+      ansible.builtin.set_fact:
+        rhcos_version: "{{ matched_os_image.version }}"
+        rhcos_iso_url: "{{ matched_os_image.url }}"
+
+    - name: Display RHCOS configuration
+      ansible.builtin.debug:
+        msg: |
+          Using RHCOS configuration for OCP {{ ocp_version }}:
+            Version: {{ rhcos_version }}
+            ISO URL: {{ rhcos_iso_url }}
+
+    ## MultiClusterHub Resource Creation and Wait
+    # -----------------------------------------------------------------------------
+
+    - name: 🚀 Create MultiClusterHub Resource
+      kubernetes.core.k8s:
+        state: present
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: multiclusterhub
+        namespace: "{{ mch_namespace }}"
+        definition:
+          spec: {}
+
+    - name: Wait for MultiClusterHub to reach Running status
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: multiclusterhub
+        namespace: "{{ mch_namespace }}"
+      register: mch_info
+      until: 
+        - mch_info.resources | length > 0
+        - mch_info.resources[0].status.phase is defined
+        - mch_info.resources[0].status.phase == "Running"
+      retries: "{{ (timeout_mch | int / 10) | int }}"
+      delay: 10
+
+    - name: Report MultiClusterHub status
+      ansible.builtin.debug:
+        msg: "MultiClusterHub in namespace '{{ mch_namespace }}' is Running."
+      when: mch_info is succeeded
+
+    ## ConfigMap and AgentServiceConfig Creation
+    # -----------------------------------------------------------------------------
+
+    - name: Create ConfigMap for mirror registry
+      kubernetes.core.k8s:
+        state: present
+        api_version: v1
+        kind: ConfigMap
+        name: mirror-registry-ca
+        namespace: "{{ mce_namespace }}"
+        definition:
+          data:
+            registries.conf: |
+              unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+              short-name-mode = ""
+
+              [[registry]]
+                prefix = ""
+                location = "quay.io/openshift-release-dev"
+
+                [[registry.mirror]]
+                  location = "ocp-qe-01.savanna.lab.eng.rdu2.redhat.com:5015/openshift-release-dev"
+                  pull-from-mirror = "digest-only"
+
+              [[registry]]
+                prefix = ""
+                location = "registry.access.redhat.com/openshift4/ose-oauth-proxy"
+
+                [[registry.mirror]]
+                  location = "brew.registry.redhat.io/openshift4/ose-oauth-proxy"
+                  pull-from-mirror = "digest-only"
+
+              [[registry]]
+                prefix = ""
+                location = "registry.ci.openshift.org/ocp"
+
+                [[registry.mirror]]
+                  location = "ocp-qe-01.savanna.lab.eng.rdu2.redhat.com:5015/ocp"
+                  pull-from-mirror = "digest-only"
+
+              [[registry]]
+                prefix = ""
+                location = "registry.redhat.io/multicluster-engine"
+
+                [[registry.mirror]]
+                  location = "brew.registry.redhat.io/multicluster-engine"
+                  pull-from-mirror = "digest-only"
+
+              [[registry]]
+                prefix = ""
+                location = "registry.redhat.io/rhacm2"
+
+                [[registry.mirror]]
+                  location = "brew.registry.redhat.io/rhacm2"
+                  pull-from-mirror = "digest-only"
+
+    - name: Create AgentServiceConfig
+      kubernetes.core.k8s:
+        state: present
+        api_version: agent-install.openshift.io/v1beta1
+        kind: AgentServiceConfig
+        name: agent
+        namespace: "{{ mce_namespace }}"
+        definition:
+          spec:
+            databaseStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 10Gi
+            filesystemStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 20Gi
+            mirrorRegistryRef:
+              name: mirror-registry-ca
+            osImages:
+              - openshiftVersion: "{{ ocp_version }}"
+                version: "{{ rhcos_version }}"
+                url: "{{ rhcos_iso_url }}"
+                cpuArchitecture: "x86_64"
+
+    ## Wait for assisted-service Pod
+    # -----------------------------------------------------------------------------
+
+    - name: Wait for assisted-service pod to be running
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ mce_namespace }}"
+        label_selectors:
+          - "app=assisted-service"
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: "{{ timeout_assisted_service }}"
+      register: assisted_service_wait
+
+    - name: Report assisted-service pod status
+      ansible.builtin.debug:
+        msg: "assisted-service pod in namespace '{{ mce_namespace }}' is Ready."
+      when: assisted_service_wait is succeeded
+
+    ## Provisioning and Metal3 Wait
+    # -----------------------------------------------------------------------------
+
+    - name: Apply Provisioning resource
+      kubernetes.core.k8s:
+        state: present
+        api_version: metal3.io/v1alpha1
+        kind: Provisioning
+        name: provisioning-configuration
+        definition:
+          spec:
+            preProvisioningOSDownloadURLs: {}
+            provisioningNetwork: Disabled
+            watchAllNamespaces: true
+
+    - name: Wait for metal3 pods to be running (Checking for 3+ pods)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openshift-machine-api
+        label_selectors:
+          - "k8s-app in (metal3, cluster-baremetal-operator)"
+      register: metal3_check
+      until: 
+        - metal3_check.resources is defined
+        - metal3_check.resources | length >= 3
+        - metal3_check.resources | selectattr('status.phase', 'equalto', 'Running') | list | length >= 3
+      retries: "{{ (timeout_metal3 | int / 10) | int }}"
+      delay: 10
+      ignore_errors: true
+
+    - name: Report metal3 pods status
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Expected metal3 pods did not all reach Running status within {{ timeout_metal3 }} seconds.
+          Current metal pods:
+          {{ metal3_check.resources | selectattr('metadata.name', 'search', 'metal') | map(attribute='metadata.name') | list }}
+      when: metal3_check is failed
+
+

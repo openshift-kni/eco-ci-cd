@@ -16,7 +16,7 @@
       ocp_operator_mirror_kubeconfig
 
 - name: Verify that required variables are present for ART operators
-  when: ((ocp_operator_mirror_operators | default([]))| selectattr('catalog','search','art') | list) | length > 0
+  when: ((ocp_operator_mirror_operators | default([])) | selectattr('catalog','search','art|fbc') | list) | length > 0
   ansible.builtin.assert:
     that:
       - (ocp_operator_mirror_fbc_image_base | default('')) | length > 0
@@ -55,16 +55,16 @@
          | selectattr('catalog','in', (ocp_operator_mirror_prod_catalog_sources | default([])))
          | list }}
 
-- name: Filter operators by catalog art
+- name: Filter operators by catalog art or fbc
   ansible.builtin.set_fact:
-    ocp_operator_mirror_operators_art: >-
+    ocp_operator_mirror_operators_fbc: >-
       {{ (ocp_operator_mirror_operators | default([]))
-         | selectattr('catalog','search','art')
+         | selectattr('catalog','search','art|fbc')
          | list }}
 
-- name: Mirror operators from art catalogs
-  ansible.builtin.include_tasks: mirror_operators_art.yaml
-  when: ((ocp_operator_mirror_operators_art | default([])) | length) > 0
+- name: Mirror operators from fbc catalogs
+  ansible.builtin.include_tasks: mirror_operators_fbc.yaml
+  when: ((ocp_operator_mirror_operators_fbc | default([])) | length) > 0
 
 - name: Mirror operators from production catalogs
   ansible.builtin.include_tasks: mirror_operators_prod.yaml
@@ -80,7 +80,7 @@
     ocp_operators_mirror_disconnected_config: >-
       {{ (ocp_operators_mirror_disconnected_config | default([]))
          + (ocp_operator_mirror_operators_prod | default([]))
-         + (ocp_operator_mirror_operators_art | default([])) }}
+         + (ocp_operator_mirror_operators_fbc | default([])) }}
 
 - name: Show ocp_operators_mirror_disconnected_config
   ansible.builtin.debug:

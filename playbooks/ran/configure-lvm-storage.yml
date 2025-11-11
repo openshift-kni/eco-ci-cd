@@ -36,6 +36,10 @@
   become: true
   remote_user: core
   gather_facts: false
+  environment:
+    HOME: /tmp
+  vars:
+    ansible_ssh_common_args: '-o ControlMaster=auto -o ControlPersist=60s -o ControlPath=/tmp/ansible-ssh-%h-%p-%r -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o IdentitiesOnly=yes'
 
   tasks:
     - name: Remove any existing volume group on /dev/vda

@@ -140,6 +140,12 @@
             group: root
             mode: '0644'
 
+        - name: Start dnsmasq
+          ansible.builtin.systemd:
+            name: dnsmasq
+            state: started
+            enabled: true
+
         - name: Create custom DNS records
           notify: Restart dnsmasq
           ansible.builtin.copy:

@@ -35,35 +35,64 @@
   hosts: masters
   become: true
   remote_user: core
-  gather_facts: false
-
+  gather_facts: true
+  gather_subset:
+    - hardware
   tasks:
-    - name: Remove any existing volume group on /dev/vda
+    - name: Set volume group name
+      ansible.builtin.set_fact:
+        vol_group_name: "new_vol_group"
+
+    - name: Set local volume name
+      ansible.builtin.set_fact:
+        local_volume_name:
+          - "vol1"
+          - "vol2"
+
+    - name: Find empty block devices from facts
+      ansible.builtin.set_fact:
+        empty_block_devices: >-
+          {{ (ansible_devices | default({}))
+             | dict2items
+             | selectattr('key','match','^((sd|hd|vd|xvd)[a-z]+|nvme\\d+n\\d+)$')
+             | rejectattr('value.removable','equalto','1')
+             | selectattr('value.partitions','equalto',{})
+             | selectattr('value.holders','equalto',[])
+             | map(attribute='key')
+             | list
+             | first }}
+
+    - name: Show empty block devices
+      ansible.builtin.debug:
+        var: empty_block_devices
+
+    - name: Fail if no empty block devices
+      ansible.builtin.assert:
+        that:
+          - empty_block_devices is defined
+          - (empty_block_devices | length) > 0
+        fail_msg: "No empty block devices found on {{ inventory_hostname }}"
+
+    - name: Remove any existing volume group on {{ empty_block_devices }}
       community.general.lvg:
-        vg: new_vol_group
-        pvs: /dev/vda
+        vg: "{{ vol_group_name }}"
+        pvs: "/dev/{{ empty_block_devices }}"
         state: absent
         force: true
 
-    - name: Create volume group new_vol_group on /dev/vda
+    - name: Create volume group new_vol_group on {{ empty_block_devices }}
       community.general.lvg:
-        vg: new_vol_group
-        pvs: /dev/vda
+        vg: "{{ vol_group_name }}"
+        pvs: "/dev/{{ empty_block_devices }}"
         state: present
 
-    - name: Create logical volume vol1 (20GB)
+    - name: Create logical volume (20GB) {{ item }}
       community.general.lvol:
-        vg: new_vol_group
-        lv: vol1
+        vg: "{{ vol_group_name }}"
+        lv: "{{ item }}"
         size: 20G
         state: present
-
-    - name: Create logical volume vol2 (20GB)
-      community.general.lvol:
-        vg: new_vol_group
-        lv: vol2
-        size: 20G
-        state: present
+      loop: "{{ local_volume_name }}"
 
 - name: Create LocalVolume resources on bastion
   hosts: bastion
@@ -85,55 +114,15 @@
       ansible.builtin.debug:
         msg: "Using Kubernetes node name: {{ k8s_node_name }}"
 
-    - name: Create LocalVolume for vol1
+    - name: Apply localVolume configuration for {{ item }}
       kubernetes.core.k8s:
         state: present
-        definition:
-          apiVersion: local.storage.openshift.io/v1
-          kind: LocalVolume
-          metadata:
-            name: local-disks
-            namespace: openshift-local-storage
-          spec:
-            nodeSelector:
-              nodeSelectorTerms:
-                - matchExpressions:
-                    - key: kubernetes.io/hostname
-                      operator: In
-                      values:
-                        - "{{ k8s_node_name }}"
-            storageClassDevices:
-              - storageClassName: local-sc
-                forceWipeDevicesAndDestroyAllData: true
-                volumeMode: Filesystem
-                fsType: xfs
-                devicePaths:
-                  - /dev/new_vol_group/vol1
-
-    - name: Create LocalVolume for vol2
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: local.storage.openshift.io/v1
-          kind: LocalVolume
-          metadata:
-            name: local-disks2
-            namespace: openshift-local-storage
-          spec:
-            nodeSelector:
-              nodeSelectorTerms:
-                - matchExpressions:
-                    - key: kubernetes.io/hostname
-                      operator: In
-                      values:
-                        - "{{ k8s_node_name }}"
-            storageClassDevices:
-              - storageClassName: local-sc
-                forceWipeDevicesAndDestroyAllData: true
-                volumeMode: Filesystem
-                fsType: xfs
-                devicePaths:
-                  - /dev/new_vol_group/vol2
+        definition: "{{ lookup('template', 'templates/localVolume.j2') }}"
+      vars:
+        local_volume_name: "{{ item }}"
+        local_volume_namespace: openshift-local-storage
+        vol_group_name: "{{ hostvars['master0'].vol_group_name }}"
+      loop: "{{ hostvars['master0'].local_volume_name }}"
 
     - name: Make local-sc the default storage class
       kubernetes.core.k8s:
@@ -157,6 +146,4 @@
         - lv_resources.resources[0].status is defined
       retries: 30
       delay: 10
-      loop:
-        - local-disks
-        - local-disks2
+      loop: "{{ hostvars['master0'].local_volume_name }}"

@@ -73,12 +73,38 @@
         regexp: '("image": ")[^"]*/ztp-site-generat[^"]*(")'
         replace: "\\1disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
 
+    - name: Get MultiClusterHub cluster-wide
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        kubeconfig: "{{ kubeconfig }}"
+      register: mch_cluster_wide_info
+
+    - name: Verify MultiClusterHub exists and is Running
+      ansible.builtin.assert:
+        that:
+          - mch_cluster_wide_info.resources | length > 0
+          - mch_cluster_wide_info.resources[0].status.phase is defined
+          - mch_cluster_wide_info.resources[0].status.phase == "Running"
+        fail_msg: |
+          MultiClusterHub not found or not Running.
+          Status: {{ mch_cluster_wide_info.resources[0].status.phase | default('Not Found') }}
+          Ensure ACM is fully deployed before running this playbook.
+
+    - name: Get ACM namespace from MultiClusterHub
+      ansible.builtin.set_fact:
+        mch_namespace: "{{ mch_cluster_wide_info.resources[0].metadata.namespace }}"
+
+    - name: Display ACM namespace
+      ansible.builtin.debug:
+        msg: "MultiClusterHub found in namespace: {{ mch_namespace }}"
+
     - name: Get multicluster-operators-hub-subscription deployment
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: Deployment
         name: multicluster-operators-hub-subscription
-        namespace: open-cluster-management
+        namespace: "{{ mch_namespace }}"
         kubeconfig: "{{ kubeconfig }}"
       register: multicluster_deployment
 
@@ -86,7 +112,7 @@
       ansible.builtin.assert:
         that:
           - multicluster_deployment.resources | length > 0
-        fail_msg: "Deployment 'multicluster-operators-hub-subscription' not found in namespace 'open-cluster-management'. Ensure ACM is installed."
+        fail_msg: "Deployment 'multicluster-operators-hub-subscription' not found in namespace '{{ mch_namespace }}'. Ensure ACM is fully deployed."
 
     - name: Extract multicluster-operators-hub-subscription image
       ansible.builtin.set_fact:

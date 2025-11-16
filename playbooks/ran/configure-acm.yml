@@ -22,13 +22,19 @@
 #   This ensures you use officially tested RHCOS images for spoke cluster deployments.
 #
 # What it does:
-#   1. Fetches RHCOS image info from assisted-service official defaults
-#   2. Creates MultiClusterHub resource and waits for it to be running
-#   3. Creates mirror registry ConfigMap for disconnected environments
-#   4. Creates AgentServiceConfig for Assisted Installer with correct RHCOS ISO
-#   5. Waits for assisted-service pods to be ready
-#   6. Applies Provisioning resource for Metal3
-#   7. Waits for metal3 pods to be running
+#   1. Validates ACM operator is installed (checks for MultiClusterHub CRD)
+#   2. Validates MultiClusterHub exists (cluster-wide check)
+#   3. Fetches RHCOS image info from assisted-service official defaults
+#   4. Waits for MultiClusterHub to be running
+#   5. Creates mirror registry ConfigMap for disconnected environments
+#   6. Creates AgentServiceConfig for Assisted Installer with correct RHCOS ISO
+#   7. Waits for assisted-service pods to be ready
+#   8. Applies Provisioning resource for Metal3
+#   9. Waits for metal3 pods to be running
+#
+# Important Notes:
+#   - Assumes MultiClusterHub already exists (created by operator deployment)
+#   - Automatically detects MCH namespace (works with any namespace)
 
 - name: Pre-flight validation
   hosts: localhost
@@ -102,34 +108,70 @@
     ## MultiClusterHub Resource Creation and Wait
     # -----------------------------------------------------------------------------
 
-    - name: 🚀 Create MultiClusterHub Resource
-      kubernetes.core.k8s:
-        state: present
-        api_version: operator.open-cluster-management.io/v1
-        kind: MultiClusterHub
-        name: multiclusterhub
-        namespace: "{{ mch_namespace }}"
-        definition:
-          spec: {}
+    - name: Check if MultiClusterHub CRD exists
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: multiclusterhubs.operator.open-cluster-management.io
+      register: mch_crd_check
 
-    - name: Wait for MultiClusterHub to reach Running status
+    - name: Validate ACM operator is installed
+      ansible.builtin.assert:
+        that:
+          - mch_crd_check.resources | length > 0
+        fail_msg: |
+          ERROR: ACM operator is not installed!
+          The MultiClusterHub CRD was not found in the cluster.
+
+    - name: Check if MultiClusterHub exists (cluster-wide)
       kubernetes.core.k8s_info:
         api_version: operator.open-cluster-management.io/v1
         kind: MultiClusterHub
-        name: multiclusterhub
-        namespace: "{{ mch_namespace }}"
-      register: mch_info
+      register: mch_exists
+
+    # If MultiClusterHub already exists, skip creation
+    - name: MultiClusterHub status
+      ansible.builtin.debug:
+        msg: "MultiClusterHub already exists cluster wide, skipping creation."
+      when: mch_exists.resources | length > 0
+
+    - name: Wait for MultiClusterHub cluster wide to reach Running status
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+      register: mch_cluster_wide_info
       until: 
-        - mch_info.resources | length > 0
-        - mch_info.resources[0].status.phase is defined
-        - mch_info.resources[0].status.phase == "Running"
+        - mch_cluster_wide_info.resources | length > 0
+        - mch_cluster_wide_info.resources[0].status.phase is defined
+        - mch_cluster_wide_info.resources[0].status.phase == "Running"
       retries: "{{ (timeout_mch | int / 10) | int }}"
       delay: 10
 
-    - name: Report MultiClusterHub status
-      ansible.builtin.debug:
-        msg: "MultiClusterHub in namespace '{{ mch_namespace }}' is Running."
-      when: mch_info is succeeded
+    - block:
+        - name: Create MultiClusterHub Resource
+          kubernetes.core.k8s:
+            state: present
+            api_version: operator.open-cluster-management.io/v1
+            kind: MultiClusterHub
+            name: multiclusterhub
+            namespace: "{{ mch_namespace }}"
+            definition:
+              spec: {}
+
+        - name: Wait for MultiClusterHub single namespace to reach Running status
+          kubernetes.core.k8s_info:
+            api_version: operator.open-cluster-management.io/v1
+            kind: MultiClusterHub
+            name: multiclusterhub
+            namespace: "{{ mch_namespace }}"
+          register: mch_info
+          until: 
+            - mch_info.resources | length > 0
+            - mch_info.resources[0].status.phase is defined
+            - mch_info.resources[0].status.phase == "Running"
+          retries: "{{ (timeout_mch | int / 10) | int }}"
+          delay: 10
+      when: mch_exists.resources | length == 0
 
     ## ConfigMap and AgentServiceConfig Creation
     # -----------------------------------------------------------------------------

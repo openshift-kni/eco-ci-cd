@@ -14,4 +14,4 @@
     - cgroup_version == "v2" and ocp_version > "4.13" or
       cgroup_version == "v1" and ocp_version > "4.15" and ocp_version < "4.19"
   notify:
-    - Wait for MCP
+    - wait for mcp update

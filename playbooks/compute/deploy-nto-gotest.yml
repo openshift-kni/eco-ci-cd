@@ -5,6 +5,7 @@
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   vars:
+    sno_cluster: false
     artifact_dir: /tmp/artifacts
     gotest_dir: /tmp/gotest
     nto_repo: https://github.com/openshift/cluster-node-tuning-operator
@@ -25,6 +26,17 @@
     - name: Set ocp_version
       ansible.builtin.set_fact:
         ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
+
+    - name: Get Nodes information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes_info
+
+    - name: Verify if it's SNO cluster
+      ansible.builtin.set_fact:
+        sno_cluster: true
+      when: nodes_info.resources | length == 1
 
     - name: Ensure test directory does not exist
       ansible.builtin.file:
@@ -67,19 +79,23 @@
           set -e
           export PATH=/home/telcov10n/go/bin:/usr/local/go/bin:$PATH
           export KUBECONFIG="{{ kubeconfig }}"
-          export ROLE_WORKER_CNF=worker-cnf
           export PERF_TEST_PROFILE=performance
           export IMAGE_REGISTRY="registry.stage.redhat.io/"
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
           export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
           export MUSTGATHER_DIR="/mustgather"
+          export ROLE_WORKER_CNF={% if sno_cluster | bool %}master{% else %}worker-cnf{% endif %}
+
 
           echo "Installing ginkgo and gomega..."
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
           cd {{ gotest_dir }}
-          go mod vendor && go mod tidy && make vet
+          go mod vendor && go mod tidy
+          {% if ocp_version is version('4.15', '>=') %}
+          make vet
+          {% endif %}
 
           echo "Running gotests..."
           ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \

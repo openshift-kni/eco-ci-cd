@@ -50,5 +50,5 @@
     mcp_pool_name:
       - "worker-cnf"
   notify:
-    - Wait for MCP
+    - wait for mcp update
   when: not is_sno

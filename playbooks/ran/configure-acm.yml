@@ -1,5 +1,5 @@
 ---
-# This playbook configures Advanced Cluster Management (ACM) MultiClusterHub and 
+# This playbook configures Advanced Cluster Management (ACM) MultiClusterHub and
 # Assisted Service on OpenShift clusters.
 #
 # Prerequisites:
@@ -52,7 +52,7 @@
           Required variables must be defined:
             - kubeconfig: Path to kubeconfig file
             - ocp_version: OpenShift version (e.g., "4.19", "4.18")
-          
+
           Usage:
             ansible-playbook playbooks/ran/configure_acm.yml \
               --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
@@ -65,6 +65,7 @@
   vars:
     mch_namespace: open-cluster-management
     mce_namespace: multicluster-engine
+    mch_cr_name: multiclusterhub
     timeout_mch: 600
     timeout_assisted_service: 300
     timeout_metal3: 300
@@ -76,9 +77,6 @@
 
   tasks:
 
-    ## Fetch RHCOS OS Image information from assisted-service defaults
-    # -----------------------------------------------------------------------------
-
     - name: Fetch default OS images from assisted-service
       ansible.builtin.uri:
         url: https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json
@@ -89,9 +87,13 @@
       ansible.builtin.set_fact:
         os_images_data: "{{ os_images_response.content | from_json }}"
 
-    - name: Find matching RHCOS image for OCP {{ ocp_version }} (x86_64)
+    - name: Find matching RHCOS image (x86_64) for OCP {{ ocp_version }}
       ansible.builtin.set_fact:
-        matched_os_image: "{{ os_images_data | selectattr('openshift_version', 'equalto', ocp_version) | selectattr('cpu_architecture', 'equalto', 'x86_64') | first }}"
+        matched_os_image: >-
+          {{ os_images_data
+             | selectattr('openshift_version', 'equalto', ocp_version)
+             | selectattr('cpu_architecture', 'equalto', 'x86_64')
+             | first }}
 
     - name: Set RHCOS version and URL from official defaults
       ansible.builtin.set_fact:
@@ -104,9 +106,6 @@
           Using RHCOS configuration for OCP {{ ocp_version }}:
             Version: {{ rhcos_version }}
             ISO URL: {{ rhcos_iso_url }}
-
-    ## MultiClusterHub Resource Creation and Wait
-    # -----------------------------------------------------------------------------
 
     - name: Check if MultiClusterHub CRD exists
       kubernetes.core.k8s_info:
@@ -123,60 +122,47 @@
           ERROR: ACM operator is not installed!
           The MultiClusterHub CRD was not found in the cluster.
 
-    - name: Check if MultiClusterHub exists (cluster-wide)
+    - name: Check if MultiClusterHub exists (cluster-scoped no namespace)
       kubernetes.core.k8s_info:
         api_version: operator.open-cluster-management.io/v1
         kind: MultiClusterHub
-      register: mch_exists
+        name: "{{ mch_cr_name }}"
+        namespace: "{{ mce_namespace }}"
+      register: mch_info
 
-    # If MultiClusterHub already exists, skip creation
-    - name: MultiClusterHub status
-      ansible.builtin.debug:
-        msg: "MultiClusterHub already exists cluster wide, skipping creation."
-      when: mch_exists.resources | length > 0
+    - name: Create MultiClusterHub Resource
+      kubernetes.core.k8s:
+        state: present
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: "{{ mch_cr_name }}"
+        namespace: "{{ mce_namespace }}"
+        definition:
+          spec: {}
+      when: mch_info.resources | length == 0
 
-    - name: Wait for MultiClusterHub cluster wide to reach Running status
+    - name: Wait for MultiClusterHub to reach Running status
       kubernetes.core.k8s_info:
         api_version: operator.open-cluster-management.io/v1
         kind: MultiClusterHub
-      register: mch_cluster_wide_info
-      until: 
-        - mch_cluster_wide_info.resources | length > 0
-        - mch_cluster_wide_info.resources[0].status.phase is defined
-        - mch_cluster_wide_info.resources[0].status.phase == "Running"
+        name: "{{ mch_cr_name }}"
+        namespace: "{{ mce_namespace }}"
+      register: mch_info
+      until:
+        - mch_info.resources | length > 0
+        - mch_info.resources[0].status.phase is defined
+        - mch_info.resources[0].status.phase == "Running"
       retries: "{{ (timeout_mch | int / 10) | int }}"
       delay: 10
 
-    - block:
-        - name: Create MultiClusterHub Resource
-          kubernetes.core.k8s:
-            state: present
-            api_version: operator.open-cluster-management.io/v1
-            kind: MultiClusterHub
-            name: multiclusterhub
-            namespace: "{{ mch_namespace }}"
-            definition:
-              spec: {}
-
-        - name: Wait for MultiClusterHub single namespace to reach Running status
-          kubernetes.core.k8s_info:
-            api_version: operator.open-cluster-management.io/v1
-            kind: MultiClusterHub
-            name: multiclusterhub
-            namespace: "{{ mch_namespace }}"
-          register: mch_info
-          until: 
-            - mch_info.resources | length > 0
-            - mch_info.resources[0].status.phase is defined
-            - mch_info.resources[0].status.phase == "Running"
-          retries: "{{ (timeout_mch | int / 10) | int }}"
-          delay: 10
-      when: mch_exists.resources | length == 0
-
-    ## ConfigMap and AgentServiceConfig Creation
-    # -----------------------------------------------------------------------------
+    - name: Report MultiClusterHub status
+      ansible.builtin.debug:
+        msg: "MultiClusterHub in namespace '{{ mce_namespace }}' is Running."
+      when: mch_info is succeeded
 
     - name: Create ConfigMap for mirror registry
+      vars:
+        registry_host_url: disconnected.registry.local:5000
       kubernetes.core.k8s:
         state: present
         api_version: v1
@@ -191,43 +177,27 @@
 
               [[registry]]
                 prefix = ""
-                location = "quay.io/openshift-release-dev"
+                location = "quay.io/openshift-release-dev/ocp-v4.0-art-dev"
+                mirror-by-digest-only = true
 
                 [[registry.mirror]]
-                  location = "ocp-qe-01.savanna.lab.eng.rdu2.redhat.com:5015/openshift-release-dev"
-                  pull-from-mirror = "digest-only"
+                  location = "{{ registry_host_url }}/openshift-release-dev/ocp-v4.0-art-dev"
 
               [[registry]]
                 prefix = ""
-                location = "registry.access.redhat.com/openshift4/ose-oauth-proxy"
+                location = "registry.ci.openshift.org/ocp/release"
+                mirror-by-digest-only = true
 
                 [[registry.mirror]]
-                  location = "brew.registry.redhat.io/openshift4/ose-oauth-proxy"
-                  pull-from-mirror = "digest-only"
+                  location = "{{ registry_host_url }}/ocp/release"
 
               [[registry]]
                 prefix = ""
-                location = "registry.ci.openshift.org/ocp"
+                location = "registry.ci.openshift.org/ocp/4-dev-preview"
+                mirror-by-digest-only = true
 
                 [[registry.mirror]]
-                  location = "ocp-qe-01.savanna.lab.eng.rdu2.redhat.com:5015/ocp"
-                  pull-from-mirror = "digest-only"
-
-              [[registry]]
-                prefix = ""
-                location = "registry.redhat.io/multicluster-engine"
-
-                [[registry.mirror]]
-                  location = "brew.registry.redhat.io/multicluster-engine"
-                  pull-from-mirror = "digest-only"
-
-              [[registry]]
-                prefix = ""
-                location = "registry.redhat.io/rhacm2"
-
-                [[registry.mirror]]
-                  location = "brew.registry.redhat.io/rhacm2"
-                  pull-from-mirror = "digest-only"
+                  location = "{{ registry_host_url }}/ocp/4-dev-preview"
 
     - name: Create AgentServiceConfig
       kubernetes.core.k8s:
@@ -258,9 +228,6 @@
                 url: "{{ rhcos_iso_url }}"
                 cpuArchitecture: "x86_64"
 
-    ## Wait for assisted-service Pod
-    # -----------------------------------------------------------------------------
-
     - name: Wait for assisted-service pod to be running
       kubernetes.core.k8s_info:
         kind: Pod
@@ -278,9 +245,6 @@
       ansible.builtin.debug:
         msg: "assisted-service pod in namespace '{{ mce_namespace }}' is Ready."
       when: assisted_service_wait is succeeded
-
-    ## Provisioning and Metal3 Wait
-    # -----------------------------------------------------------------------------
 
     - name: Apply Provisioning resource
       kubernetes.core.k8s:
@@ -301,7 +265,7 @@
         label_selectors:
           - "k8s-app in (metal3, cluster-baremetal-operator)"
       register: metal3_check
-      until: 
+      until:
         - metal3_check.resources is defined
         - metal3_check.resources | length >= 3
         - metal3_check.resources | selectattr('status.phase', 'equalto', 'Running') | list | length >= 3
@@ -316,5 +280,3 @@
           Current metal pods:
           {{ metal3_check.resources | selectattr('metadata.name', 'search', 'metal') | map(attribute='metadata.name') | list }}
       when: metal3_check is failed
-
-

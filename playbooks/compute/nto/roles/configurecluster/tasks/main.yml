@@ -25,18 +25,18 @@
 
 - name: Update stage pull secret
   ansible.builtin.include_tasks: update_pull_secret.yml
-  when: stage_pull_secret is defined
+  when: stage_pull_secret is defined and stage_pull_secret | length > 0
 
 - name: Create machine config pool
   ansible.builtin.include_tasks: machineConfigPool.yml
 
 - name: Apply Cgroup configuration
   ansible.builtin.include_tasks: cgroup.yml
-  when: cgroup_version is defined
+  when: cgroup_version is defined and cgroup_version | length > 0
 
 - name: Apply container runtime config
   ansible.builtin.include_tasks: containerRuntime.yml
-  when: container_runtime is defined
+  when: container_runtime is defined and container_runtime | length > 0
 
 - name: Create performance Profile
   ansible.builtin.include_tasks: ppc.yml

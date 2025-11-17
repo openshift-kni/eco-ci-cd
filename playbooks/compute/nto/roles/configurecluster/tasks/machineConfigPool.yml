@@ -18,6 +18,15 @@
     msg: "Applied machineconfiguration.openshift.io/role=master label to master MCP for SNO deployment"
   when: is_sno
 
+- name: Get Nodes information
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: worker_nodes_info
+  when: not is_sno
+
 - name: Apply CNF label to worker0 node (multinode case)
   kubernetes.core.k8s:
     kind: Node

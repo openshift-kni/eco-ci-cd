@@ -1,6 +1,6 @@
 ---
-- name: Deploy spoke masters on hypervisor
-  hosts: hypervisor
+- name: Deploy spoke masters on hypervisor (delegated from bastion)
+  hosts: bastion
   vars:
     vm_qcow_url: "{{ vm_qcow_tlv_url }}"
     libvirtd_disk_path: /var/lib/libvirt/images
@@ -12,8 +12,10 @@
       loop: "{{ groups['masters'] }}"
 
     - name: Ensure VMs do not already exist
-      ansible.builtin.include_role:
+      include_role:
         name: redhatci.ocp.destroy_vms
+        apply:
+          delegate_to: hypervisor
       vars:
         cluster_name: "dummy"
         vm_bridge_interface: "dummy"
@@ -27,6 +29,7 @@
         force: true
         mode: '0640'
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Resize VM hard disk
       ansible.builtin.command:
@@ -34,6 +37,7 @@
       register: resize_output
       changed_when: resize_output.rc == 0
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Create user-data file
       ansible.builtin.copy:
@@ -49,6 +53,7 @@
           ssh_pwauth: true
         mode: '0664'
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Create meta-data file
       ansible.builtin.copy:
@@ -56,6 +61,7 @@
         content: ""
         mode: '0664'
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Create network-config file
       vars:
@@ -81,6 +87,7 @@
                   addresses: {{ dns_servers }}
         mode: '0664'
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Ensure ISO tools are installed
       ansible.builtin.dnf:
@@ -88,6 +95,7 @@
           - genisoimage
         state: present
       become: true
+      delegate_to: hypervisor
 
     - name: Remove Cloud-Init ISO
       ansible.builtin.file:
@@ -95,6 +103,7 @@
         state: absent
       become: true
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Generate Cloud-Init ISO
       ansible.builtin.shell: |
@@ -108,6 +117,7 @@
       register: create_iso
       changed_when: create_iso.rc == 0
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Customize qcow2 VM image
       ansible.builtin.command:
@@ -116,10 +126,13 @@
       register: resize_output
       changed_when: resize_output.rc == 0
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
     - name: Create master VMs
-      ansible.builtin.include_role:
+      include_role:
         name: redhatci.ocp.create_vms
+        apply:
+          delegate_to: hypervisor
       vars:
         additional_virt_install_options: "--events on_reboot=restart --disk /tmp/cloud-init-{{ master_item }}.iso,device=cdrom --install no_install=yes --wait=0"
         cluster_name: "dummy"
@@ -143,6 +156,7 @@
         name: "{{ hostvars[item].hostname }}"
         state: running
       loop: "{{ groups['masters'] }}"
+      delegate_to: hypervisor
 
 - name: Wait for master VMs to become reachable
   hosts: masters

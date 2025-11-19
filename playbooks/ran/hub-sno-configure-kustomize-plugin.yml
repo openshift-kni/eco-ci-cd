@@ -39,39 +39,82 @@
   hosts: bastion
   gather_facts: true
   vars:
-    site_generate_image: 'registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:{{ ocp_version }}'
-
+    site_generate_image: 'registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:v{{ ocp_version }}'
+    container_registry_service_name: "container-registry"
+    ztp_workdir_path: "/tmp/ztp-workdir"
+    ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"
+    disconnected_registry_url: "disconnected.registry.local:5000"
+    openshift_gitops_namespace: "openshift-gitops"
+    json_patch_path: "{{ ztp_workdir_out_path }}/argocd/deployment/argocd-openshift-gitops-patch.json"
   tasks:
+    - name: Stop registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ container_registry_service_name }}"
+        state: stopped
+
+    - name: Remove repositories from registry storage
+      become: true
+      ansible.builtin.file:
+        path: "/opt/registry/data/docker/registry/v2/repositories/ztp"
+        state: absent
+
+    - name: Start registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ container_registry_service_name }}"
+        state: started
+        enabled: true
+
     - name: Mirror ztp-site-generator image to disconnected registry
       ansible.builtin.shell: |
         skopeo copy --all \
           docker://{{ site_generate_image }} \
-          docker://disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
+          docker://{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
       environment:
         REGISTRY_AUTH_FILE: /etc/containers/auth.json
-        
-    - name: cleanup ztp-workdir dir
+      changed_when: true
+
+    - name: Cleanup ztp-workdir directory
+      become: true
       ansible.builtin.file:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/"
+        path: "{{ ztp_workdir_path }}"
         state: absent
 
-    - name: ensure ztp-wordir directory exists
+    - name: Ensure ztp-wordir directory exists
       ansible.builtin.file:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out"
+        path: "{{ ztp_workdir_out_path }}"
         state: directory
+        mode: "0777"
 
-    - name: export argocd directory ztp-site-generator container image
-      ansible.builtin.shell: |
-        podman run --rm disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }} extract /home/ztp --tar | tar x -C {{ ansible_facts['user_dir'] }}/ztp-workdir/out
+    - name: Create temporary container for ztp-site-generator extraction
+      containers.podman.podman_container:
+        name: "ztp-extract-{{ site_generate_image.split(':')[-1] }}"
+        image: "{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}"
+        authfile: /etc/containers/auth.json
+        state: created
 
-    - name: replace image in argocd-openshift-gitops-patch.json
+    - name: Copy /home/ztp content from container to host workdir
+      containers.podman.podman_container_copy:
+        container: "ztp-extract-{{ site_generate_image.split(':')[-1] }}"
+        src: "/home/ztp/."
+        dest: "{{ ztp_workdir_out_path }}/"
+        from_container: true
+        archive: false
+
+    - name: Remove temporary extraction container
+      containers.podman.podman_container:
+        name: "ztp-extract-{{ site_generate_image.split(':')[-1] }}"
+        state: absent
+
+    - name: Replace image in argocd-openshift-gitops-patch.json
       ansible.builtin.replace:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        path: "{{ json_patch_path }}"
         # Note: Downstream will have something like "registry.redhat.io/openshift4/ztp-site-generate-rhel8:v4.14.0-71"
         #       Upstream will have something like   "quay.io/openshift-kni/ztp-site-generator:latest"
         #       This regex should work for either:
         regexp: '("image": ")[^"]*/ztp-site-generat[^"]*(")'
-        replace: "\\1disconnected.registry.local:5000/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
+        replace: "\\1{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
 
     - name: Get MultiClusterHub cluster-wide
       kubernetes.core.k8s_info:
@@ -117,33 +160,37 @@
     - name: Extract multicluster-operators-hub-subscription image
       ansible.builtin.set_fact:
         multicluster_subs_image:
-          stdout: "{{ multicluster_deployment.resources[0].spec.template.spec.containers | selectattr('name', 'equalto', 'multicluster-operators-hub-subscription') | map(attribute='image') | first }}"
+          stdout: >-
+            {{ multicluster_deployment.resources[0].spec.template.spec.containers
+               | selectattr('name', 'equalto', 'multicluster-operators-hub-subscription')
+               | map(attribute='image')
+               | first }}
 
-    - name: replace multicluster-operators-hub-subscription image in argocd-openshift-gitops-patch.json
+    - name: Replace multicluster-operators-hub-subscription image in argocd-openshift-gitops-patch.json
       ansible.builtin.replace:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        path: "{{ json_patch_path }}"
         regexp: "registry.redhat.io/rhacm2/multicluster-operators-subscription-rhel\\d:v.*\\d"
         replace: "{{ multicluster_subs_image.stdout }}"
 
-    - name: replace args for rhel8 images in argocd-openshift-gitops-patch.json
+    - name: Replace args for rhel8 images in argocd-openshift-gitops-patch.json
       ansible.builtin.replace:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        path: "{{ json_patch_path }}"
         regexp: '"mkdir -p /.*"'
         replace: '"mkdir -p /.config/kustomize/plugin/ && cp -r /etc/kustomize/plugin/policy.open-cluster-management.io /.config/kustomize/plugin/"'
-      when:
-        - multicluster_subs_image.stdout.find("rhel8") != -1
+      when: multicluster_subs_image.stdout.find("rhel8") != -1
 
-    - name: replace args for rhel9 images in argocd-openshift-gitops-patch.json
+    - name: Replace args for rhel9 images in argocd-openshift-gitops-patch.json
       ansible.builtin.replace:
-        path: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        path: "{{ json_patch_path }}"
         regexp: '"mkdir -p /.*"'
-        replace: '"mkdir -p /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator && cp /policy-generator/PolicyGenerator-not-fips-compliant /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator/PolicyGenerator"'
-      when:
-        - multicluster_subs_image.stdout.find("rhel9") != -1
+        replace: '"mkdir -p /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator &&
+          cp /policy-generator/PolicyGenerator-not-fips-compliant
+          /.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator/PolicyGenerator"'
+      when: multicluster_subs_image.stdout.find("rhel9") != -1
 
     - name: Load ArgoCD patch file
       ansible.builtin.slurp:
-        src: "{{ ansible_facts['user_dir'] }}/ztp-workdir/out/argocd/deployment/argocd-openshift-gitops-patch.json"
+        src: "{{ json_patch_path }}"
       register: argocd_patch_content
 
     - name: Patch gitops argocd
@@ -151,7 +198,7 @@
         api_version: argoproj.io/v1beta1
         kind: ArgoCD
         name: openshift-gitops
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         definition: "{{ argocd_patch_content.content | b64decode | from_json }}"
         state: patched
         kubeconfig: "{{ kubeconfig }}"
@@ -161,7 +208,7 @@
       kubernetes.core.k8s:
         api_version: v1
         kind: Pod
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         label_selectors:
           - app.kubernetes.io/name=openshift-gitops-repo-server
         state: absent
@@ -171,7 +218,7 @@
       kubernetes.core.k8s:
         api_version: v1
         kind: Pod
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         label_selectors:
           - app.kubernetes.io/name=openshift-gitops-redis
         state: absent
@@ -181,7 +228,7 @@
       kubernetes.core.k8s:
         api_version: v1
         kind: Pod
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         label_selectors:
           - app.kubernetes.io/name=openshift-gitops-applicationset-controller
         state: absent
@@ -192,7 +239,7 @@
         api_version: apps/v1
         kind: Deployment
         name: openshift-gitops-repo-server
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         kubeconfig: "{{ kubeconfig }}"
       register: gitops_reposerver_deployment
       retries: 40
@@ -204,7 +251,7 @@
         api_version: apps/v1
         kind: Deployment
         name: openshift-gitops-redis
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         kubeconfig: "{{ kubeconfig }}"
       register: gitops_redis_deployment_ready
       retries: 40
@@ -216,7 +263,7 @@
         api_version: apps/v1
         kind: Deployment
         name: openshift-gitops-applicationset-controller
-        namespace: openshift-gitops
+        namespace: "{{ openshift_gitops_namespace }}"
         kubeconfig: "{{ kubeconfig }}"
       register: gitops_applicationset_deployment_ready
       retries: 40

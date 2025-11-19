@@ -1,0 +1,72 @@
+- name: Delete old clusters
+  hosts: hypervisor
+  gather_facts: false
+  become: true
+  vars:
+    libvirt_storage_path: /var/lib/libvirt/images
+
+  tasks:
+    - name: Get all Running VMs
+      community.libvirt.virt:
+        command: list_vms
+      register: running_vms_result
+
+    - name: Filter VMs with "master" or "worker" in the name
+      ansible.builtin.set_fact:
+        vms_to_delete: "{{ running_vms_result.list_vms | select('match', '(?i).*_(master|worker)[0-9].*') | list }}"
+
+    - name: Get VM disks path
+      ansible.builtin.find:
+        paths: "{{ libvirt_storage_path }}"
+        patterns: "*.qcow2"
+        file_type: file
+      register: vm_disks_result
+
+    - name: Get old agent images files
+      ansible.builtin.find:
+        paths: "{{ libvirt_storage_path }}"
+        patterns: "agent-iso*.img"
+        file_type: file
+      register: agent_images_files_result
+
+    - name: Set VM disks to delete
+      ansible.builtin.set_fact:
+        vm_disks_to_delete: "{{ vm_disks_result.files | map(attribute='path') | select('match', '(?i).*_(master|worker)[0-9].*.qcow2') | list }}"
+
+    - name: Set agent images files to delete
+      ansible.builtin.set_fact:
+        agent_images_files_to_delete: "{{ agent_images_files_result.files | map(attribute='path') | list }}"
+
+    - name: Print VMs to delete
+      ansible.builtin.debug:
+        var: vms_to_delete
+
+    - name: Print VM disks to delete
+      ansible.builtin.debug:
+        var: vm_disks_to_delete
+
+    - name: Print agent images files to delete
+      ansible.builtin.debug:
+        var: agent_images_files_to_delete
+
+    - name: Shutdown VM if it is running
+      community.libvirt.virt:
+        name: "{{ item }}"
+        command: destroy
+        # This will ensure the task doesn't fail if the VM is already shut off
+        # or if the shutdown command fails (it will proceed to undefine).
+      loop: "{{ vms_to_delete | default([]) }}"
+      failed_when: false
+
+    - name: Undefine (Delete) the VM
+      community.libvirt.virt:
+        name: "{{ item }}"
+        command: undefine
+        flags: nvram
+      loop: "{{ vms_to_delete | default([]) }}"
+
+    - name: Delete the primary disk image for VM
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ vm_disks_to_delete | union(agent_images_files_to_delete) }}"

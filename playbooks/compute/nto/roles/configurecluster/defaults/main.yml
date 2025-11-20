@@ -8,6 +8,7 @@ per_pod_power_management: false
 must_gather_dir: "/mustgather"
 container_runtime: "runc"
 is_sno: false
+day0_installation: false
 
 mcp_wait_retries: 180
 mcp_wait_delay: 30

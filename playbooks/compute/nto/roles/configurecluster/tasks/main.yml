@@ -23,10 +23,6 @@
 - name: Detect if deployment is SNO
   ansible.builtin.include_tasks: detect_sno.yml
 
-- name: Update stage pull secret
-  ansible.builtin.include_tasks: update_pull_secret.yml
-  when: stage_pull_secret is defined and stage_pull_secret | length > 0
-
 - name: Create machine config pool
   ansible.builtin.include_tasks: machineConfigPool.yml
 
@@ -40,6 +36,3 @@
 
 - name: Create performance Profile
   ansible.builtin.include_tasks: ppc.yml
-
-- name: Update OpenShift Global Pull Secret
-  ansible.builtin.include_tasks: update_pull_secret.yml

@@ -1,0 +1,10 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: ContainerRuntimeConfig
+metadata:
+  name: "enable-{{ container_runtime | default('crun') }}-{{ 'master' if (is_sno | bool) else 'worker-cnf' }}"
+spec:
+  containerRuntimeConfig:
+    defaultRuntime: "{{ container_runtime | default('crun') }}"
+  machineConfigPoolSelector:
+    matchLabels:
+      machineconfiguration.openshift.io/role: {{ 'master' if (is_sno | bool) else 'worker-cnf' }}

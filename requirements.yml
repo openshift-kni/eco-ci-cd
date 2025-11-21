@@ -8,3 +8,5 @@ collections:
     version: 2.4.2
   - name: junipernetworks.junos
     version: 9.1.0
+  - name: containers.podman
+    version: 1.18.0

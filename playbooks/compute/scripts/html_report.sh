@@ -2,8 +2,8 @@
 #!/bin/usr/env bash
 
 # Those value are set to align with both Prow and Jenkins Jobs
-ARTIFACT_DIR=${ARTIFACT_DIR:-/artifacts}
-SHARED_DIR=${SHARED_DIR:-/artifacts}
+ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
+SHARED_DIR=${SHARED_DIR:-/tmp/artifacts}
 
 if [[ -f ${ARTIFACT_DIR}*.xml ]]; then
         echo "Found unittest files"

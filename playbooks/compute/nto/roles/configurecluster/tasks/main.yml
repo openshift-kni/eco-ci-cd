@@ -1,38 +1,20 @@
 ---
-- name: Ensure python packages are installed
-  ansible.builtin.pip:
-    name:
-      - kubernetes >= 24.2.0
-      - PyYAML >= 3.11
-
-- name: Get Cluster version
-  kubernetes.core.k8s_info:
-    api_version: config.openshift.io/v1
-    kind: ClusterVersion
-    name: version
-  register: api_version
-
-- name: Set ocp_version
+- name: Set Manifests folder
   ansible.builtin.set_fact:
-    ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
+    manifests_folder: "{{ artifacts_folder }}/manifests"
 
-- name: Print ocp_version
-  ansible.builtin.debug:
-    msg: "OCP version: {{ ocp_version }}"
+- name: Create manifests directory
+  ansible.builtin.include_tasks: create_directory.yml
+  vars:
+    dir_path: "{{ item }}"
+  loop:
+    - "{{ artifacts_folder }}"
+    - "{{ manifests_folder }}"
 
-- name: Detect if deployment is SNO
-  ansible.builtin.include_tasks: detect_sno.yml
+- name: Deploy Day2 Configuration
+  ansible.builtin.include_tasks: day2_installation.yml
+  when: not day0_installation
 
-- name: Create machine config pool
-  ansible.builtin.include_tasks: machineConfigPool.yml
-
-- name: Apply Cgroup configuration
-  ansible.builtin.include_tasks: cgroup.yml
-  when: cgroup_version is defined and cgroup_version | length > 0
-
-- name: Apply container runtime config
-  ansible.builtin.include_tasks: containerRuntime.yml
-  when: container_runtime is defined and container_runtime | length > 0
-
-- name: Create performance Profile
-  ansible.builtin.include_tasks: ppc.yml
+- name: Deploy Day0 Configuration
+  ansible.builtin.include_tasks: day0_installation.yml
+  when: day0_installation

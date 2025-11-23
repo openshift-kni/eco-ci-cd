@@ -5,7 +5,10 @@
 ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
 SHARED_DIR=${SHARED_DIR:-/tmp/artifacts}
 
-if [[ -f ${ARTIFACT_DIR}*.xml ]]; then
+
+xml_files=(${ARTIFACT_DIR}/*.xml)
+
+if [ ${#xml_files[@]} -gt 0 ]; then
         echo "Found unittest files"
         script_url=https://raw.githubusercontent.com/openshift-kni/telco5gci/refs/heads/master/j2html.py
         requirements_url=https://raw.githubusercontent.com/openshift-kni/telco5gci/refs/heads/master/requirements.txt

@@ -77,9 +77,41 @@
     msg: "Expected exactly one directory under /configs in {{ fbc_image }}, found {{ fbc_pkg_dirs.matched | default(0) }}"
   when: (fbc_pkg_dirs.matched | default(0)) | int != 1
 
+- name: Set package directory path
+  ansible.builtin.set_fact:
+    fbc_pkg_catalog_dir: "{{ (fbc_pkg_dirs.files | first).path }}"
+
+- name: Check if catalog.json exists
+  ansible.builtin.stat:
+    path: "{{ fbc_pkg_catalog_dir }}/catalog.json"
+  register: json_catalog
+
+- name: Check if catalog.yaml already exists
+  ansible.builtin.stat:
+    path: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
+  register: yaml_catalog
+
+- name: Convert catalog.json to catalog.yaml
+  when: json_catalog.stat.exists and not yaml_catalog.stat.exists
+  block:
+    - name: Read the catalog.json file
+      ansible.builtin.slurp:
+        src: "{{ fbc_pkg_catalog_dir }}/catalog.json"
+      register: remote_json_file
+
+    - name: Convert JSON stream to YAML and save
+      ansible.builtin.copy:
+        dest: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
+        content: |
+          {% set raw = remote_json_file.content | b64decode | trim %}
+          {% for item in ('[' + (raw | regex_replace('}\s*{', '}, {')) + ']') | from_json %}
+          ---
+          {{ item | to_nice_yaml(indent=2) }}
+          {% endfor %}
+
 - name: Set catalog.yaml path
   ansible.builtin.set_fact:
-    catalog_path: "{{ (fbc_pkg_dirs.files | first).path }}/catalog.yaml"
+    catalog_path: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
 
 - name: Read catalog.yaml
   ansible.builtin.slurp:

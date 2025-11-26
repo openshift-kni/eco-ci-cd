@@ -99,6 +99,9 @@
     chdir: /tmp
   register: oc_mirror
   changed_when: true
+  retries: 3
+  delay: 30
+  until: oc_mirror.rc == 0
   ansible.builtin.shell: >-
     env -u REGISTRY_AUTH_FILE oc-mirror
     --authfile "{{ ocp_operator_mirror_pull_secret_path }}"

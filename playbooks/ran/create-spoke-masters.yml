@@ -2,7 +2,7 @@
 - name: Deploy spoke masters on hypervisor (delegated from bastion)
   hosts: bastion
   vars:
-    vm_qcow_url: "{{ vm_qcow_tlv_url }}"
+    vm_qcow_url: "{{ hostvars['hypervisor'].vm_qcow_tlv_url }}"
     libvirtd_disk_path: /var/lib/libvirt/images
   tasks:
 
@@ -20,6 +20,7 @@
         cluster_name: "dummy"
         vm_bridge_interface: "dummy"
         kvm_nodes: "{{ vms_to_destroy }}"
+        DELETE_VM_BRIDGE: false  # Prevent deletion of shared network infrastructure
       ignore_errors: true
 
     - name: Gather VM qcow image
@@ -163,6 +164,7 @@
   gather_facts: false
   tasks:
     - name: Wait for VM connection to become reachable/usable
+      delegate_to: hypervisor
       ansible.builtin.wait_for_connection:
         delay: 30
         sleep: 10

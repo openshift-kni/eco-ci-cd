@@ -1,4 +1,10 @@
 ---
+- name: Ensure python packages are installed
+  ansible.builtin.pip:
+    name:
+      - kubernetes >= 24.2.0
+      - PyYAML >= 3.11
+
 - name: Set Manifests folder
   ansible.builtin.set_fact:
     manifests_folder: "{{ artifacts_folder }}/manifests"
@@ -11,10 +17,16 @@
     - "{{ artifacts_folder }}"
     - "{{ manifests_folder }}"
 
-- name: Deploy Day2 Configuration
-  ansible.builtin.include_tasks: day2_installation.yml
-  when: not day0_installation
+- name: Collect Must Gather
+  ansible.builtin.include_tasks: must_gather.yml
+  when: not day0_installation | bool
 
-- name: Deploy Day0 Configuration
-  ansible.builtin.include_tasks: day0_installation.yml
-  when: day0_installation
+- name: Detect if deployment is SNO
+  ansible.builtin.include_tasks: detect_sno.yml
+
+- name: Render Manifests
+  ansible.builtin.include_tasks: Render_manifests.yml
+
+- name: Deploy Manifests
+  ansible.builtin.include_tasks: deploy_manifests.yml
+  when: not day0_installation | bool

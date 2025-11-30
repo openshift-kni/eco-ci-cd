@@ -491,7 +491,7 @@
         patterns: "*.yml"
         file_type: file
       register: extra_manifests_files
-      when: extra_manifests_folder is defined
+      when: extra_manifests_folder is defined and extra_manifests_folder | length > 0
 
     - name: Copy extra manifests to generated directory
       ansible.builtin.copy:
@@ -503,7 +503,7 @@
       loop_control:
         label: "{{ item.path }}"
       when:
-        - extra_manifests_folder is defined
+        - extra_manifests_folder is defined and extra_manifests_folder | length > 0
 
     - name: Configure trusted CA for internal registry (SNO)
       when: disconnected | bool

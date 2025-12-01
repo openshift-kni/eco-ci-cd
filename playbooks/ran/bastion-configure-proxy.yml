@@ -21,7 +21,6 @@
         group: squid 
       notify: Restart squid
 
-
     - name: Ensure Squid service is started and enabled
       ansible.builtin.systemd:
         name: squid

@@ -1,0 +1,9 @@
+http_port {{ proxy_port }}
+
+# Define the ACL for the specific ZTP Hub IP
+acl hub_ip_address src {{ hub_ip }}
+
+# Allow access ONLY from the ZTP Hub IP
+http_access allow hub_ip_address
+
+http_access deny all

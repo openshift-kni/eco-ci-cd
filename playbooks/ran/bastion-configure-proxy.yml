@@ -1,0 +1,42 @@
+---
+- name: Configure Squid Proxy on bastion for ZTP Hub Access in a disconnected environment
+  hosts: bastion
+  become: yes
+  vars:
+    hub_ip: "10.46.26.66" 
+    proxy_port: 3128
+
+  tasks:
+    - name: Ensure Squid is Installed
+      ansible.builtin.dnf:
+        name: squid
+        state: present
+
+    - name: Prepare custom squid.conf file
+      ansible.builtin.template:
+        src: squid.conf.j2
+        dest: /etc/squid/squid.conf
+        mode: '0640'
+        owner: root
+        group: squid 
+      notify: Restart squid
+
+    - name: Ensure Squid service is started and enabled
+      ansible.builtin.systemd:
+        name: squid
+        state: started
+        enabled: yes
+
+    - name: Configure Firewalld to allow proxy port
+      ansible.posix.firewalld:
+        port: "{{ proxy_port }}/tcp"
+        zone: public
+        state: enabled
+        permanent: yes
+        immediate: yes
+
+  handlers:
+    - name: Restart squid
+      ansible.builtin.systemd:
+        name: squid
+        state: restarted

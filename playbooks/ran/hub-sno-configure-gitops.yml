@@ -20,6 +20,14 @@
 
 
   tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - spoke_namespace is defined
+        fail_msg: "Required variables 'kubeconfig' and 'spoke_namespace' must be defined"
+        success_msg: "All required variables are defined"
+
     - name: Patch ArgoCD CR to configure proxy
       kubernetes.core.k8s:
         state: patched
@@ -112,3 +120,30 @@
       ansible.builtin.debug:
         msg: |
           gitops repo server pod can reach GitLab through bastion proxy.
+
+    - name: Add spoke namespace to policy-app-project destinations
+      kubernetes.core.k8s_json_patch:
+        api_version: argoproj.io/v1alpha1
+        kind: AppProject
+        name: policy-app-project
+        namespace: "{{ gitops_namespace }}"
+        patch:
+          - op: add
+            path: /spec/destinations/-
+            value:
+              namespace: "{{ spoke_namespace }}"
+              server: '*'
+
+    - name: Add ClusterInstance to policy-app-project namespaceResourceWhitelist
+      kubernetes.core.k8s_json_patch:
+        api_version: argoproj.io/v1alpha1
+        kind: AppProject
+        name: policy-app-project
+        namespace: "{{ gitops_namespace }}"
+        patch:
+          - op: add
+            path: /spec/namespaceResourceWhitelist/-
+            value:
+              group: siteconfig.open-cluster-management.io
+              kind: ClusterInstance
+

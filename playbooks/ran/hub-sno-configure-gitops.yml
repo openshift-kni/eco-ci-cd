@@ -1,0 +1,114 @@
+---
+
+- name: Configure hub cluster to reach gitlab repo through bastion proxy
+  hosts: bastion
+  gather_facts: false
+  become: no
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  vars:
+    bastion_proxy_address: "http://10.46.26.65:3128"
+    hub_pod_cidr: "10.128.0.0/14"
+    hub_service_cidr: "172.30.0.0/16"
+    internal_registry_dns: "disconnected.registry.local"
+    proxy_block_list: "localhost,127.0.0.1,.svc,.cluster.local,10.128.0.0/14,172.30.0.0/16,disconnected.registry.local:5000,10.46.26.65"
+    gitlab_repo_url: "https://gitlab.cee.redhat.com/sobarzan/ztp-site-configs.git"
+    gitops_namespace: openshift-gitops
+    repo_server_deployment: openshift-gitops-repo-server
+
+
+  tasks:
+    - name: Patch ArgoCD CR to configure proxy
+      kubernetes.core.k8s:
+        state: patched
+        api_version: argoproj.io/v1beta1
+        kind: ArgoCD
+        name: openshift-gitops
+        namespace: "{{ gitops_namespace }}"
+        definition:
+          spec:
+            repo:
+              env:
+                - name: HTTP_PROXY
+                  value: "{{ bastion_proxy_address }}"
+                - name: HTTPS_PROXY
+                  value: "{{ bastion_proxy_address }}"
+                - name: NO_PROXY
+                  value: "{{ proxy_block_list }}"
+      register: proxy_patch_status
+      changed_when: proxy_patch_status.changed
+
+    - name: Patch imagepullpolicy to IfNotPresent for gitops repo server
+      kubernetes.core.k8s:
+        state: patched
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ repo_server_deployment }}"
+        namespace: "{{ gitops_namespace }}"
+        definition:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: argocd-repo-server
+                    imagePullPolicy: IfNotPresent
+      changed_when: true
+
+    - name: Create gitlab ca certificate ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        api_version: v1
+        kind: ConfigMap
+        name: argocd-tls-certs-cm
+        namespace: "{{ gitops_namespace }}"
+        definition:
+          metadata:
+            name: argocd-tls-certs-cm
+            namespace: "{{ gitops_namespace }}"
+          data:
+            gitlab.cee.redhat.com: "{{ gitlab_ca_certificate }}"
+      changed_when: true
+
+    - name: Rollout gitops repo server deployment
+      ansible.builtin.command:
+        cmd: oc rollout restart deployment/{{ repo_server_deployment }} -n {{ gitops_namespace }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+
+    - name: Wait for gitops repo server deployment to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ repo_server_deployment }}"
+        namespace: "{{ gitops_namespace }}"
+      register: repo_server_deployment_ready
+      retries: 40
+      delay: 5
+      until: "repo_server_deployment_ready.resources[0].status.readyReplicas | default(0) == 1"
+
+    - name: Verify GitLab connectivity from repo server pod
+      ansible.builtin.shell: |
+        POD_NAME=$(oc get pod -n {{ gitops_namespace }} \
+          -l app.kubernetes.io/name={{ repo_server_deployment }} \
+          -o jsonpath='{.items[0].metadata.name}')
+        oc exec -n {{ gitops_namespace }} ${POD_NAME} -- \
+          curl -sI --max-time 10 \
+            --proxy {{ bastion_proxy_address }} \
+            {{ gitlab_repo_url }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: gitlab_curl_check
+      failed_when:
+        - gitlab_curl_check.rc != 0
+        - >
+          'Connection timed out' in gitlab_curl_check.stderr or
+          'Could not resolve host' in gitlab_curl_check.stderr
+      changed_when: false
+      
+    - name: Display connectivity test results
+      ansible.builtin.debug:
+        msg: |
+          gitops repo server pod can reach GitLab through bastion proxy.

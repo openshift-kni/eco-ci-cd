@@ -1,8 +1,7 @@
 ---
-- name: Deploy spoke masters on hypervisor (delegated from bastion)
+- name: Deploy spoke masters on hypervisor for ZTP
   hosts: bastion
   vars:
-    vm_qcow_url: "{{ hostvars['hypervisor'].vm_qcow_tlv_url }}"
     libvirtd_disk_path: /var/lib/libvirt/images
   tasks:
 
@@ -23,109 +22,10 @@
         DELETE_VM_BRIDGE: false  # Prevent deletion of shared network infrastructure
       ignore_errors: true
 
-    - name: Gather VM qcow image
-      ansible.builtin.get_url:
-        url: "{{ vm_qcow_url }}"
-        dest: "{{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2"
-        force: true
-        mode: '0640'
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Resize VM hard disk
+    - name: Create empty qcow2 disk for VM
       ansible.builtin.command:
-        "qemu-img resize {{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2 {{ (hostvars[item].vm_spec_string | from_yaml).disk_size_gb }}G"
-      register: resize_output
-      changed_when: resize_output.rc == 0
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Create user-data file
-      ansible.builtin.copy:
-        dest: "/tmp/user-data-{{ item }}"
-        content: |
-          #cloud-config
-          hostname: {{ hostvars[item].hostname }}
-          create_hostname_file: true
-          users:
-            - name: {{ hostvars[item].ansible_user }}
-              lock_passwd: false
-              passwd: {{ ansible_password }}
-          ssh_pwauth: true
-        mode: '0664'
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Create meta-data file
-      ansible.builtin.copy:
-        dest: "/tmp/meta-data-{{ item }}"
-        content: ""
-        mode: '0664'
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Create network-config file
-      vars:
-        interface_name: "{{ (hostvars[item].network_config_string | from_yaml).raw.interfaces[0].name }}"
-        ipv4_address: "{{ hostvars[item].ansible_host }}/{{ (hostvars[item].network_config_string | from_yaml).raw.interfaces[0].ipv4.address[0]['prefix-length'] }}"
-        ipv6_address: "{{ (hostvars[item].network_config_string | from_yaml).raw.interfaces[0].ipv6.address[0]['ip'] }}/{{ (hostvars[item].network_config_string | from_yaml).raw.interfaces[0].ipv6.address[0]['prefix-length'] }}"
-        gateway4: "{{ (hostvars[item].network_config_string | from_yaml).raw.routes.config[0]['next-hop-address'] }}"
-        gateway6: "{{ (hostvars[item].network_config_string | from_yaml).raw.routes.config[1]['next-hop-address'] }}"
-        dns_servers: "{{ (hostvars[item].network_config_string | from_yaml).raw['dns-resolver'].config.server }}"
-      ansible.builtin.copy:
-        dest: "/tmp/network-config-{{ item }}"
-        content: |
-          network:
-            version: 2
-            ethernets:
-              {{ interface_name }}:
-                addresses:
-                  - {{ ipv4_address }}
-                  - {{ ipv6_address }}
-                gateway4: {{ gateway4 }}
-                gateway6: {{ gateway6 }}
-                nameservers:
-                  addresses: {{ dns_servers }}
-        mode: '0664'
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Ensure ISO tools are installed
-      ansible.builtin.dnf:
-        name:
-          - genisoimage
-        state: present
-      become: true
-      delegate_to: hypervisor
-
-    - name: Remove Cloud-Init ISO
-      ansible.builtin.file:
-        path: "/tmp/cloud-init-{{ item }}.iso"
-        state: absent
-      become: true
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Generate Cloud-Init ISO
-      ansible.builtin.shell: |
-        cd /tmp
-        genisoimage -output cloud-init-{{ item }}.iso -volid cidata -joliet -rock \
-          -graft-points \
-          user-data=user-data-{{ item }} \
-          meta-data=meta-data-{{ item }} \
-          network-config=network-config-{{ item }}
-      become: true
-      register: create_iso
-      changed_when: create_iso.rc == 0
-      loop: "{{ groups['masters'] }}"
-      delegate_to: hypervisor
-
-    - name: Customize qcow2 VM image
-      ansible.builtin.command:
-        "virt-customize -a {{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2 --root-password password:{{ ansible_password }}
-         --ssh-inject root:string:\"{{ ssh_public_key }}\""
-      register: resize_output
-      changed_when: resize_output.rc == 0
+        cmd: "qemu-img create -f qcow2 {{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2 {{ (hostvars[item].vm_spec_string | from_yaml).disk_size_gb }}G"
+        creates: "{{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2"
       loop: "{{ groups['masters'] }}"
       delegate_to: hypervisor
 
@@ -135,14 +35,14 @@
         apply:
           delegate_to: hypervisor
       vars:
-        additional_virt_install_options: "--events on_reboot=restart --disk /tmp/cloud-init-{{ master_item }}.iso,device=cdrom --install no_install=yes --wait=0"
+        additional_virt_install_options: "--events on_reboot=restart --install no_install=yes --wait=0 --boot hd,cdrom"
         cluster_name: "dummy"
         vm_bridge_name: "{{ (hostvars[master_item].vm_spec_string | from_yaml).vm_bridge_interface }}"
         images_dir: "{{ libvirtd_disk_path }}"
         kvm_nodes:
           - name: "{{ hostvars[master_item].hostname }}"
             disks:
-              main: "1" 
+              main: "1"
             memory: "{{ (hostvars[master_item].vm_spec_string | from_yaml).ram_mib }}"
             network_interfaces:
               "{{ {(hostvars[master_item].vm_spec_string | from_yaml).vm_bridge_interface: hostvars[master_item].mac} }}"
@@ -152,20 +52,10 @@
       loop_control:
         loop_var: master_item
 
-    - name: Start masters VMs
+    - name: Ensure VMs are stopped for ZTP boot
       community.libvirt.virt:
         name: "{{ hostvars[item].hostname }}"
-        state: running
+        state: shutdown
       loop: "{{ groups['masters'] }}"
       delegate_to: hypervisor
-
-- name: Wait for master VMs to become reachable
-  hosts: masters
-  gather_facts: false
-  tasks:
-    - name: Wait for VM connection to become reachable/usable
-      delegate_to: hypervisor
-      ansible.builtin.wait_for_connection:
-        delay: 30
-        sleep: 10
-        timeout: 1200
+      ignore_errors: true

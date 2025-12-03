@@ -40,3 +40,36 @@
       ansible.builtin.systemd:
         name: squid
         state: restarted
+
+- name: Configure bastion dnsmasq for spoke access
+  hosts: bastion
+  become: yes
+  vars:
+    hub_name: "kni-qe-99"
+    hub_ip: "10.46.26.66"
+    hub_domain: "lab.eng.tlv2.redhat.com"
+  tasks:
+    - name: Add hub cluster DNS records to dnsmasq
+      ansible.builtin.blockinfile:
+        path: /etc/dnsmasq.d/custom-records.conf
+        block: |
+          # Hub cluster ({{ hub_name }}) DNS records for spoke access
+          address=/api.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
+          address=/api-int.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
+          address=/.apps.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
+        create: yes
+      notify: Restart dnsmasq
+
+    - name: Ensure dnsmasq is running
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Restart dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+
+    

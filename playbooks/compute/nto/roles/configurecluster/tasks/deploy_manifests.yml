@@ -1,19 +1,4 @@
 ---
-- name: Get Cluster version
-  kubernetes.core.k8s_info:
-    api_version: config.openshift.io/v1
-    kind: ClusterVersion
-    name: version
-  register: api_version
-
-- name: Set ocp_version
-  ansible.builtin.set_fact:
-    ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
-
-- name: Print ocp_version
-  ansible.builtin.debug:
-    msg: "OCP version: {{ ocp_version }}"
-
 - name: Label worker0 as worker-cnf
   kubernetes.core.k8s:
     kind: Node
@@ -37,6 +22,7 @@
   kubernetes.core.k8s:
     state: present
     src: "{{ manifests_folder }}/ContainerRuntime.yml"
+  when: container_runtime_config is defined
   notify:
     - wait for mcp update
 

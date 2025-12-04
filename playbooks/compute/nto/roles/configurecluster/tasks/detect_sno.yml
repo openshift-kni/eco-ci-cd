@@ -3,8 +3,14 @@
     api_version: v1
     kind: Node
   register: nodes_info
+  when: not day0_installation | bool
 
 - name: Verify if it's SNO cluster
   ansible.builtin.set_fact:
     is_sno: true
-  when: nodes_info.resources | length == 1
+  when: not day0_installation | bool and nodes_info is defined and nodes_info.resources | length == 1
+
+- name: Set is_sno if is Day0 installation
+  ansible.builtin.set_fact:
+    is_sno: true
+  when: day0_installation | bool

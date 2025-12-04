@@ -35,6 +35,7 @@
 # - ipv4_only, ipv6_only, disconnected (booleans; defaults are false)
 # - disconnected_registry_url, disconnected_registry_port
 # - share_http_iso_port, dest_iso_dir, repo_root_path
+# - extra_manifests_folder: folder containing extra manifests for Day0 installation
 
 ## Roles Requirements
 # - ocp_version_facts
@@ -483,6 +484,26 @@
         single_node_openshift_enabled: true
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
+
+    - name: Get extra manifests files
+      ansible.builtin.find:
+        paths: "{{ extra_manifests_folder }}"
+        patterns: "*.yml"
+        file_type: file
+      register: extra_manifests_files
+      when: extra_manifests_folder is defined and extra_manifests_folder | length > 0
+
+    - name: Copy extra manifests to generated directory
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        remote_src: true
+        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/"
+        mode: "0644"
+      loop: "{{ extra_manifests_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when:
+        - extra_manifests_folder is defined and extra_manifests_folder | length > 0
 
     - name: Configure trusted CA for internal registry (SNO)
       when: disconnected | bool

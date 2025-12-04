@@ -1,0 +1,8 @@
+apiVersion: config.openshift.io/v1
+kind: Node
+metadata:
+  # The name MUST be 'cluster'
+  name: cluster
+spec:
+  # Set the desired cgroup mode
+  cgroupMode: "{{ cgroup_version | default('v2') }}"

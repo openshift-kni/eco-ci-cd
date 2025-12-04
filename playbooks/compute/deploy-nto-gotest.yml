@@ -84,7 +84,7 @@
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
           export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
-          export MUSTGATHER_DIR="/mustgather"
+          export MUSTGATHER_DIR="/must-gather"
           export ROLE_WORKER_CNF={% if sno_cluster | bool %}master{% else %}worker-cnf{% endif %}
 
 

@@ -1,0 +1,20 @@
+---
+- name: Create must gather directory
+  ansible.builtin.include_tasks: create_directory.yml
+  vars:
+    dir_path: "{{ must_gather_dir }}"
+
+- name: Collect Must Gather
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  ansible.builtin.shell: |
+    oc adm must-gather --dest-dir="{{ must_gather_dir }}"
+  register: must_gather
+  changed_when: must_gather.rc == 0
+
+- name: Archive Must Gather
+  community.general.archive:
+    path: "{{ must_gather_dir }}"
+    dest: "{{ artifacts_folder }}/pre-mustgather.tar.gz"
+    mode: 775
+    format: gz

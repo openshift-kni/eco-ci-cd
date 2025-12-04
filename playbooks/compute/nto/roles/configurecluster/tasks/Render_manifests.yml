@@ -1,0 +1,25 @@
+---
+- name: Generate Performance Profile
+  ansible.builtin.copy:
+    dest: "{{ manifests_folder }}/PerformanceProfile.yml"
+    content: "{{ lookup('template', 'performanceProfile.yml.j2') }}"
+    mode: '775'
+
+- name: Generate Cgroup Configuration
+  ansible.builtin.copy:
+    dest: "{{ manifests_folder }}/CgroupConfiguration.yml"
+    content: "{{ lookup('template', 'CgroupConfiguration.yml.j2') }}"
+    mode: '775'
+
+- name: Generate Container Runtime Configuration
+  ansible.builtin.copy:
+    dest: "{{ manifests_folder }}/ContainerRuntime.yml"
+    content: "{{ lookup('template', 'ContainerRuntime.yml.j2') }}"
+    mode: '775'
+
+- name: Render Machine Config Pool
+  ansible.builtin.copy:
+    dest: "{{ manifests_folder }}/machineConfigPool.yml"
+    content: "{{ lookup('template', 'machineConfigPool.yml.j2') }}"
+    mode: '775'
+  when: not is_sno | bool

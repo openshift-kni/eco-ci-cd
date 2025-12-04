@@ -37,6 +37,7 @@
   kubernetes.core.k8s:
     state: present
     src: "{{ manifests_folder }}/ContainerRuntime.yml"
+  when: container_runtime_config is defined
   notify:
     - wait for mcp update
 

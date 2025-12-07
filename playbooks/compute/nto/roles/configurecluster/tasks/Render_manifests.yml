@@ -1,4 +1,17 @@
 ---
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  when: not day0_installation | bool
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
+  when: ocp_version is defined
+
 - name: Generate Performance Profile
   ansible.builtin.copy:
     dest: "{{ manifests_folder }}/PerformanceProfile.yml"
@@ -16,6 +29,12 @@
     dest: "{{ manifests_folder }}/ContainerRuntime.yml"
     content: "{{ lookup('template', 'ContainerRuntime.yml.j2') }}"
     mode: '775'
+  when:
+    - ocp_version is defined and ocp_version | length > 0
+    - not day0_installation | bool or
+      container_runtime == "crun" and ocp_version > "4.11" and ocp_version < "4.18" or
+      container_runtime == "runc" and ocp_version > "4.16"
+  register: container_runtime_config
 
 - name: Render Machine Config Pool
   ansible.builtin.copy:

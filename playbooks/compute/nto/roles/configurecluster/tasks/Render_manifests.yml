@@ -10,7 +10,7 @@
 - name: Set ocp_version
   ansible.builtin.set_fact:
     ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
-  when: ocp_version is defined
+  when: api_version is defined and api_version.resources | length > 0
 
 - name: Generate Performance Profile
   ansible.builtin.copy:

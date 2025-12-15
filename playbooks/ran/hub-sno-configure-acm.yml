@@ -71,9 +71,9 @@
     timeout_metal3: 300
     # RHCOS OS Image configuration for spoke cluster deployments
     # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
-    # rhcos_version and rhcos_iso_url are auto-fetched from assisted-service defaults
+    # rhcos_iso_url points to local bastion HTTP server (for disconnected environments)
     rhcos_version: ""  # Auto-populated from assisted-service
-    rhcos_iso_url: ""  # Auto-populated from assisted-service
+    share_http_iso_port: 8080  # HTTP server port on bastion serving /opt/cache
 
   tasks:
 
@@ -95,17 +95,16 @@
              | selectattr('cpu_architecture', 'equalto', 'x86_64')
              | first }}
 
-    - name: Set RHCOS version and URL from official defaults
+    - name: Set RHCOS version from official defaults
       ansible.builtin.set_fact:
         rhcos_version: "{{ matched_os_image.version }}"
-        rhcos_iso_url: "{{ matched_os_image.url }}"
 
     - name: Display RHCOS configuration
       ansible.builtin.debug:
         msg: |
           Using RHCOS configuration for OCP {{ ocp_version }}:
             Version: {{ rhcos_version }}
-            ISO URL: {{ rhcos_iso_url }}
+            ISO URL: http://{{ ansible_host }}:{{ share_http_iso_port }}/rhcos-{{ rhcos_version }}-live-iso.x86_64.iso
 
     - name: Check if MultiClusterHub CRD exists
       kubernetes.core.k8s_info:
@@ -181,7 +180,7 @@
                 mirror-by-digest-only = true
 
                 [[registry.mirror]]
-                  location = "{{ registry_host_url }}/openshift-release-dev/ocp-v4.0-art-dev"
+                  location = "{{ registry_host_url }}/ocp4/openshift"
 
               [[registry]]
                 prefix = ""
@@ -190,6 +189,14 @@
 
                 [[registry.mirror]]
                   location = "{{ registry_host_url }}/ocp/release"
+
+              [[registry]]
+                prefix = ""
+                location = "quay.io/openshift-release-dev/ocp-release"
+                mirror-by-digest-only = true
+
+                [[registry.mirror]]
+                  location = "{{ registry_host_url }}/ocp4/openshift"
 
               [[registry]]
                 prefix = ""
@@ -225,7 +232,7 @@
             osImages:
               - openshiftVersion: "{{ ocp_version }}"
                 version: "{{ rhcos_version }}"
-                url: "{{ rhcos_iso_url }}"
+                url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/rhcos-{{ rhcos_version }}-live-iso.x86_64.iso"
                 cpuArchitecture: "x86_64"
 
     - name: Wait for assisted-service pod to be running
@@ -280,3 +287,49 @@
           Current metal pods:
           {{ metal3_check.resources | selectattr('metadata.name', 'search', 'metal') | map(attribute='metadata.name') | list }}
       when: metal3_check is failed
+
+
+    - name: Enable siteconfig component in MCH
+      kubernetes.core.k8s_json_patch:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: "{{ mch_cr_name }}"
+        namespace: "{{ mce_namespace }}"
+        patch:
+          - op: add
+            path: /spec/overrides/components/-
+            value:
+              name: siteconfig
+              enabled: true
+      register: mch_siteconfig_patch
+      failed_when: false
+
+    - name: Wait for siteconfig-controller-manager deployment to exist
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: siteconfig-controller-manager
+        namespace: "{{ mce_namespace }}"
+      register: siteconfig_deployment_exists
+      until: siteconfig_deployment_exists.resources | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Wait for siteconfig-controller-manager deployment to become available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: siteconfig-controller-manager
+        namespace: "{{ mce_namespace }}"
+      register: siteconfig_deployment_status
+      until:
+        - siteconfig_deployment_status.resources | length > 0
+        - siteconfig_deployment_status.resources[0].status.availableReplicas is defined
+        - siteconfig_deployment_status.resources[0].status.availableReplicas >= 1
+      retries: 20
+      delay: 15
+
+    - name: Report siteconfig-controller-manager status
+      ansible.builtin.debug:
+        msg: "siteconfig-controller-manager deployment in namespace '{{ mce_namespace }}' is Available."
+      when: siteconfig_deployment_status is succeeded

@@ -9,12 +9,17 @@
     artifact_dir: /tmp/artifacts
     gotest_dir: /tmp/gotest
     nto_repo: https://github.com/openshift/cluster-node-tuning-operator
+    day0_installation: false
   tasks:
     - name: Ensure required variables are defined
       ansible.builtin.assert:
         that:
           - cluster_name is defined
           - kubeconfig is defined
+
+    - name: When day0 run must-gather
+      ansible.builtin.include_tasks: ./must-gather.yml
+      when: day0_installation | bool
 
     - name: Get Cluster version
       kubernetes.core.k8s_info:

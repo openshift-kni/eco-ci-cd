@@ -1,0 +1,19 @@
+- name: Setup NTO gotests
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    must_gather_dir: "/must-gather"
+
+  tasks:
+    - name: Create must gather directory
+      ansible.builtin.include_tasks: ./nto/roles/configurecluster/tasks/create_directory.yml
+      vars:
+        dir_path: "{{ must_gather_dir }}"
+
+    - name: Collect Must Gather
+      ansible.builtin.shell: |
+        oc adm must-gather --dest-dir="{{ must_gather_dir }}" --kubeconfig="{{ kubeconfig }}"
+      register: must_gather
+      changed_when: must_gather.rc == 0

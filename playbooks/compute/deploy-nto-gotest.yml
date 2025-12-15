@@ -17,6 +17,13 @@
           - cluster_name is defined
           - kubeconfig is defined
 
+    - name: Ensure DNF packages are installed
+      ansible.builtin.dnf:
+        name:
+          - tmux
+        state: present
+      become: true
+
     - name: When day0 run must-gather
       ansible.builtin.include_tasks: ./must-gather.yml
       when: day0_installation | bool

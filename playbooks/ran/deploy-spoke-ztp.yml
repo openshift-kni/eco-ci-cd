@@ -1,0 +1,472 @@
+---
+# This playbook:
+#   1. creates the spoke cluster namespace on the hub cluster.
+#   2. creates the BMC credentials secret on the spoke cluster.
+#   3. patches the extracted ZTP ArgoCD configuration with custom Git repository paths.
+#   4. apply the patched ArgoCD configuration to launch the spoke cluster ZTP deployment.
+#
+# Prerequisites:
+#   - hub-sno-configure-kustomize-plugin.yml must be run first to extract ZTP artifacts
+#   - SSH access to bastion node
+#   - Valid kubeconfig for cluster authentication
+#   - OpenShift GitOps operator must be installed
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/deploy-spoke-ztp.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                   spoke_cluster=kni-qe-100 \
+#                   bmc_username=X \
+#                   bmc_password=Y \
+#                   bmc_secret_name=helix-41-bmc-secret \
+#                   masters_secret_name=masters-bmc-secret \
+#                   masters_secret_username=A \
+#                   masters_secret_password=B \
+#                   ztp_git_repo_url=https://gitlab.example.com/user/ztp-site-configs.git"
+#
+# For re-deployments (delete existing resources on hub cluster first):
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/deploy-spoke-ztp.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                   spoke_cluster=kni-qe-100 \
+#                   ... \
+#                   force_cleanup=true"
+#
+# Note: OCP version is automatically detected from the hub cluster.
+
+- name: Deploy Spoke cluster using ZTP
+  hosts: bastion
+  gather_facts: false
+  vars:
+    ztp_workdir_path: "/tmp/ztp-workdir"
+    ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"
+    clusters_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/clusters-app.yaml"
+    policies_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/policies-app.yaml"
+    ztp_clusters_git_path: siteconfig
+    ztp_policies_git_path: policygentemplates
+    ztp_git_repo_branch: "{{ spoke_cluster }}-{{ ocp_version }}"
+    openshift_gitops_namespace: "openshift-gitops"
+
+  tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+          - bmc_username is defined
+          - bmc_username | length > 0
+          - bmc_password is defined
+          - bmc_password | length > 0
+          - bmc_secret_name is defined
+          - bmc_secret_name | length > 0
+          - masters_secret_name is defined
+          - masters_secret_name | length > 0
+          - masters_secret_username is defined
+          - masters_secret_username | length > 0
+          - masters_secret_password is defined
+          - masters_secret_password | length > 0
+          - ztp_git_repo_url is defined
+          - ztp_git_repo_url | length > 0
+        fail_msg: |
+          Required variables must be defined:
+            - kubeconfig: Path to kubeconfig file
+            - spoke_cluster: Spoke cluster name (e.g., kni-qe-100)
+            - bmc_username: BMC username for Worker BMC access (iDRAC)
+            - bmc_password: BMC password for Worker BMC access (iDRAC)
+            - bmc_secret_name: Name of the worker BMC secret (e.g., helix-41-bmc-secret)
+            - masters_secret_name: Name of the masters BMC secret (e.g., masters-bmc-secret)
+            - masters_secret_username: BMC username for Masters (sushy-tools)
+            - masters_secret_password: BMC password for Masters (sushy-tools)
+            - ztp_git_repo_url: Git repository URL for ZTP site configs
+
+    # Thorough cleanup for re-deployments - only runs when force_cleanup=true    
+    - name: Delete ArgoCD apps before cleanup
+      kubernetes.core.k8s:
+        state: absent
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      loop:
+        - clusters
+        - policies
+      ignore_errors: true
+      when: force_cleanup | default(false) | bool
+
+    - name: Wait for ArgoCD apps to be deleted before cleanup
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: app_check
+      until: app_check.resources | length == 0
+      retries: 12
+      delay: 10
+      loop:
+        - clusters
+        - policies
+      when: force_cleanup | default(false) | bool
+      ignore_errors: true
+
+    - name: Delete existing ManagedCluster if re-deploying
+      kubernetes.core.k8s:
+        state: absent
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      ignore_errors: true
+      when: force_cleanup | default(false) | bool
+
+    - name: Delete spoke namespace to force cleanup all resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      ignore_errors: true
+      when: force_cleanup | default(false) | bool
+
+    - name: Wait for namespace to be fully deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: ns_check
+      until: ns_check.resources | length == 0
+      retries: 30
+      delay: 10
+      when: force_cleanup | default(false) | bool
+      ignore_errors: true
+
+    - name: Restart assisted-service to clear cached state
+      ansible.builtin.shell: |
+        oc rollout restart deployment/assisted-service -n multicluster-engine
+        oc rollout status deployment/assisted-service -n multicluster-engine --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      when: force_cleanup | default(false) | bool
+      changed_when: true
+
+    - name: Get hub cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ kubeconfig }}"
+      register: hub_cluster_version
+
+    - name: Extract hub OCP version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+        ocp_full_version: "{{ hub_cluster_version.resources[0].status.desired.version }}"
+
+    - name: Display detected hub cluster version
+      ansible.builtin.debug:
+        msg: |
+          Hub cluster version detected:
+            Full version: {{ ocp_full_version }}
+            Minor version: {{ ocp_version }}
+          Spoke cluster will use the same version.
+
+    - name: Create spoke cluster namespace on hub cluster
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ spoke_cluster }}"
+
+    - name: Create Worker BMC credentials secret on hub cluster
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ bmc_secret_name }}"
+            namespace: "{{ spoke_cluster }}"
+          type: Opaque
+          stringData:
+            username: "{{ bmc_username }}"
+            password: "{{ bmc_password }}"
+
+    - name: Create Masters (sushy tool) credentials secret on hub cluster
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ masters_secret_name }}"
+            namespace: "{{ spoke_cluster }}"
+          type: Opaque
+          stringData:
+            username: "{{ masters_secret_username }}"
+            password: "{{ masters_secret_password }}"
+
+    - name: Get hub cluster pull secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+        kubeconfig: "{{ kubeconfig }}"
+      register: hub_pull_secret
+
+    - name: Create spoke cluster pull secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ spoke_cluster }}-pull-secret"
+            namespace: "{{ spoke_cluster }}"
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: "{{ hub_pull_secret.resources[0].data['.dockerconfigjson'] }}"
+
+    - name: Get hub cluster release image digest
+      ansible.builtin.shell: |
+        oc get clusterversion version -o jsonpath='{.status.desired.image}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: hub_release_image
+      changed_when: false
+
+    - name: Create ClusterImageSet for OCP version
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: hive.openshift.io/v1
+          kind: ClusterImageSet
+          metadata:
+            name: "{{ ocp_version }}"
+          spec:
+            releaseImage: "{{ hub_release_image.stdout }}"
+
+    - name: Verify clusters-app.yaml exists in extracted ZTP workdir
+      ansible.builtin.stat:
+        path: "{{ clusters_app_path }}"
+      register: clusters_app_file
+
+    - name: Fail if clusters-app.yaml not found
+      ansible.builtin.fail:
+        msg: |
+          clusters-app.yaml not found at {{ clusters_app_path }}.
+          Please run hub-sno-configure-kustomize-plugin.yml first to extract ZTP artifacts from container.
+      when: not clusters_app_file.stat.exists
+
+    - name: Patch clusters-app with custom repoURL
+      ansible.builtin.replace:
+        path: "{{ clusters_app_path }}"
+        regexp: 'repoURL:.*'
+        replace: "repoURL: {{ ztp_git_repo_url }}"
+
+    - name: Patch clusters-app with custom Git path
+      ansible.builtin.replace:
+        path: "{{ clusters_app_path }}"
+        regexp: 'path:.*'
+        replace: "path: {{ ztp_clusters_git_path }}"
+
+    - name: Patch clusters-app with custom Git repository branch
+      ansible.builtin.replace:
+        path: "{{ clusters_app_path }}"
+        regexp: 'targetRevision:.*'
+        replace: "targetRevision: {{ ztp_git_repo_branch }}"
+
+    - name: Display patched clusters-app.yaml content
+      ansible.builtin.shell: "cat {{ clusters_app_path }}"
+      register: patched_clusters_app
+      changed_when: false
+
+    - name: Show patched clusters-app.yaml
+      ansible.builtin.debug:
+        msg: "{{ patched_clusters_app.stdout_lines }}"
+
+    - name: Verify policies-app.yaml exists in extracted ZTP workdir
+      ansible.builtin.stat:
+        path: "{{ policies_app_path }}"
+      register: policies_app_file
+
+    - name: Fail if policies-app.yaml not found
+      ansible.builtin.fail:
+        msg: |
+          policies-app.yaml not found at {{ policies_app_path }}.
+          Please run hub-sno-configure-kustomize-plugin.yml first to extract ZTP artifacts.
+      when: not policies_app_file.stat.exists
+
+    - name: Patch policies-app with custom repoURL
+      ansible.builtin.replace:
+        path: "{{ policies_app_path }}"
+        regexp: 'repoURL:.*'
+        replace: "repoURL: {{ ztp_git_repo_url }}"
+
+    - name: Patch policies-app with custom Git path
+      ansible.builtin.replace:
+        path: "{{ policies_app_path }}"
+        regexp: 'path:.*'
+        replace: "path: {{ ztp_policies_git_path }}"
+
+    - name: Patch policies-app with custom Git repository branch
+      ansible.builtin.replace:
+        path: "{{ policies_app_path }}"
+        regexp: 'targetRevision:.*'
+        replace: "targetRevision: {{ ztp_git_repo_branch }}"
+
+    - name: Display patched policies-app.yaml content
+      ansible.builtin.shell: "cat {{ policies_app_path }}"
+      register: patched_policies_app
+      changed_when: false
+
+    - name: Show patched policies-app.yaml
+      ansible.builtin.debug:
+        msg: "{{ patched_policies_app.stdout_lines }}"
+
+    - name: Apply ArgoCD deployment kustomization
+      ansible.builtin.command:
+        cmd: oc apply -k {{ ztp_workdir_out_path }}/argocd/deployment
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+
+    - name: Wait for ArgoCD apps to sync successfully
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: app_status
+      until: >-
+        app_status.resources[0].status.sync.status | default('') == 'Synced' and
+        app_status.resources[0].status.health.status | default('') in ['Healthy', 'Progressing']
+      loop:
+        - clusters
+        - policies
+      retries: 20
+      delay: 30
+
+    - name: Ensure Worker BMC credentials secret exists after ArgoCD sync
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ bmc_secret_name }}"
+            namespace: "{{ spoke_cluster }}"
+          type: Opaque
+          stringData:
+            username: "{{ bmc_username }}"
+            password: "{{ bmc_password }}"
+
+    - name: Ensure Masters BMC credentials secret exists after ArgoCD sync
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ masters_secret_name }}"
+            namespace: "{{ spoke_cluster }}"
+          type: Opaque
+          stringData:
+            username: "{{ masters_secret_username }}"
+            password: "{{ masters_secret_password }}"
+
+    - name: Ensure spoke cluster pull secret exists after ArgoCD sync
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ spoke_cluster }}-pull-secret"
+            namespace: "{{ spoke_cluster }}"
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: "{{ hub_pull_secret.resources[0].data['.dockerconfigjson'] }}"
+
+    - name: Register cluster installation type
+      ansible.builtin.shell: |
+        oc -n {{ spoke_cluster }} get cd {{ spoke_cluster }} -o json | jq -r .spec.clusterInstallRef.kind
+      register: clusterinstallref
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Wait for agent cluster install to begin
+      ansible.builtin.shell: |
+        oc -n {{ spoke_cluster }} wait --for=condition=RequirementsMet agentclusterinstall {{ spoke_cluster }}
+      register: agentclusterinstall_installing
+      when: "'AgentClusterInstall' in clusterinstallref.stdout"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      until: "'condition met' in agentclusterinstall_installing.stdout"
+      # For 4.14 installation, 40 minutes was too short to wait for ACI to begin.
+      # 80 minutes should be enough.
+      retries: 80
+      delay: 60
+      changed_when: false
+
+    - name: Wait for installation to finish
+      ansible.builtin.shell: |
+        oc get clusterdeployments.hive.openshift.io {{ spoke_cluster }} -n {{ spoke_cluster }} -o json | jq '.spec.installed'
+      register: cluster_deployment_status
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      retries: 240
+      delay: 60
+      until: cluster_deployment_status.stdout == 'true'
+      changed_when: false
+
+    - name: Get all policies in spoke namespace
+      kubernetes.core.k8s_info:
+        api_version: policy.open-cluster-management.io/v1
+        kind: Policy
+        namespace: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: spoke_policies
+
+    - name: Display number of policies found
+      ansible.builtin.debug:
+        msg: "Found {{ spoke_policies.resources | length }} policies in namespace {{ spoke_cluster }}"
+
+    - name: Wait for all policies to be Compliant
+      kubernetes.core.k8s_info:
+        api_version: policy.open-cluster-management.io/v1
+        kind: Policy
+        namespace: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: policies
+      until:
+        - policies.resources | length > 0
+        - (policies.resources | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
+      retries: 60
+      delay: 60
+
+    - name: Display policy compliance status
+      ansible.builtin.debug:
+        msg: "All policies in namespace {{ spoke_cluster }} are Compliant"
+
+    - name: Display cluster deployment completion
+      ansible.builtin.debug:
+        msg: "Spoke {{ spoke_cluster }} installation completed"

@@ -1,0 +1,54 @@
+---
+- name: Create test workload deployment
+  kubernetes.core.k8s:
+    namespace: default
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: deployment
+      namespace: default
+      metadata:
+        name: crio-lb-app1
+        labels:
+          app: lbapp
+          type: front-end
+      spec:
+        template:
+          metadata:
+            labels:
+              app: lbapp
+              type: front-end
+            annotations:
+              cpu-load-balancing.crio.io: "disable"
+              cpu-quota.crio.io: "disable"
+              irq-load-balancing.crio.io: "disable"
+          spec:
+            containers:
+              - name: testlb1
+                image: "quay.io/mniranja/busycpus"
+                command:
+                  - sleep
+                  - inf
+                resources:
+                  limits:
+                    memory: "500Mi"
+                    cpu: "4"
+            imagePullPolicy: ifNotPresent
+            nodeSelector:
+              node-role.kubernetes.io/worker-cnf: ''
+        replicas: 2
+        selector:
+          matchLabels:
+            type: front-end
+
+- name: Check pods are running
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "default"
+    label_selectors:
+      - "app=lbapp"
+  register: pod_list
+  until: pod_list.resources | selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+  retries: 50
+  delay: 5

@@ -1,0 +1,85 @@
+---
+- name: Create report folder
+  ansible.builtin.include_tasks: create_directory.yml
+  vars:
+    dir_path: "{{ report_folder }}"
+
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version: "{{ api_version.resources[0].status.desired.version.split('.')[:2] | join('.') }}"
+  when: api_version is defined
+
+- name: Get Cluster information before upgrade
+  ansible.builtin.include_tasks: get_cluster_info.yml
+
+- name: Deploy Workload
+  ansible.builtin.include_tasks: nto-deploy-workload.yaml
+
+- name: Save 'before' info to a variable
+  ansible.builtin.set_fact:
+    cluster_info:
+      before:
+        Reboot: "{{ reboot_count.stdout }}"
+        Kernel: "{{ kernel_parameters.stdout }}"
+        ContainerRuntime: "{{ default_container_runtime }}"
+        Cgroup: "{{ ocp_cgroup_version }}"
+
+- name: Upgrade Cluster
+  ansible.builtin.include_tasks: upgrade-cluster.yml
+
+- name: Get Cluster information after upgrade
+  ansible.builtin.include_tasks: get_cluster_info.yml
+
+- name: Save 'after' info to a variable
+  ansible.builtin.set_fact:
+    cluster_info: >-
+      {{ cluster_info | combine({'after': {'Reboot': reboot_count.stdout,
+      'Kernel': kernel_parameters.stdout, 'ContainerRuntime': default_container_runtime, 'Cgroup': ocp_cgroup_version}},
+      recursive=True) }}
+
+- name: Save Cluster information
+  ansible.builtin.copy:
+    dest: "{{ report_folder }}/cluster_info.json"
+    mode: "0777"
+    content: "{{ cluster_info | to_json }}"
+
+- name: Copy reports to artifacts folder
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ report_folder }}/"
+    dest: "{{ artifacts_folder }}/"
+    mode: '0644'
+  become: true
+
+- name: Check pods are running post upgrade
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "default"
+    label_selectors:
+      - "app=lbapp"
+  register: pod_list
+  until: pod_list.resources | selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+  retries: 50
+  delay: 5
+
+- name: Assert Cgroup version has not changed
+  ansible.builtin.assert:
+    that:
+      - cluster_info.before.Cgroup == cluster_info.after.Cgroup
+    fail_msg: "Cgroup version has changed before {{ cluster_info.before.Cgroup }} and after {{ cluster_info.after.Cgroup }} upgrade"
+
+- name: Assert Container Runtime version has not changed
+  ansible.builtin.assert:
+    that:
+      - cluster_info.before.ContainerRuntime == cluster_info.after.ContainerRuntime
+    fail_msg: >-
+      Container Runtime version has changed before {{ cluster_info.before.ContainerRuntime }}
+      and after {{ cluster_info.after.ContainerRuntime }} upgrade

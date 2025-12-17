@@ -23,10 +23,14 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   {% if switch_lag_names is defined and switch_lag_names | length > 0 %}-e ECO_CNF_CORE_NET_SWITCH_LAGS={{ switch_lag_names }} \
   {% endif %}
+  {% if hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0 %}-e ECO_CNF_RAN_KUBECONFIG_HUB=/clusterconfigs/auth/kubeconfig \
+  {% endif %}
   {% if additional_test_env_variables is defined and additional_test_env_variables | length > 0 %}{{ additional_test_env_variables }} \
   {% endif %}
   -v {{ kubeconfig }}:/kubeconfig/kubeconfig:Z \
   -v {{ eco_gotests_report_path }}:/tmp/reports:Z \
+  {% if hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0 %}-v {{ hub_clusterconfigs_path }}:/clusterconfigs:Z \
+  {% endif %}
   {{ eco_gotests_image }}:{{ eco_gotests_tag }} \
   --timeout={{ test_timeout }} \
   --keep-going

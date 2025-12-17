@@ -31,9 +31,8 @@
     mode: '775'
   when:
     - ocp_version is defined and ocp_version | length > 0
-    - not day0_installation | bool or
-      container_runtime == "crun" and ocp_version > "4.11" and ocp_version < "4.18" or
-      container_runtime == "runc" and ocp_version > "4.16"
+    - not container_runtime == "crun" and ocp_version >= "4.18" or
+      not container_runtime == "runc" and ocp_version <= "4.17"
   register: container_runtime_config
 
 - name: Render Machine Config Pool

@@ -20,13 +20,13 @@
 - name: Detect if deployment is SNO
   ansible.builtin.include_tasks: detect_sno.yml
 
-- name: Collect Must Gather
-  ansible.builtin.include_tasks: must_gather.yml
-  when: not day0_installation | bool
-
 - name: Render Manifests
   ansible.builtin.include_tasks: Render_manifests.yml
 
 - name: Deploy Manifests
   ansible.builtin.include_tasks: deploy_manifests.yml
+  when: not day0_installation | bool
+
+- name: Collect Must Gather
+  ansible.builtin.include_tasks: must_gather.yml
   when: not day0_installation | bool

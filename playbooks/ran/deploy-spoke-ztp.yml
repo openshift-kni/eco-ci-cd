@@ -48,6 +48,23 @@
     openshift_gitops_namespace: "openshift-gitops"
 
   tasks:
+    - name: Load workers group_vars directly
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../inventories/ocp-deployment/group_vars/workers"
+        name: workers_vars
+
+    - name: Load masters group_vars directly
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../inventories/ocp-deployment/group_vars/masters"
+        name: masters_vars
+
+    - name: Set BMC credentials from inventory group_vars
+      ansible.builtin.set_fact:
+        bmc_username: "{{ bmc_username | default(workers_vars.bmc_user) }}"
+        bmc_password: "{{ bmc_password | default(workers_vars.bmc_password) }}"
+        masters_secret_username: "{{ masters_secret_username | default(masters_vars.bmc_user) }}"
+        masters_secret_password: "{{ masters_secret_password | default(masters_vars.bmc_password) }}"
+
     - name: Validate required variables are defined
       ansible.builtin.assert:
         that:
@@ -55,18 +72,10 @@
           - kubeconfig | length > 0
           - spoke_cluster is defined
           - spoke_cluster | length > 0
-          - bmc_username is defined
-          - bmc_username | length > 0
-          - bmc_password is defined
-          - bmc_password | length > 0
           - bmc_secret_name is defined
           - bmc_secret_name | length > 0
           - masters_secret_name is defined
           - masters_secret_name | length > 0
-          - masters_secret_username is defined
-          - masters_secret_username | length > 0
-          - masters_secret_password is defined
-          - masters_secret_password | length > 0
           - ztp_git_repo_url is defined
           - ztp_git_repo_url | length > 0
         fail_msg: |

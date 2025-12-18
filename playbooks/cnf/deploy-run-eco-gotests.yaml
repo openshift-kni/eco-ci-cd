@@ -51,6 +51,8 @@
 # eco_cnf_core_net_switch_pass      # string: Password for accessing the intermediate switch.
 # eco_worker_label                  # string: Label for the CNF worker role.
 # additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
+# hub_clusterconfigs_path           # string: Path to hub clusterconfigs directory (for RAN tests, contains auth/kubeconfig)
+# eco_gotests_tag                   # string: Override image tag (e.g., "latest", "v4.18.0"). If not set, auto-detects from cluster version.
 - name: Set up eco-gotests
   hosts: bastion
   gather_facts: true
@@ -106,13 +108,18 @@
         name: "{{ eco_gotests_image }}"
         state: absent
         tag: "{{ item }}"
-      loop:
-        - "v{{ version }}.0"
-        - "latest"
+      loop: "{{ (['v' + version + '.0', 'latest'] + ([eco_gotests_tag] if eco_gotests_tag is defined else [])) | unique }}"
 
-    - name: Try pulling specific image, fallback to latest if it fails
+    - name: Pull user-specified eco-gotests image
+      when: eco_gotests_tag is defined
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        tag: "{{ eco_gotests_tag }}"
+
+    - name: Try pulling cluster version matched image, fallback to latest if it fails
+      when: eco_gotests_tag is not defined
       block:
-        - name: Pull a specific version of eco-gotests image
+        - name: Pull a cluster version matched eco-gotests image
           containers.podman.podman_image:
             name: quay.io/ocp-edge-qe/eco-gotests
             tag: v{{ version }}.0

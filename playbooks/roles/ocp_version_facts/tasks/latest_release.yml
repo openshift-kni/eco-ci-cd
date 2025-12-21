@@ -104,6 +104,6 @@
   when:
     - ocp_version_match is defined
     - image_age_days is defined
-    - (image_age_days | int) < (ocp_version_release_age_max_days | int)
+    - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
   ansible.builtin.set_fact:
     ocp_version_facts_query: "{{ ocp_version_match }}"

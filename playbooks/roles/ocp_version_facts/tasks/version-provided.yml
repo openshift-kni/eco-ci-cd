@@ -5,6 +5,12 @@
   loop_control:
     loop_var: release_stream
 
+- name: Validate image age days
+  ansible.builtin.assert:
+    that:
+      - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+    fail_msg: "Image age days {{ image_age_days }} is greater than maximum allowed age {{ ocp_version_release_age_max_days }}"
+
 - name: Set ocp_version_facts_pull_spec,ocp_version_facts_parsed_release and ocp_version_facts_oc_client_pull_link facts
   ansible.builtin.set_fact:
     ocp_version_facts_pull_spec: "{{ ocp_version_facts_query.pullSpec }}"

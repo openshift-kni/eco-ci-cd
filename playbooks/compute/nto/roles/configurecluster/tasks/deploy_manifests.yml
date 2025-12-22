@@ -39,3 +39,6 @@
     src: "{{ manifests_folder }}/PerformanceProfile.yml"
   notify:
     - wait for mcp update
+
+- name: Force handlers to run immediately
+  ansible.builtin.meta: flush_handlers

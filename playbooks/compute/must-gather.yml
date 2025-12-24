@@ -17,3 +17,9 @@
         oc adm must-gather --dest-dir="{{ must_gather_dir }}" --kubeconfig="{{ kubeconfig }}"
       register: must_gather
       changed_when: must_gather.rc == 0
+
+    - name: Compress must gather directory
+      ansible.builtin.shell: |
+        tar -czvf /tmp/must-gather.tar.gz {{ must_gather_dir }}
+      register: compress_must_gather
+      changed_when: compress_must_gather.rc == 0

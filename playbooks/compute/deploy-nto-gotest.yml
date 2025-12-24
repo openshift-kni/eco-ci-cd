@@ -87,6 +87,7 @@
           export PERF_TEST_PROFILE=performance
           export IMAGE_REGISTRY="registry.stage.redhat.io/"
           export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
+          export NTO_IMAGE=quay.io/openshift/origin-cluster-node-tuning-operator:{{ ocp_version }}
           export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
           export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
           export MUSTGATHER_DIR="/must-gather"

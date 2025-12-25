@@ -1,0 +1,51 @@
+---
+- name: Get Cluster reboot count
+  ansible.builtin.shell: |
+    set -o pipefail
+    oc --kubeconfig {{ kubeconfig }} debug node/worker0 --quiet -- chroot /host last reboot | wc -l
+  changed_when: reboot_count.rc == 0
+  register: reboot_count
+
+- name: Fetch kernel parameter using oc debug
+  ansible.builtin.shell: >
+    oc --kubeconfig {{ kubeconfig }} debug node/worker0
+    --to-namespace=default
+    -- chroot /host cat /proc/cmdline | cut -d" " -f3-
+  register: kernel_parameters
+  changed_when: kernel_parameters.rc == 0
+  # 'oc debug' outputs startup logs to stderr, so we ign1ore minor errors
+  ignore_errors: true
+
+- name: Get Container Runtime Version
+  ansible.builtin.shell: >
+    oc --kubeconfig {{ kubeconfig }} debug node/worker0
+    --to-namespace=default
+    -- chroot /host crictl info | jq -r .config.crio.DefaultRuntime
+  register: container_runtime_version
+  changed_when: container_runtime_version.rc == 0
+  ignore_errors: true
+
+- name: Set Container runtime fact
+  ansible.builtin.set_fact:
+    default_container_runtime: "{{ container_runtime_version.stdout }}"
+
+- name: Set default runtime for version 4.18 and above
+  ansible.builtin.set_fact:
+    default_container_runtime: "crun"
+  when: ocp_version is defined and ocp_version >= "4.18" and container_runtime_version.stdout == "null"
+
+- name: Set default runtime for version 4.17 and below
+  ansible.builtin.set_fact:
+    default_container_runtime: "runc"
+  when: ocp_version is defined and ocp_version <= "4.17" and container_runtime_version.stdout == "null"
+
+- name: Get Cluster Node Configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Node
+    name: cluster
+  register: node_config
+
+- name: Set Cgroup Version Fact
+  ansible.builtin.set_fact:
+    ocp_cgroup_version: "{{ node_config.resources[0].spec.cgroupMode | default('v1', true) }}"

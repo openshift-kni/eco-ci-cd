@@ -1,0 +1,7 @@
+artifacts_folder: /artifacts
+ocp_arch: "amd64"
+arch_map: { "amd64": "x86_64", "arm64": "aarch64" }
+target_channel: "stable"
+report_folder: "/tmp/reports"
+upgrade_timeout_retries: 250
+upgrade_delay: 60

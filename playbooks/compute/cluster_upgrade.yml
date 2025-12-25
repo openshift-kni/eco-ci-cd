@@ -1,0 +1,11 @@
+---
+- name: Upgrade Cluster
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Upgrade Cluster
+      ansible.builtin.include_role:
+        name: cluster_upgrade

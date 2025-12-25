@@ -17,8 +17,10 @@
           - cluster_name is defined
           - kubeconfig is defined
 
-    - name: When day0 run must-gather
-      ansible.builtin.include_tasks: ./must-gather.yml
+    - name: Create must gather directory
+      ansible.builtin.include_tasks: ./nto/roles/configurecluster/tasks/must_gather.yml
+      vars:
+        dir_path: "{{ must_gather_dir }}"
       when: day0_installation | bool
 
     - name: Get Cluster version

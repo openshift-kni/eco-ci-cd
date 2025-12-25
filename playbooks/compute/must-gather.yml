@@ -5,6 +5,7 @@
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   vars:
     must_gather_dir: "/must-gather"
+    artifacts_folder: "/artifacts"
 
   tasks:
     - name: Create must gather directory
@@ -18,8 +19,10 @@
       register: must_gather
       changed_when: must_gather.rc == 0
 
-    - name: Compress must gather directory
-      ansible.builtin.shell: |
-        tar -czvf /tmp/must-gather.tar.gz {{ must_gather_dir }}
-      register: compress_must_gather
-      changed_when: compress_must_gather.rc == 0
+    - name: Archive Must Gather
+      community.general.archive:
+        path: "{{ must_gather_dir }}"
+        dest: "{{ artifacts_folder }}/mustgather.tar.gz"
+        mode: 775
+        format: gz
+      become: true

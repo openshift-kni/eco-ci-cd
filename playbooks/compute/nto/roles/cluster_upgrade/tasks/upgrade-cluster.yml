@@ -1,0 +1,107 @@
+---
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Parse ocp upgrade version
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] | int }}"
+    ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] | int + 1 }}"
+    ocp_version_z_stream: "{{ api_version.resources[0].status.desired.version.split('.')[2] }}"
+
+- name: Fetch OpenShift update graph from Red Hat
+  ansible.builtin.uri:
+    url: "https://api.openshift.com/api/upgrades_info/v1/graph?channel={{ target_channel }}-{{ ocp_version_major }}.{{ ocp_version_minor }}&arch={{ ocp_arch }}"
+    return_content: true
+    headers:
+      Accept: application/json
+  register: graph_response
+
+- name: Set upgrade version
+  ansible.builtin.set_fact:
+    upgrade_version: "{{ graph_response.json.nodes | map(attribute='version') | community.general.version_sort | last }}"
+
+- name: Print upgrage path
+  ansible.builtin.debug:
+    msg: "Upgrade path: {{ api_version.resources[0].status.desired.version }} -> {{ upgrade_version }}"
+
+- name: Get Release Image Digest for {{ upgrade_version }}
+  ansible.builtin.shell: |
+    oc adm release info "quay.io/openshift-release-dev/ocp-release:{{ upgrade_version }}-{{ arch_map[ocp_arch] }}" --output=jsonpath='{.digest}'
+  changed_when: release_image_digest.rc == 0
+  register: release_image_digest
+
+- name: Set Digest Image
+  ansible.builtin.set_fact:
+    digest_image: "quay.io/openshift-release-dev/ocp-release@{{ release_image_digest.stdout }}"
+
+- name: Print release image digest
+  ansible.builtin.debug:
+    msg: "Release image digest: {{ digest_image }}"
+
+- name: Patch ClusterVersion to trigger upgrade
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: ClusterVersion
+      metadata:
+        name: version
+      spec:
+        channel: "{{ target_channel }}-{{ ocp_version_major }}.{{ ocp_version_minor }}"
+        desiredUpdate:
+          version: "{{ upgrade_version }}"
+          image: "{{ digest_image }}"
+          force: true
+  register: upgrade_trigger
+  changed_when: true
+  notify:
+    - Pause briefly to allow CVO to acknowledge the update
+
+- name: Force handlers to run immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Cluster Version to report 'Completed'
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: upgrade_status
+  until:
+    - not upgrade_status.failed
+    - upgrade_status.resources[0].status.history[0].state == "Completed"
+    - upgrade_status.resources[0].status.history[0].version == upgrade_version
+  retries: "{{ upgrade_timeout_retries }}"
+  delay: "{{ upgrade_delay }}"
+  failed_when:
+    - upgrade_status.resources[0].status.history[0].state == "Partial"
+
+# ---------------------------------------------------------
+# 4. POST-VALIDATION: NODE HEALTH (Reboot Check)
+# ---------------------------------------------------------
+- name: Wait for all nodes to be Ready (kubectl)
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} wait --for=condition=Ready nodes --all --timeout=600s
+  changed_when: false
+
+- name: Get All Nodes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+  register: all_nodes
+
+- name: Verify all nodes are 'Ready'
+  ansible.builtin.assert:
+    that:
+      - "item.status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0"
+    fail_msg: "Node {{ item.metadata.name }} is not Ready after upgrade."
+  loop: "{{ all_nodes.resources }}"
+
+- name: Verify Scheduling is enabled (Nodes are not Cordoned)
+  ansible.builtin.assert:
+    that:
+      - item.spec.unschedulable is not defined or item.spec.unschedulable == false
+    fail_msg: "Node {{ item.metadata.name }} is still cordoned (unschedulable)."
+  loop: "{{ all_nodes.resources }}"

@@ -1,0 +1,157 @@
+---
+- name: Get BareMetalHost info for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: metal3.io/v1alpha1
+    kind: BareMetalHost
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: bmh_info
+
+- name: Print BMH names found
+  ansible.builtin.debug:
+    msg: "BMHs found: {{ bmh_info.resources | map(attribute='metadata.name') | list }}"
+
+- name: Delete BareMetalHosts for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: metal3.io/v1alpha1
+    kind: BareMetalHost
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  loop: "{{ bmh_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: bmh_delete
+  when: bmh_info.resources | length > 0
+
+- name: Get agents info for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: agent_info
+
+- name: Print agents names found
+  ansible.builtin.debug:
+    msg: "Agents found: {{ agent_info.resources | map(attribute='metadata.name') | list }}"
+
+- name: Delete agents for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  loop: "{{ agent_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: agent_delete
+  when: agent_info.resources | length > 0
+
+- name: Get clusterDeployments info for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: clusterdeployment_info
+
+- name: Print clusterDeployment names found
+  ansible.builtin.debug:
+    msg: "ClusterDeployments found: {{ clusterdeployment_info.resources | map(attribute='metadata.name') | list }}"
+
+- name: Delete clusterDeployments for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  loop: "{{ clusterdeployment_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Get infraEnvs info for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: infraenv_info
+
+- name: Print infraEnv names found
+  ansible.builtin.debug:
+    msg: "InfraEnvs found: {{ infraenv_info.resources | map(attribute='metadata.name') | list }}"
+
+- name: Delete infraEnvs for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  loop: "{{ infraenv_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Get KlusterletAddonConfigs info for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: agent.open-cluster-management.io/v1
+    kind: KlusterletAddonConfig
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: klusterletaddonconfig_info
+
+- name: Print KlusterletAddonConfigs names found
+  ansible.builtin.debug:
+    msg: "KlusterletAddonConfigs found: {{ klusterletaddonconfig_info.resources | map(attribute='metadata.name') | list }}"
+
+- name: Delete KlusterletAddonConfigs for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: agent.open-cluster-management.io/v1
+    kind: KlusterletAddonConfig
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  loop: "{{ klusterletaddonconfig_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Check if namespace exists for site {{ spoke_cluster }}
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: namespace_info
+
+- name: Print namespace info
+  ansible.builtin.debug:
+    msg: "Namespace info: {{ namespace_info }}"
+
+- name: Delete namespace for site {{ spoke_cluster }}
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Namespace
+    name: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+    force: true
+
+- name: Wait for namespace to be fully deleted
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: ns_check
+  until: ns_check.resources | length == 0
+  retries: 30
+  delay: 10
+  ignore_errors: true

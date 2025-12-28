@@ -1,21 +1,35 @@
 - name: Setup NTO gotests
   hosts: bastion
   gather_facts: false
-  environment:
-    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   vars:
     must_gather_dir: "/must-gather"
     artifacts_folder: "/artifacts"
 
   tasks:
-    - name: Create must gather directory
-      ansible.builtin.include_tasks: ./nto/roles/configurecluster/tasks/create_directory.yml
-      vars:
-        dir_path: "{{ must_gather_dir }}"
+    - name: Check if folder exists
+      ansible.builtin.stat:
+        path: "{{ must_gather_dir }}"
+      register: directory_status
+
+    - name: Delete old folder
+      ansible.builtin.file:
+        state: absent
+        path: "{{ must_gather_dir }}"
+      when: directory_status.stat.exists
+      become: true
+
+    - name: Create new directory
+      ansible.builtin.file:
+        state: directory
+        path: "{{ must_gather_dir }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0775'
+      become: true
 
     - name: Collect Must Gather
       ansible.builtin.shell: |
-        oc adm must-gather --dest-dir="{{ must_gather_dir }}" --kubeconfig="{{ kubeconfig }}"
+        oc adm must-gather --kubeconfig={{ kubeconfig }} --dest-dir={{ must_gather_dir }}
       register: must_gather
       changed_when: must_gather.rc == 0
 
@@ -23,6 +37,6 @@
       community.general.archive:
         path: "{{ must_gather_dir }}"
         dest: "{{ artifacts_folder }}/mustgather.tar.gz"
-        mode: 775
+        mode: '0775'
         format: gz
       become: true

@@ -1,0 +1,4 @@
+---
+- name: Pause briefly to allow CVO to acknowledge the update
+  ansible.builtin.pause:
+    seconds: 30

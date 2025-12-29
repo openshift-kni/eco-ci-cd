@@ -1,0 +1,69 @@
+---
+- name: Cleanup spoke cluster site 
+  hosts: bastion
+  gather_facts: false
+  vars:
+    hub_kubeconfig: "{{ hub_kubeconfig }}"
+    openshift_gitops_namespace: openshift-gitops
+
+  tasks:
+
+    - name: Get CGUs 
+      kubernetes.core.k8s_info:
+        api_version: ran.openshift.io/v1alpha1
+        kind: ClusterGroupUpgrade
+        namespace: "ztp-install"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: cgu_info
+
+    - name: Print CGUs names found
+      ansible.builtin.debug:
+        msg: "CGUs found: {{ cgu_info.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Delete CGUs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: ran.openshift.io/v1alpha1
+        kind: ClusterGroupUpgrade
+        name: "{{ item.metadata.name }}"
+        namespace: "ztp-install"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      loop: "{{ cgu_info.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Delete ArgoCD apps before cleanup
+      kubernetes.core.k8s:
+        state: absent
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      loop:
+        - clusters
+        - policies
+      ignore_errors: true
+
+    - name: Wait for ArgoCD apps to be deleted 
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: app_check
+      until: app_check.resources | length == 0
+      retries: 12
+      delay: 10
+      loop:
+        - clusters
+        - policies
+      ignore_errors: true
+
+    - name: Cleanup spoke cluster resources
+      include_tasks: tasks/site_cleanup.yml
+      vars:
+        hub_kubeconfig: "{{ hub_kubeconfig }}"
+        spoke_cluster: "{{ spoke_cluster }}"
+

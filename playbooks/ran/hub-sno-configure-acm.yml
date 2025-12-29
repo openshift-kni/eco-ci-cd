@@ -73,7 +73,7 @@
     # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
     # rhcos_iso_url points to local bastion HTTP server (for disconnected environments)
     rhcos_version: ""  # Auto-populated from assisted-service
-    share_http_iso_port: 8080  # HTTP server port on bastion serving /opt/cache
+    share_http_iso_port: 8081  # HTTP server port on bastion serving /opt/http_store/data
 
   tasks:
 

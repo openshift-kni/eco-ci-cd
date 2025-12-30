@@ -36,7 +36,7 @@
     - name: Archive Must Gather
       community.general.archive:
         path: "{{ must_gather_dir }}"
-        dest: "{{ artifacts_folder }}/mustgather.tar.gz"
+        dest: "{{ artifacts_folder }}/must-gather.tar.gz"
         mode: '0775'
         format: gz
       become: true

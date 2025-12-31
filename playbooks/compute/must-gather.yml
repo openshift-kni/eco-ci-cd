@@ -3,7 +3,7 @@
   gather_facts: false
   vars:
     must_gather_dir: "/must-gather"
-    artifacts_folder: "/artifacts"
+    artifacts_folder: "/tmp/artifacts"
 
   tasks:
     - name: Check if folder exists

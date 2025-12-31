@@ -3,7 +3,7 @@
   hosts: bastion
   become: yes
   vars:
-    hub_ip: "10.46.26.66" 
+    hub_ip: "{{ hub_ip }}" 
     proxy_port: 3128
 
   tasks:
@@ -45,9 +45,9 @@
   hosts: bastion
   become: yes
   vars:
-    hub_name: "kni-qe-99"
-    hub_ip: "10.46.26.66"
-    hub_domain: "lab.eng.tlv2.redhat.com"
+    hub_name: "{{ hub_name }}"
+    hub_ip: "{{ hub_ip }}"
+    hub_domain: "{{ hub_domain }}"
   tasks:
     - name: Add hub cluster DNS records to dnsmasq
       ansible.builtin.blockinfile:

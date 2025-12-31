@@ -52,16 +52,19 @@
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../../inventories/ocp-deployment/group_vars/masters"
         name: masters_vars
+      delegate_to: localhost
 
     - name: Check if workers group_vars exists (not present in compact clusters)
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../../inventories/ocp-deployment/group_vars/workers"
       register: workers_group_vars_file
+      delegate_to: localhost
 
     - name: Load workers group_vars if present
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../../inventories/ocp-deployment/group_vars/workers"
         name: workers_vars
+      delegate_to: localhost
       when: workers_group_vars_file.stat.exists
 
     - name: Set empty workers_vars for compact clusters (no workers)
@@ -84,6 +87,8 @@
           - kubeconfig | length > 0
           - spoke_cluster is defined
           - spoke_cluster | length > 0
+          - bmc_secret_name is defined
+          - bmc_secret_name | length > 0
           - masters_secret_name is defined
           - masters_secret_name | length > 0
           - ztp_git_repo_url is defined
@@ -92,18 +97,13 @@
           Required variables must be defined:
             - kubeconfig: Path to kubeconfig file
             - spoke_cluster: Spoke cluster name (e.g., kni-qe-100)
-            - masters_secret_name: Name of the masters BMC secret (e.g., masters-bmc-secret)
-            - ztp_git_repo_url: Git repository URL for ZTP site configs
-
-    - name: Validate worker BMC secret name for non-compact clusters
-      ansible.builtin.assert:
-        that:
-          - bmc_secret_name is defined
-          - bmc_secret_name | length > 0
-        fail_msg: |
-          For clusters with workers, bmc_secret_name must be defined:
+            - bmc_username: BMC username for Worker BMC access (iDRAC)
+            - bmc_password: BMC password for Worker BMC access (iDRAC)
             - bmc_secret_name: Name of the worker BMC secret (e.g., helix-41-bmc-secret)
-      when: not is_compact_cluster
+            - masters_secret_name: Name of the masters BMC secret (e.g., masters-bmc-secret)
+            - masters_secret_username: BMC username for Masters (sushy-tools)
+            - masters_secret_password: BMC password for Masters (sushy-tools)
+            - ztp_git_repo_url: Git repository URL for ZTP site configs
 
     # Thorough cleanup for re-deployments - only runs when force_cleanup=true    
     - name: Delete ArgoCD apps before cleanup
@@ -400,7 +400,6 @@
           stringData:
             username: "{{ bmc_username }}"
             password: "{{ bmc_password }}"
-      when: not is_compact_cluster
 
     - name: Ensure Masters BMC credentials secret exists after ArgoCD sync
       kubernetes.core.k8s:

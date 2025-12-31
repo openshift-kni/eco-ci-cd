@@ -41,6 +41,7 @@
 
 - name: Reset registry storage
   ansible.builtin.include_tasks: reset_registry_storage.yaml
+  when: not (ocp_operator_mirror_skip_internal_registry_cleanup | default(false) | bool)
 
 - name: Configure registry authentication
   ansible.builtin.include_tasks: set_auth.yaml

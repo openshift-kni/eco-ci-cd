@@ -1,4 +1,5 @@
 ocp_operator_mirror_registry_service_name: container-registry
+ocp_operator_mirror_skip_internal_registry_cleanup: false  # Set to true to preserve existing mirrored images
 ocp_operator_mirror_folder: operators
 ocp_operator_mirror_disable_default_sources: true
 ocp_operator_mirror_prod_redhat_catalog_name: redhat-operators

@@ -121,11 +121,11 @@
         msg: |
           gitops repo server pod can reach GitLab through bastion proxy.
 
-    - name: Add spoke namespace to policy-app-project destinations
+    - name: Add spoke namespace to default AppProject destinations
       kubernetes.core.k8s_json_patch:
         api_version: argoproj.io/v1alpha1
         kind: AppProject
-        name: policy-app-project
+        name: default
         namespace: "{{ gitops_namespace }}"
         patch:
           - op: add
@@ -134,16 +134,17 @@
               namespace: "{{ spoke_namespace }}"
               server: '*'
 
-    - name: Add ClusterInstance to policy-app-project namespaceResourceWhitelist
-      kubernetes.core.k8s_json_patch:
+    - name: Ensure ClusterInstance is in default AppProject namespaceResourceWhitelist
+      kubernetes.core.k8s:
         api_version: argoproj.io/v1alpha1
         kind: AppProject
-        name: policy-app-project
+        name: default
         namespace: "{{ gitops_namespace }}"
-        patch:
-          - op: add
-            path: /spec/namespaceResourceWhitelist/-
-            value:
-              group: siteconfig.open-cluster-management.io
-              kind: ClusterInstance
+        state: present
+        merge_type: merge
+        definition:
+          spec:
+            namespaceResourceWhitelist:
+              - group: siteconfig.open-cluster-management.io
+                kind: ClusterInstance
 

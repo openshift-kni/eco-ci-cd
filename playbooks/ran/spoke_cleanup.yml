@@ -67,3 +67,47 @@
         hub_kubeconfig: "{{ hub_kubeconfig }}"
         spoke_cluster: "{{ spoke_cluster }}"
 
+- name: Delete old cluster VMs to free up space on hypervisor
+  hosts: hypervisor
+  gather_facts: false
+  become: true
+  vars:
+    # spoke_cluster should be passed as extra-var (e.g., kni-qe-100)
+    # Pattern converts kni-qe-100 to kni-qe-100_ to match VM names like kni-qe-100_master0
+    vm_name_pattern: "{{ spoke_cluster }}_"
+  tasks:
+    - name: Get list of all VMs from virsh
+      ansible.builtin.command:
+        cmd: virsh list --all --name
+      register: virsh_list
+      changed_when: false
+
+    - name: Filter VMs matching spoke cluster pattern
+      ansible.builtin.set_fact:
+        vms_to_delete: "{{ virsh_list.stdout_lines | select('search', vm_name_pattern) | list }}"
+
+    - name: Display VMs to be deleted
+      ansible.builtin.debug:
+        msg: "VMs to delete for {{ spoke_cluster }}: {{ vms_to_delete }}"
+
+    - name: Destroy old cluster VMs
+      community.libvirt.virt:
+        name: "{{ item }}"
+        command: destroy
+      loop: "{{ vms_to_delete }}"
+      ignore_errors: true  # VM might already be stopped
+      when: vms_to_delete | length > 0
+
+    - name: Undefine old cluster VMs with storage and nvram cleanup
+      ansible.builtin.command:
+        cmd: virsh undefine {{ item }} --remove-all-storage --nvram
+      loop: "{{ vms_to_delete }}"
+      register: undefine_result
+      failed_when: undefine_result.rc != 0 and 'domain not found' not in undefine_result.stderr
+      changed_when: undefine_result.rc == 0
+      when: vms_to_delete | length > 0
+
+    - name: Report no VMs found
+      ansible.builtin.debug:
+        msg: "No VMs found matching pattern '{{ vm_name_pattern }}'"
+      when: vms_to_delete | length == 0

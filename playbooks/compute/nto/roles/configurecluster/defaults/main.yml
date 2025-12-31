@@ -1,6 +1,6 @@
 ---
 mcp_timeout: 10m
-artifacts_folder: /artifacts
+artifacts_folder: /tmp/artifacts
 ignore_cgroups_version: "true"
 rt_kernel: false
 high_power_consumption: true

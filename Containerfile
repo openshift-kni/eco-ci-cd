@@ -8,13 +8,15 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     sshpass \
     python3 \
     python3-pip \
+    python3-devel \
     python3-wheel \
     && dnf clean all
 
 # Copy python requirements file to /eco-ci-cd
 COPY pip.txt .
 # Install python dependencies
-RUN python3 -m pip install --prefer-binary --no-cache-dir --no-compile --use-pep517 -r pip.txt
+RUN python3 -m pip install --no-cache-dir -r pip.txt && \
+    python3 -m pip cache purge
 
 # Copy files affecting ansible-galaxy to /eco-ci-cd
 COPY requirements.yml ansible.cfg /eco-ci-cd/

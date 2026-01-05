@@ -9,12 +9,12 @@
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
 
   vars:
-    bastion_proxy_address: "http://10.46.26.65:3128"
+    bastion_proxy_port: 3128
+    bastion_proxy_address: "http://{{ ansible_host }}:{{ bastion_proxy_port }}"
     hub_pod_cidr: "10.128.0.0/14"
     hub_service_cidr: "172.30.0.0/16"
     internal_registry_dns: "disconnected.registry.local"
-    proxy_block_list: "localhost,127.0.0.1,.svc,.cluster.local,10.128.0.0/14,172.30.0.0/16,disconnected.registry.local:5000,10.46.26.65"
-    gitlab_repo_url: "https://gitlab.cee.redhat.com/sobarzan/ztp-site-configs.git"
+    proxy_block_list: "localhost,127.0.0.1,.svc,.cluster.local,{{ hub_pod_cidr }},{{ hub_service_cidr }},{{ internal_registry_dns }}:5000,{{ ansible_host }}"
     gitops_namespace: openshift-gitops
     repo_server_deployment: openshift-gitops-repo-server
 
@@ -25,7 +25,8 @@
         that:
           - kubeconfig is defined
           - spoke_namespace is defined
-        fail_msg: "Required variables 'kubeconfig' and 'spoke_namespace' must be defined"
+          - gitlab_repo_url is defined
+        fail_msg: "Required variables 'kubeconfig', 'spoke_namespace', and 'gitlab_repo_url' must be defined"
         success_msg: "All required variables are defined"
 
     - name: Patch ArgoCD CR to configure proxy

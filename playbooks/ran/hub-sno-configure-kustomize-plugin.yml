@@ -116,21 +116,25 @@
         regexp: '("image": ")[^"]*/ztp-site-generat[^"]*(")'
         replace: "\\1{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
 
-    - name: Get MultiClusterHub cluster-wide
+    - name: Wait for MultiClusterHub to be Running
       kubernetes.core.k8s_info:
         api_version: operator.open-cluster-management.io/v1
         kind: MultiClusterHub
         kubeconfig: "{{ kubeconfig }}"
       register: mch_cluster_wide_info
+      retries: 60
+      delay: 30
+      until:
+        - mch_cluster_wide_info.resources | length > 0
+        - mch_cluster_wide_info.resources[0].status.phase | default('') == "Running"
 
-    - name: Verify MultiClusterHub exists and is Running
+    - name: Verify MultiClusterHub is Running
       ansible.builtin.assert:
         that:
           - mch_cluster_wide_info.resources | length > 0
-          - mch_cluster_wide_info.resources[0].status.phase is defined
           - mch_cluster_wide_info.resources[0].status.phase == "Running"
         fail_msg: |
-          MultiClusterHub not found or not Running.
+          MultiClusterHub not found or not Running after retries.
           Status: {{ mch_cluster_wide_info.resources[0].status.phase | default('Not Found') }}
           Ensure ACM is fully deployed before running this playbook.
 

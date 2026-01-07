@@ -1,0 +1,68 @@
+---
+# Ansible Playbook: Upload RAN Report to Polarion
+# -------------------------------------------------
+# Wrapper playbook for RAN report uploads that prepares report directories
+# before calling the main upload playbook.
+#
+# This playbook:
+# 1. Separates JUnit XML files from Polarion report files into different directories
+# 2. Calls the main upload-report.yaml playbook
+#
+# Usage:
+# ansible-playbook ./playbooks/ran/upload-report-ran.yml \
+#   -i ./inventories/cnf/switch-config.yaml \
+#   --extra-vars "kubeconfig=/path/to/kubeconfig \
+#   reporter_template_name='Telco 5G RAN Regression build - 4.19 - automated' \
+#   eco_gotests_report_dir=/tmp/eco_gotests/report upload_to_report_portal=true 
+#   report_portal_url_filename=.reportportal_url_compact"
+#
+# Required Extra Vars:
+#   kubeconfig                Path to the kubeconfig file
+#   reporter_template_name    The template name used for generating the report
+#   eco_gotests_report_dir    Path to the eco-gotests report directory on bastion
+#
+# Optional Extra Vars (with defaults):
+#   eco_gotests_junit_dir     Directory for junit files (default: /tmp/eco_gotests/junit)
+#   reports_directory         Working directory for upload (default: /tmp/reports_upload)
+
+- name: Prepare RAN report directories
+  hosts: bastion
+  gather_facts: false
+  vars:
+    eco_gotests_report_dir: /tmp/eco_gotests/report
+    eco_gotests_junit_dir: /tmp/eco_gotests/junit
+    reports_directory: /tmp/reports_upload
+  tasks:
+    - name: Ensure junit directory exists
+      ansible.builtin.file:
+        path: "{{ eco_gotests_junit_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Find junit XML files in report directory
+      ansible.builtin.find:
+        paths: "{{ eco_gotests_report_dir }}"
+        patterns:
+          - "*junit*.xml"
+          - "*_suite_*.xml"
+        recurse: false
+      register: junit_files
+
+    - name: Display found junit files
+      ansible.builtin.debug:
+        msg: "Found {{ junit_files.files | length }} junit file(s): {{ junit_files.files | map(attribute='path') | list }}"
+
+    - name: Move junit files to separate directory
+      ansible.builtin.command:
+        cmd: "mv {{ item.path }} {{ eco_gotests_junit_dir }}/"
+      loop: "{{ junit_files.files }}"
+      when: junit_files.files | length > 0
+      changed_when: true
+
+    - name: Set facts for upload playbook
+      ansible.builtin.set_fact:
+        processed_report_dir: "{{ eco_gotests_report_dir }}"
+        junit_report_dir: "{{ eco_gotests_junit_dir }}"
+
+- name: Upload reports to Polarion
+  ansible.builtin.import_playbook: ../cnf/upload-report.yaml

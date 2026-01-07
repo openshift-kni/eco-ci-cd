@@ -37,6 +37,8 @@
 # Available Extra Vars (Arguments):
 
 # kubeconfig                            Path to the kubeconfig file used for authenticating with the OpenShift cluster. Example: /home/user/.kube/config
+# upload_to_report_portal               Enable Report Portal upload. Default: false
+# report_portal_url_filename            Filename for saving Report Portal URL. Default: .reportportal_url. Example: .reportportal_url_compact
 # reporter_template_name                The template name used for generating the report.Example: "Cluster ipv6 report"
 # processed_report_dir                  Path to the locahost directory containing the report XML files to be uploaded. Example: /mnt/shared/report
 # junit_report_dir                      Path to the locahost directory containing JUnit XML report files. Example: /mnt/shared/junit
@@ -164,6 +166,47 @@
         - Remove reports dir
         - Remove stopped containers
         - Remove reporter project dir
+
+    - name: Run make upload-report-portal
+      ansible.builtin.shell: |
+        timeout 120 make upload-report-portal || true
+      args:
+        chdir: "{{ reporter_project_root_dir }}/{{ reporter_project_dest_dir }}"
+      environment:
+        PATH: "{{ lookup('ansible.builtin.env', 'PATH') }}"
+        DATAROUTER_USERNAME: "{{ report_router_user }}"
+        DATAROUTER_PASSWORD: "{{ report_router_pass }}"
+        LAUNCH_NAME: "{{ reporter_template_name }}"
+        LAUNCH_DESCRIPTION: "OCP {{ cluster_info.resources[0].status.version }} - {{ reporter_template_name }}"
+        REPORTS_PORTAL_ATTRIBUTES: "ocp_version:{{ cluster_info.resources[0].status.version }}"
+        POLARION_REPORT_PATH: "{{ report_files | join(';') }}"
+        OCP_BUILD: "v{{ cluster_info.resources[0].status.version }}"
+      register: report_portal_result
+      when: upload_to_report_portal | default(false) | bool
+
+    - name: Extract Report Portal URL from output
+      ansible.builtin.set_fact:
+        report_portal_url: "{{ report_portal_result.stdout | regex_search('\"launch_url\":\"([^\"]+)\"', '\\1') | first }}"
+      when:
+        - upload_to_report_portal | default(false) | bool
+        - report_portal_result.stdout is defined
+        - '"launch_url" in report_portal_result.stdout'
+
+    - name: Save Report Portal URL to bastion
+      ansible.builtin.copy:
+        content: "{{ report_portal_url }}"
+        dest: "/tmp/{{ report_portal_url_filename | default('.reportportal_url') }}"
+        mode: "0644"
+      when:
+        - upload_to_report_portal | default(false) | bool
+        - report_portal_url is defined
+
+    - name: Display Report Portal URL
+      ansible.builtin.debug:
+        msg: "Report Portal URL: {{ report_portal_url }}"
+      when:
+        - upload_to_report_portal | default(false) | bool
+        - report_portal_url is defined
 
     - name: Check if polarion URL file exists
       ansible.builtin.stat:

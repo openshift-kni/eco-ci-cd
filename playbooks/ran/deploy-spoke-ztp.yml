@@ -488,6 +488,25 @@
       retries: 60
       delay: 60
 
+    - name: Get spoke cluster admin kubeconfig secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ spoke_cluster }}-admin-kubeconfig"
+        namespace: "{{ spoke_cluster }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: spoke_kubeconfig_secret
+
+    - name: Extract spoke kubeconfig to /tmp
+      ansible.builtin.copy:
+        content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+        dest: "/tmp/{{ spoke_cluster }}-kubeconfig"
+        mode: '0600'
+
+    - name: Display spoke kubeconfig location
+      ansible.builtin.debug:
+        msg: "Spoke cluster kubeconfig saved to /tmp/{{ spoke_cluster }}-kubeconfig"
+
     - name: Display policy compliance status
       ansible.builtin.debug:
         msg: "All policies in namespace {{ spoke_cluster }} are Compliant"

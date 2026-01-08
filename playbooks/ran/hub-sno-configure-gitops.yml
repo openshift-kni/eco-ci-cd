@@ -24,9 +24,8 @@
       ansible.builtin.assert:
         that:
           - kubeconfig is defined
-          - spoke_namespace is defined
           - gitlab_repo_url is defined
-        fail_msg: "Required variables 'kubeconfig', 'spoke_namespace', and 'gitlab_repo_url' must be defined"
+        fail_msg: "Required variables 'kubeconfig', and 'gitlab_repo_url' must be defined"
         success_msg: "All required variables are defined"
 
     - name: Patch ArgoCD CR to configure proxy
@@ -121,19 +120,6 @@
       ansible.builtin.debug:
         msg: |
           gitops repo server pod can reach GitLab through bastion proxy.
-
-    - name: Add spoke namespace to default AppProject destinations
-      kubernetes.core.k8s_json_patch:
-        api_version: argoproj.io/v1alpha1
-        kind: AppProject
-        name: default
-        namespace: "{{ gitops_namespace }}"
-        patch:
-          - op: add
-            path: /spec/destinations/-
-            value:
-              namespace: "{{ spoke_namespace }}"
-              server: '*'
 
     - name: Ensure ClusterInstance is in default AppProject namespaceResourceWhitelist
       kubernetes.core.k8s:

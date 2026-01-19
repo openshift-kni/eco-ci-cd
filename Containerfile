@@ -2,6 +2,9 @@ FROM registry.access.redhat.com/ubi9/ubi
 
 WORKDIR /eco-ci-cd
 
+# https://docs.ansible.com/projects/ansible/latest/reference_appendices/config.html#envvar-ANSIBLE_ALLOW_BROKEN_CONDITIONALS
+ENV ANSIBLE_ALLOW_BROKEN_CONDITIONALS=True
+
 # Install required packages
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     git \

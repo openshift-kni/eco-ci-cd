@@ -49,6 +49,11 @@
     hub_ip: "{{ hub_ip }}"
     hub_domain: "{{ hub_domain }}"
   tasks:
+    - name: Install dnsmasq if not present
+      ansible.builtin.dnf:
+        state: present
+        name: dnsmasq
+
     - name: Add hub cluster DNS records to dnsmasq
       ansible.builtin.blockinfile:
         path: /etc/dnsmasq.d/custom-records.conf

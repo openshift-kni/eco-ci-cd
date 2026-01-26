@@ -185,7 +185,9 @@
         interfaces: "{{
           (cluster_config[cluster_name]['intel_710'] | default([]) | map(attribute='switch_interface') | list) +
           (cluster_config[cluster_name]['intel_810'] | default([]) | map(attribute='switch_interface') | list) +
+          (cluster_config[cluster_name]['intel_E830'] | default([]) | map(attribute='switch_interface') | list) +
           (cluster_config[cluster_name]['bf-2'] | default([]) | map(attribute='switch_interface') | list) +
+          (cluster_config[cluster_name]['mlx_cx_7'] | default([]) | map(attribute='switch_interface') | list) +
           (cluster_config[cluster_name]['mlx_cx_6'] | default([]) | map(attribute='switch_interface') | list)
           }}"
       junipernetworks.junos.junos_config:

@@ -1,0 +1,25 @@
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+    name: agent
+    namespace: "{{ mce_namespace }}"
+spec:
+  databaseStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  filesystemStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+  mirrorRegistryRef:
+    name: mirror-registry-ca
+  osImages:
+    - openshiftVersion: "{{ ocp_version }}"
+      version: "{{ rhcos_version }}"
+      url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/rhcos-{{ rhcos_version }}-live-iso.x86_64.iso"
+      cpuArchitecture: "x86_64"

@@ -132,12 +132,7 @@
     - name: Create MultiClusterHub Resource
       kubernetes.core.k8s:
         state: present
-        api_version: operator.open-cluster-management.io/v1
-        kind: MultiClusterHub
-        name: "{{ mch_cr_name }}"
-        namespace: "{{ mce_namespace }}"
-        definition:
-          spec: {}
+        definition: "{{ lookup('template', 'templates/multiClusterHub.j2') }}"
       when: mch_info.resources | length == 0
 
     - name: Wait for MultiClusterHub to reach Running status
@@ -160,80 +155,14 @@
       when: mch_info is succeeded
 
     - name: Create ConfigMap for mirror registry
-      vars:
-        registry_host_url: disconnected.registry.local:5000
       kubernetes.core.k8s:
         state: present
-        api_version: v1
-        kind: ConfigMap
-        name: mirror-registry-ca
-        namespace: "{{ mce_namespace }}"
-        definition:
-          data:
-            registries.conf: |
-              unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
-              short-name-mode = ""
-
-              [[registry]]
-                prefix = ""
-                location = "quay.io/openshift-release-dev/ocp-v4.0-art-dev"
-                mirror-by-digest-only = true
-
-                [[registry.mirror]]
-                  location = "{{ registry_host_url }}/ocp4/openshift"
-
-              [[registry]]
-                prefix = ""
-                location = "registry.ci.openshift.org/ocp/release"
-                mirror-by-digest-only = true
-
-                [[registry.mirror]]
-                  location = "{{ registry_host_url }}/ocp/release"
-
-              [[registry]]
-                prefix = ""
-                location = "quay.io/openshift-release-dev/ocp-release"
-                mirror-by-digest-only = true
-
-                [[registry.mirror]]
-                  location = "{{ registry_host_url }}/ocp4/openshift"
-
-              [[registry]]
-                prefix = ""
-                location = "registry.ci.openshift.org/ocp/4-dev-preview"
-                mirror-by-digest-only = true
-
-                [[registry.mirror]]
-                  location = "{{ registry_host_url }}/ocp/4-dev-preview"
+        definition: "{{ lookup('template', 'templates/mirrorRegistryConfigMap.j2') }}"
 
     - name: Create AgentServiceConfig
       kubernetes.core.k8s:
         state: present
-        api_version: agent-install.openshift.io/v1beta1
-        kind: AgentServiceConfig
-        name: agent
-        namespace: "{{ mce_namespace }}"
-        definition:
-          spec:
-            databaseStorage:
-              accessModes:
-                - ReadWriteOnce
-              resources:
-                requests:
-                  storage: 10Gi
-            filesystemStorage:
-              accessModes:
-                - ReadWriteOnce
-              resources:
-                requests:
-                  storage: 20Gi
-            mirrorRegistryRef:
-              name: mirror-registry-ca
-            osImages:
-              - openshiftVersion: "{{ ocp_version }}"
-                version: "{{ rhcos_version }}"
-                url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/rhcos-{{ rhcos_version }}-live-iso.x86_64.iso"
-                cpuArchitecture: "x86_64"
+        definition: "{{ lookup('template', 'templates/agentServiceConfig.j2') }}"
 
     - name: Wait for assisted-service pod to be running
       kubernetes.core.k8s_info:
@@ -256,14 +185,7 @@
     - name: Apply Provisioning resource
       kubernetes.core.k8s:
         state: present
-        api_version: metal3.io/v1alpha1
-        kind: Provisioning
-        name: provisioning-configuration
-        definition:
-          spec:
-            preProvisioningOSDownloadURLs: {}
-            provisioningNetwork: Disabled
-            watchAllNamespaces: true
+        definition: "{{ lookup('template', 'templates/provisioning.j2') }}"
 
     - name: Wait for metal3 pods to be running (Checking for 3+ pods)
       kubernetes.core.k8s_info:
@@ -287,7 +209,6 @@
           Current metal pods:
           {{ metal3_check.resources | selectattr('metadata.name', 'search', 'metal') | map(attribute='metadata.name') | list }}
       when: metal3_check is failed
-
 
     - name: Enable siteconfig component in MCH
       kubernetes.core.k8s_json_patch:

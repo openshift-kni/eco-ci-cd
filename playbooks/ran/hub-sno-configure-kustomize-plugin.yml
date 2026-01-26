@@ -43,7 +43,6 @@
     container_registry_service_name: "container-registry"
     ztp_workdir_path: "/tmp/ztp-workdir"
     ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"
-    disconnected_registry_url: "disconnected.registry.local:5000"
     openshift_gitops_namespace: "openshift-gitops"
     json_patch_path: "{{ ztp_workdir_out_path }}/argocd/deployment/argocd-openshift-gitops-patch.json"
   tasks:
@@ -70,7 +69,7 @@
       ansible.builtin.shell: |
         skopeo copy --all \
           docker://{{ site_generate_image }} \
-          docker://{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
+          docker://{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
       environment:
         REGISTRY_AUTH_FILE: /etc/containers/auth.json
       changed_when: true
@@ -90,7 +89,7 @@
     - name: Create temporary container for ztp-site-generator extraction
       containers.podman.podman_container:
         name: "ztp-extract-{{ site_generate_image.split(':')[-1] }}"
-        image: "{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}"
+        image: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}"
         authfile: /etc/containers/auth.json
         state: created
 
@@ -114,7 +113,7 @@
         #       Upstream will have something like   "quay.io/openshift-kni/ztp-site-generator:latest"
         #       This regex should work for either:
         regexp: '("image": ")[^"]*/ztp-site-generat[^"]*(")'
-        replace: "\\1{{ disconnected_registry_url }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
+        replace: "\\1{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}\\2"
 
     - name: Wait for MultiClusterHub to be Running
       kubernetes.core.k8s_info:

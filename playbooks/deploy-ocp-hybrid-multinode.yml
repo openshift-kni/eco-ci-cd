@@ -611,7 +611,7 @@
       vars:
         single_node_openshift_enabled: false
         use_local_mirror_registry: true
-        mirror_registry: "disconnected.registry.local:5000"
+        mirror_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
         mirror_certificate: "{{ disconnected_registry_cert_formatted | default(disconnected_registry_cert) }}"
         ocp_registry_namespace: ocp4
         ocp_registry_image: openshift

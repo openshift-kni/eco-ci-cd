@@ -34,6 +34,9 @@
 # optional variables:
 # - extra_manifests: list of extra manifests for OCP installation
 # - internal_registry (bool): enable internal registry preparation and CA trust
+# - disconnected (bool): enable disconnected mode
+# - ipv6_only (bool): enable IPv6-only network configuration
+# - ipv4_only (bool): enable IPv4-only network configuration
 
 ## Roles Requirements
 # The playbook uses role:
@@ -80,14 +83,42 @@
 # - This playbook assumes the hypervisor and bastion hosts are pre-installed and ready.
 # - Test in a non-production environment before deploying.
 ---
+- name: Validate requirement for disconnected mode
+  hosts: bastion
+  gather_facts: true
+  vars:
+    ipv6_only: false
+    ipv4_only: false
+    disconnected: false
+  tasks:
+    - name: Fail if IPv6-only is requested without disconnected mode
+      ansible.builtin.fail:
+        msg: "Scenario not supported: ipv6_only=true requires disconnected=true."
+      when:
+        - ipv6_only | bool
+        - not (disconnected | bool)
+
+    - name: Ensure cluster name is set
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+        fail_msg: "Please provide cluster_name variable to playbook"
+
+    - name: Set internal registry if disconnected mode is enabled
+      ansible.builtin.set_fact:
+        internal_registry: true
+      when: disconnected | bool
+
 - name: Render nodes variables
   hosts: nodes
   gather_facts: false
   vars:
     internal_registry: false
+    disconnected: false
+    ipv6_only: false
+    ipv4_only: false
   tasks:
     - name: Render nodes variables
-      delegate_to: bastion
       ansible.builtin.set_fact:
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
@@ -117,6 +148,134 @@
               })
             }, recursive=True)
           }}
+
+    - name: Remove IPv4 default route for dual-stack (disconnected)
+      when: disconnected | bool
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                'routes': {
+                  'config': (
+                    network_config.raw.routes.config
+                      | default([])
+                      | rejectattr('destination', 'equalto', '0.0.0.0/0')
+                      | list
+                  )
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Replace DNS servers with internal registry; set routes to internal CIDR blocks (disconnected)
+      when: (disconnected | bool)
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              "raw": network_config.raw | combine({
+                "dns-resolver": {
+                  "config": {
+                    "server": [ hostvars['bastion']['ansible_host'] ]
+                  },
+                },
+                "routes": {
+                  "config": (
+                    (network_config.raw.routes.config | default([])) + [
+                      {
+                        "destination": "192.168.0.0/16",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "172.16.0.0/12",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "10.0.0.0/8",
+                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      },
+                      {
+                        "destination": "0.0.0.0/0",
+                        "next-hop-address": "169.254.0.1",
+                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "table-id": 254
+                      }
+                    ]
+                  )
+                },
+              })
+            }, recursive=True)
+          }}
+
+    - name: Remove IPv6 section from each interface
+      when: ipv4_only | bool
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                'interfaces': network_config.raw.interfaces
+                  | map('dict2items')
+                  | map('rejectattr', 'key', 'equalto', 'ipv6')
+                  | map('items2dict')
+                  | list,
+                'routes': {
+                  'config': network_config.raw.routes.config
+                    | default([])
+                    | rejectattr('destination', 'search', ':')
+                    | list
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Remove IPv4 configuration from each interface (IPv6‑only cluster)
+      when: ipv6_only | bool
+      ansible.builtin.set_fact:
+        network_config: >-
+          {{
+            network_config | combine({
+              'raw': network_config.raw | combine({
+                "dns-resolver": {
+                  "config": {
+                    "server": [ "{{ hostvars['bastion']['ipv6'].split('/')[0] }}" ]
+                  },
+                },
+                'interfaces': network_config.raw.interfaces
+                  | map('dict2items')
+                  | map('rejectattr', 'key', 'equalto', 'ipv4')
+                  | map('items2dict')
+                  | list,
+                'routes': {
+                  'config': network_config.raw.routes.config
+                    | default([])
+                    | rejectattr('destination', 'search', '\.')
+                    | list
+                }
+              })
+            }, recursive=True)
+          }}
+        ansible_host: >-
+              {{
+                network_config.raw.interfaces
+                | selectattr('ipv6', 'defined')
+                | map(attribute='ipv6.address')
+                | map('first')
+                | select('defined')
+                | map(attribute='ip')
+                | first
+              }}
+
+    - name: Print Network Configuration
+      ansible.builtin.debug:
+        msg: "network_config: {{ network_config }}"
 
 # Process optional environment Variables if present
 - name: Mutate worker network configuration if env variables are present
@@ -186,10 +345,19 @@
   hosts: bastion
   vars:
     internal_registry: false
+    disconnected: false
     release: "4.17"
-    pull_secret: "{{ pull_secret_string | b64decode }}"
+    ipv4_only: false
+    ipv6_only: false
     registry_service_name: container-registry
+    pull_secret_file: /tmp/pullsecret
+    api_vips: "{{ api_vips_string | from_yaml }}"
+    ingress_vips: "{{ ingress_vips_string | from_yaml }}"
+
   tasks:
+    - name: Populate pull secret
+      ansible.builtin.set_fact:
+        pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
 
     - name: Render bastion variables
       delegate_to: bastion
@@ -198,19 +366,11 @@
         cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml }}"
         extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
         extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
-        api_vips: "{{ api_vips_string | from_yaml }}"
-        ingress_vips: "{{ ingress_vips_string | from_yaml }}"
 
     - name: Prepare disconnected infrastructure
       become: true
-      when: internal_registry | bool
+      when: internal_registry | bool or disconnected | bool
       block:
-        - name: Ensure cluster name is set
-          ansible.builtin.assert:
-            that:
-              - cluster_name is defined
-            fail_msg: "Please provide cluster_name variable to playbook"
-
         - name: Ensure firewalld is running
           become: true
           ansible.builtin.service:
@@ -358,6 +518,52 @@
         release_image: "{{ ocp_version_facts_pull_spec }}"
         extract_dest_path: "{{ openshift_installer_extract_dest_path }}"
 
+    - name: Mirror OpenShift release (disconnected)
+      when: disconnected | bool
+      vars:
+        mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
+        mor_version: "{{ ocp_version_facts_parsed_release }}"
+        mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
+        mor_cache_dir: "/opt/cache"
+        mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
+        mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        mor_registry_path: "ocp4/openshift"
+        mor_auths_file: "{{ pull_secret_file }}"
+        mor_force: true
+        mor_install_type: "abi"
+        mor_is_type: "idms"
+        mor_mirror_disk_images: true
+        mor_mirror_container_images: true
+        mor_write_custom_config: true
+      ansible.builtin.include_role:
+        name: redhatci.ocp.mirror_ocp_release
+
+    - name: Set up IPv4-only cluster network configuration
+      when: ipv4_only | bool
+      ansible.builtin.set_fact:
+        api_vips: >-
+          {{ api_vips | select('match', '^[0-9.]+$') | list }}
+        extra_cluster_networks: ""
+        extra_machine_networks: ""
+        extra_service_networks: ""
+        ingress_vips: >-
+          {{ ingress_vips | select('match', '^[0-9.]+$') | list }}
+
+    - name: Set up IPv6-only cluster network configuration
+      when: ipv6_only | bool
+      ansible.builtin.set_fact:
+        api_vips: >-
+          {{ api_vips | reject('match', '^[0-9.]+$') | list }}
+        cluster_network_cidr: "{{ extra_cluster_networks[0]['cidr'] }}"
+        cluster_network_host_prefix: "{{ extra_cluster_networks[0]['host_prefix'] }}"
+        machine_network_cidr: "{{ extra_machine_networks[0]['cidr'] }}"
+        service_network_cidr: "{{ extra_service_networks[0]['cidr'] }}"
+        extra_cluster_networks: ""
+        extra_machine_networks: ""
+        extra_service_networks: ""
+        ingress_vips: >-
+          {{ ingress_vips | reject('match', '^[0-9.]+$') | list }}
+
     - name: Generate deployment manifests for OCP installation
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
@@ -399,6 +605,18 @@
         - extra_manifests_stats is defined
         - extra_manifests is defined
         - extra_manifests | length > 0
+
+    - name: Generate deployment manifests for disconnected OpenShift installation
+      when: disconnected | bool
+      vars:
+        single_node_openshift_enabled: false
+        use_local_mirror_registry: true
+        mirror_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        mirror_certificate: "{{ disconnected_registry_cert_formatted | default(disconnected_registry_cert) }}"
+        ocp_registry_namespace: ocp4
+        ocp_registry_image: openshift
+      ansible.builtin.import_role:
+        name: redhatci.ocp.generate_manifests
 
     - name: Generate boot ISO for agent-based installer
       ansible.builtin.import_role:
@@ -464,11 +682,7 @@
 - name: Monitor installation process of agent-based installer
   hosts: bastion
   gather_facts: false
-  vars:
-    internal_registry: false
-    trusted_ca_config_map_name: "external-registry"
   tasks:
-
     - name: Monitor agent based installation
       ansible.builtin.import_role:
         name: redhatci.ocp.monitor_agent_based_installer
@@ -477,6 +691,13 @@
         mabi_retry_install_complete_check: true
         cluster: "{{ cluster_name }}"
 
+- name: Configure Cluster ( Post installation )
+  hosts: bastion
+  gather_facts: false
+  vars:
+    internal_registry: false
+    trusted_ca_config_map_name: "external-registry"
+  tasks:
     - name: Set Kubeconfig
       ansible.builtin.set_fact:
         kubeconfig: "~/project/generated/{{ cluster_name }}/auth/kubeconfig"

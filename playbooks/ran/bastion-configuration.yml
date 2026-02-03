@@ -1,81 +1,12 @@
 ---
-- name: Configure Squid Proxy on bastion for ZTP Hub Access in a disconnected environment
-  hosts: bastion
-  become: yes
-  vars:
-    hub_ip: "{{ hub_ip }}" 
-    proxy_port: 3128
+# - name: Configure Squid Proxy on bastion for ZTP Hub Access in a disconnected environment
+#   hosts: bastion
+#   become: yes
+#   vars:
+#     hub_ip: "{{ hub_ip }}" 
+#     proxy_port: 3128
 
-  tasks:
-    - name: Ensure Squid is Installed
-      ansible.builtin.dnf:
-        name: squid
-        state: present
-
-    - name: Prepare custom squid.conf file
-      ansible.builtin.template:
-        src: squid.conf.j2
-        dest: /etc/squid/squid.conf
-        mode: '0640'
-        owner: root
-        group: squid 
-      notify: Restart squid
-
-    - name: Ensure Squid service is started and enabled
-      ansible.builtin.systemd:
-        name: squid
-        state: started
-        enabled: yes
-
-    - name: Configure Firewalld to allow proxy port
-      ansible.posix.firewalld:
-        port: "{{ proxy_port }}/tcp"
-        zone: public
-        state: enabled
-        permanent: yes
-        immediate: yes
-
-  handlers:
-    - name: Restart squid
-      ansible.builtin.systemd:
-        name: squid
-        state: restarted
-
-- name: Configure bastion dnsmasq for spoke access
-  hosts: bastion
-  become: yes
-  vars:
-    hub_name: "{{ hub_name }}"
-    hub_ip: "{{ hub_ip }}"
-    hub_domain: "{{ hub_domain }}"
-  tasks:
-    - name: Install dnsmasq if not present
-      ansible.builtin.dnf:
-        state: present
-        name: dnsmasq
-
-    - name: Add hub cluster DNS records to dnsmasq
-      ansible.builtin.blockinfile:
-        path: /etc/dnsmasq.d/custom-records.conf
-        block: |
-          # Hub cluster ({{ hub_name }}) DNS records for spoke access
-          address=/api.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
-          address=/api-int.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
-          address=/.apps.{{ hub_name }}.{{ hub_domain }}/{{ hub_ip }}
-        create: yes
-      notify: Restart dnsmasq
-
-    - name: Ensure dnsmasq is running
-      ansible.builtin.systemd:
-        name: dnsmasq
-        state: started
-        enabled: yes
-
-  handlers:
-    - name: Restart dnsmasq
-      ansible.builtin.systemd:
-        name: dnsmasq
-        state: restarted
+#   tasks:
 
 - name: Ensure RHCOS ISO is available for http_store container
   hosts: bastion

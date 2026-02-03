@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-tls-certs-cm
+  namespace: "{{ gitops_namespace }}"
+data:
+  gitlab.cee.redhat.com: |
+{{ gitlab_ca_certificate | indent(4, true) }}

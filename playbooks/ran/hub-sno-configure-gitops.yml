@@ -1,24 +1,47 @@
 ---
+# This playbook configures OpenShift GitOps (ArgoCD) to connect to a GitLab repository
+# and enables ClusterInstance resources in the default AppProject.
+#
+# Prerequisites:
+#   - Valid kubeconfig for cluster authentication
+#   - OpenShift GitOps operator must be installed
+#   - GitLab repository must be accessible from the cluster
+#   - GitLab CA certificate (for self-signed or internal GitLab instances)
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/hub-sno-configure-gitops.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig gitlab_repo_url=https://gitlab.example.com/repo.git'"
+#
+# Required variables:
+#   kubeconfig: Path to kubeconfig file for cluster authentication
+#   gitlab_repo_url: URL of the GitLab repository (e.g., "https://gitlab.example.com/group/repo.git")
+#   gitlab_ca_certificate: CA certificate for GitLab server (required for self-signed or internal GitLab)
+#
+# What it does:
+#   1. Validates required variables are defined
+#   2. Patches gitops repo server deployment to use IfNotPresent image pull policy
+#   3. Creates ConfigMap with GitLab CA certificate for TLS verification
+#   4. Restarts gitops repo server deployment to apply changes
+#   5. Waits for gitops repo server deployment to be ready
+#   6. Verifies GitLab connectivity from repo server pod using curl
+#   7. Ensures ClusterInstance resource is whitelisted in default AppProject
+#
+# Important Notes:
+#   - The playbook assumes OpenShift GitOps is installed in openshift-gitops namespace
+#   - GitLab CA certificate is required for self-signed certificates or internal GitLab instances
+#   - The connectivity test verifies that the repo server pod can reach the GitLab URL
+#   - ClusterInstance whitelist is required for ZTP (Zero Touch Provisioning) workflows
 
-- name: Configure hub cluster to reach gitlab repo through bastion proxy
+- name: Configure hub cluster to reach gitlab repo
   hosts: bastion
   gather_facts: false
   become: no
-
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
-
   vars:
-    bastion_proxy_port: 3128
-    bastion_proxy_address: "http://{{ ansible_host }}:{{ bastion_proxy_port }}"
-    hub_pod_cidr: "10.128.0.0/14"
-    hub_service_cidr: "172.30.0.0/16"
-    internal_registry_dns: "disconnected.registry.local"
-    proxy_block_list: "localhost,127.0.0.1,.svc,.cluster.local,{{ hub_pod_cidr }},{{ hub_service_cidr }},{{ internal_registry_dns }}:5000,{{ ansible_host }}"
     gitops_namespace: openshift-gitops
     repo_server_deployment: openshift-gitops-repo-server
-
-
   tasks:
     - name: Validate required variables are defined
       ansible.builtin.assert:
@@ -27,26 +50,6 @@
           - gitlab_repo_url is defined
         fail_msg: "Required variables 'kubeconfig', and 'gitlab_repo_url' must be defined"
         success_msg: "All required variables are defined"
-
-    - name: Patch ArgoCD CR to configure proxy
-      kubernetes.core.k8s:
-        state: patched
-        api_version: argoproj.io/v1beta1
-        kind: ArgoCD
-        name: openshift-gitops
-        namespace: "{{ gitops_namespace }}"
-        definition:
-          spec:
-            repo:
-              env:
-                - name: HTTP_PROXY
-                  value: "{{ bastion_proxy_address }}"
-                - name: HTTPS_PROXY
-                  value: "{{ bastion_proxy_address }}"
-                - name: NO_PROXY
-                  value: "{{ proxy_block_list }}"
-      register: proxy_patch_status
-      changed_when: proxy_patch_status.changed
 
     - name: Patch imagepullpolicy to IfNotPresent for gitops repo server
       kubernetes.core.k8s:
@@ -67,16 +70,7 @@
     - name: Create gitlab ca certificate ConfigMap
       kubernetes.core.k8s:
         state: present
-        api_version: v1
-        kind: ConfigMap
-        name: argocd-tls-certs-cm
-        namespace: "{{ gitops_namespace }}"
-        definition:
-          metadata:
-            name: argocd-tls-certs-cm
-            namespace: "{{ gitops_namespace }}"
-          data:
-            gitlab.cee.redhat.com: "{{ gitlab_ca_certificate }}"
+        definition: "{{ lookup('template', 'templates/configMapCa.j2') }}"
       changed_when: true
 
     - name: Rollout gitops repo server deployment
@@ -104,7 +98,6 @@
           -o jsonpath='{.items[0].metadata.name}')
         oc exec -n {{ gitops_namespace }} ${POD_NAME} -- \
           curl -sI --max-time 10 \
-            --proxy {{ bastion_proxy_address }} \
             {{ gitlab_repo_url }}
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
@@ -119,7 +112,7 @@
     - name: Display connectivity test results
       ansible.builtin.debug:
         msg: |
-          gitops repo server pod can reach GitLab through bastion proxy.
+          gitops repo server pod can reach GitLab.
 
     - name: Ensure ClusterInstance is in default AppProject namespaceResourceWhitelist
       kubernetes.core.k8s:
@@ -134,4 +127,3 @@
             namespaceResourceWhitelist:
               - group: siteconfig.open-cluster-management.io
                 kind: ClusterInstance
-

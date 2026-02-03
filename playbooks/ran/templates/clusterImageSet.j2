@@ -1,0 +1,6 @@
+apiVersion: hive.openshift.io/v1
+kind: ClusterImageSet
+metadata:
+  name: "{{ ocp_version }}"
+spec:
+  releaseImage: "{{ hub_cluster_version.resources[0].status.desired.image }}"

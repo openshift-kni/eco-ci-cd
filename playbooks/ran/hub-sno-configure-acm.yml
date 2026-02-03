@@ -123,10 +123,14 @@
         name: cluster
       register: update_progress
       until: >
-        update_progress.resources[0].status.conditions |
-        selectattr('type', 'equalto', 'Updating') |
-        map(attribute='status') |
-        first | bool
+        (update_progress.resources | length > 0) and
+        (
+          (update_progress.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Progressing')
+          | selectattr('status', 'equalto', 'True')
+          | list
+          | length
+        ) > 0
       retries: 30
       delay: 10
       ignore_errors: true
@@ -139,14 +143,19 @@
         api: operator.openshift.io/v1
         kind: Network
         name: cluster
-      register: update_progress
+      register: update_complete
       until: >
-        update_progress.resources[0].status.conditions |
-        selectattr('type', 'equalto', 'Updating') |
-        map(attribute='status') |
-        first | bool
-      retries: 30
-      delay: 10
+        (update_complete.resources | length > 0) and
+        (
+          (update_complete.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Progressing')
+          | selectattr('status', 'equalto', 'False')
+          | list
+          | length
+        ) > 0
+      retries: 60
+      delay: 20
+      ignore_errors: true
 
     - name: Fail if network operator did not start updating
       ansible.builtin.fail:
@@ -154,21 +163,6 @@
       when:
         - update_progress is defined
         - update_progress.failed is true
-
-    - name: Wait for network operator update to complete
-      kubernetes.core.k8s_info:
-        api: operator.openshift.io/v1
-        kind: Network
-        name: cluster
-      register: update_complete
-      until: >
-        update_progress.resources[0].status.conditions |
-        selectattr('type', 'equalto', 'Updating') |
-        map(attribute='status') |
-        first | bool is false
-      retries: 60
-      delay: 20
-      ignore_errors: true
 
     - name: Fail if network operator update is stuck
       ansible.builtin.fail:

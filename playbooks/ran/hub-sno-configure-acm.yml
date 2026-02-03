@@ -10,31 +10,44 @@
 #
 # Usage:
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
-#     playbooks/ran/configure_acm.yml \
+#     playbooks/ran/hub-sno-configure-acm.yml \
 #     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
 #
 # Required variables:
 #   kubeconfig: Path to kubeconfig file for cluster authentication
 #   ocp_version: OpenShift version for spoke clusters (e.g., "4.19", "4.18", "4.17")
+#   share_http_iso_port: Port number for HTTP server hosting ISO files (e.g., 8888)
+#   ansible_host: IP address or hostname of the bastion host for HTTP server access
+#   disconnected_registry_url: URL of the disconnected container registry
+#   disconnected_registry_port: Port number for the disconnected registry
 #
-# Note: rhcos_version and rhcos_iso_url are automatically fetched from:
-#   https://github.com/openshift/assisted-service/blob/master/data/default_os_images.json
-#   This ensures you use officially tested RHCOS images for spoke cluster deployments.
+# RHCOS ISO Requirements:
+#   - RHCOS ISO file must be pre-downloaded and placed in the cache directory
+#   - Default cache directory: /opt/cache (configurable via rhcos_cache_dir)
+#   - ISO file naming pattern: rhcos-*.iso (e.g., rhcos-4.19.0-x86_64-live.iso)
+#   - Only one RHCOS ISO file should be present in the cache directory
+#   - The playbook extracts the RHCOS version from the ISO filename
+#   - The ISO is copied to the HTTP store data directory for serving to spoke clusters
 #
 # What it does:
-#   1. Validates ACM operator is installed (checks for MultiClusterHub CRD)
-#   2. Validates MultiClusterHub exists (cluster-wide check)
-#   3. Fetches RHCOS image info from assisted-service official defaults
-#   4. Waits for MultiClusterHub to be running
+#   1. Configures cluster network settings (routingViaHost and ipForwarding)
+#   2. Validates ACM operator is installed (checks for MultiClusterHub CRD)
+#   3. Creates MultiClusterHub resource if it doesn't exist
+#   4. Waits for MultiClusterHub to reach Running status
 #   5. Creates mirror registry ConfigMap for disconnected environments
-#   6. Creates AgentServiceConfig for Assisted Installer with correct RHCOS ISO
-#   7. Waits for assisted-service pods to be ready
-#   8. Applies Provisioning resource for Metal3
-#   9. Waits for metal3 pods to be running
+#   6. Finds RHCOS ISO file in cache directory and extracts version from filename
+#   7. Copies RHCOS ISO to HTTP store data directory for serving
+#   8. Creates AgentServiceConfig for Assisted Installer with RHCOS ISO URL
+#   9. Waits for assisted-service pods to be ready
+#   10. Applies Provisioning resource for Metal3
+#   11. Waits for metal3 pods to be running
+#   12. Enables siteconfig component in MultiClusterHub
+#   13. Waits for siteconfig-controller-manager deployment to be available
 #
 # Important Notes:
-#   - Assumes MultiClusterHub already exists (created by operator deployment)
-#   - Automatically detects MCH namespace (works with any namespace)
+#   - MultiClusterHub will be created if it doesn't exist (in multicluster-engine namespace)
+#   - RHCOS ISO must be pre-downloaded to the cache directory before running this playbook
+#   - HTTP store must be configured and running on the bastion host
 
 - name: Pre-flight validation
   hosts: localhost
@@ -54,7 +67,7 @@
             - ocp_version: OpenShift version (e.g., "4.19", "4.18")
 
           Usage:
-            ansible-playbook playbooks/ran/configure_acm.yml \
+            ansible-playbook playbooks/ran/hub-sno-configure-acm.yml \
               --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
 
 - name: OpenShift MultiClusterHub and Assisted Service Configuration
@@ -69,42 +82,98 @@
     timeout_mch: 600
     timeout_assisted_service: 300
     timeout_metal3: 300
+    http_store_data_dir: /opt/http_store/data
     # RHCOS OS Image configuration for spoke cluster deployments
     # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
-    # rhcos_iso_url points to local bastion HTTP server (for disconnected environments)
-    rhcos_version: ""  # Auto-populated from assisted-service
-    share_http_iso_port: 8081  # HTTP server port on bastion serving /opt/http_store/data
-
+    # rhcos_version: Auto-extracted from ISO filename in cache directory
+    # rhcos_iso_url: Auto-generated URL pointing to local bastion HTTP server
+    rhcos_version: ""  # Auto-populated from ISO filename
+    rhcos_cache_dir: /opt/cache  # Directory containing pre-downloaded RHCOS ISO file
   tasks:
 
-    - name: Fetch default OS images from assisted-service
-      ansible.builtin.uri:
-        url: https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json
-        return_content: true
-      register: os_images_response
+    - name: Validate required variables for HTTP store
+      ansible.builtin.assert:
+        that:
+          - share_http_iso_port is defined
+          - ansible_host is defined or inventory_hostname is defined
+        fail_msg: "share_http_iso_port and ansible_host must be defined"
 
-    - name: Parse OS images JSON
+    - name: Define cluster network configuration
       ansible.builtin.set_fact:
-        os_images_data: "{{ os_images_response.content | from_json }}"
+        cluster_network_patch:
+          - op: add
+            path: /spec/defaultNetwork/ovnKubernetesConfig/gatewayConfig/routingViaHost
+            value: true
+          - op: add
+            path: /spec/defaultNetwork/ovnKubernetesConfig/gatewayConfig/ipForwarding
+            value: Global
 
-    - name: Find matching RHCOS image (x86_64) for OCP {{ ocp_version }}
-      ansible.builtin.set_fact:
-        matched_os_image: >-
-          {{ os_images_data
-             | selectattr('openshift_version', 'equalto', ocp_version)
-             | selectattr('cpu_architecture', 'equalto', 'x86_64')
-             | first }}
+    - name: Apply network configuration changes
+      register: network_update_status
+      kubernetes.core.k8s_json_patch:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+        patch: "{{ cluster_network_patch }}"
 
-    - name: Set RHCOS version from official defaults
-      ansible.builtin.set_fact:
-        rhcos_version: "{{ matched_os_image.version }}"
+    - name: Wait for network operator update to begin
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: update_progress
+      until: >
+        update_progress.resources[0].status.conditions |
+        selectattr('type', 'equalto', 'Updating') |
+        map(attribute='status') |
+        first | bool
+      retries: 30
+      delay: 10
+      ignore_errors: true
+      when: network_update_status.changed is true
+      tags:
+        - skip_ansible_lint
 
-    - name: Display RHCOS configuration
-      ansible.builtin.debug:
-        msg: |
-          Using RHCOS configuration for OCP {{ ocp_version }}:
-            Version: {{ rhcos_version }}
-            ISO URL: http://{{ ansible_host }}:{{ share_http_iso_port }}/rhcos-{{ rhcos_version }}-live-iso.x86_64.iso
+    - name: Wait for network operator update to complete
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: update_progress
+      until: >
+        update_progress.resources[0].status.conditions |
+        selectattr('type', 'equalto', 'Updating') |
+        map(attribute='status') |
+        first | bool
+      retries: 30
+      delay: 10
+
+    - name: Fail if network operator did not start updating
+      ansible.builtin.fail:
+        msg: "Cluster network operator failed to enter updating state."
+      when:
+        - update_progress is defined
+        - update_progress.failed is true
+
+    - name: Wait for network operator update to complete
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: update_complete
+      until: >
+        update_progress.resources[0].status.conditions |
+        selectattr('type', 'equalto', 'Updating') |
+        map(attribute='status') |
+        first | bool is false
+      retries: 60
+      delay: 20
+      ignore_errors: true
+
+    - name: Fail if network operator update is stuck
+      ansible.builtin.fail:
+        msg: "Cluster network operator update did not complete successfully."
+      when: update_complete.failed is true
 
     - name: Check if MultiClusterHub CRD exists
       kubernetes.core.k8s_info:
@@ -158,6 +227,44 @@
       kubernetes.core.k8s:
         state: present
         definition: "{{ lookup('template', 'templates/mirrorRegistryConfigMap.j2') }}"
+
+    - name: Find RHCOS ISO files in cache directory
+      ansible.builtin.find:
+        paths: "{{ rhcos_cache_dir }}"
+        patterns: "rhcos-*.iso"
+      register: rhcos_iso_files
+
+    - name: Fail if no RHCOS ISO files found or more than one
+      ansible.builtin.assert:
+        that:
+          - rhcos_iso_files.files | length > 0
+          - rhcos_iso_files.files | length <= 1
+        fail_msg: |
+          No RHCOS ISO files found or more than one found in cache directory.
+          Please check the cache directory: {{ rhcos_cache_dir }}
+          and ensure only one RHCOS ISO file is present.
+
+    - name: Set RHCOS version from ISO file name
+      ansible.builtin.set_fact:
+        rhcos_version: "{{ rhcos_iso_files.files 
+        | map(attribute='path') 
+        | first 
+        | basename 
+        | regex_replace('^rhcos-(.*?)-live-iso.*$', '\\1') }}"
+
+    - name: Set RHCOS ISO URL
+      ansible.builtin.set_fact:
+        rhcos_iso_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/{{ rhcos_iso_files.files | map(attribute='path') | first | basename }}"
+
+    - name: Copy RHCOS ISO to http_store data directory
+      become: yes
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ http_store_data_dir }}/{{ item.path | basename }}"
+        remote_src: yes
+        mode: '0644'
+      loop: "{{ rhcos_iso_files.files }}"
+      when: rhcos_iso_files.files | length > 0
 
     - name: Create AgentServiceConfig
       kubernetes.core.k8s:

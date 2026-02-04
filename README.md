@@ -49,6 +49,7 @@ This repository contains a comprehensive collection of Ansible playbooks, roles,
 - **Ansible**: Version 2.9 or higher
 - **Python**: Version 3.8 or higher
 - **python3-passlib**: Version 1.7.4 or higher
+- **python3-jmespath**: Version 0.9.4 or higher
 - **SSH Access**: To hypervisor and bastion hosts
 
 

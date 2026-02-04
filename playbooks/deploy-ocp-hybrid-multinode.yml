@@ -518,6 +518,17 @@
         release_image: "{{ ocp_version_facts_pull_spec }}"
         extract_dest_path: "{{ openshift_installer_extract_dest_path }}"
 
+    - name: Clean /opt/cache directory before mirroring
+      when: disconnected | bool
+      become: true
+      ansible.builtin.file:
+        path: /opt/cache
+        state: "{{ item }}"
+        mode: '0755'
+      with_items:
+        - absent
+        - directory
+
     - name: Mirror OpenShift release (disconnected)
       when: disconnected | bool
       vars:

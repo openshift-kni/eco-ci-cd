@@ -293,6 +293,17 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.extract_openshift_installer
 
+    - name: Clean /opt/cache directory before mirroring
+      when: disconnected | bool
+      become: true
+      ansible.builtin.file:
+        path: /opt/cache
+        state: "{{ item }}"
+        mode: '0755'
+      with_items:
+        - absent
+        - directory
+
     - name: Mirror OpenShift release (disconnected)
       when: disconnected | bool
       vars:

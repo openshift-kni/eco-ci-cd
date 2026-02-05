@@ -362,6 +362,39 @@
       ansible.builtin.debug:
         msg: "{{ patched_policies_app.stdout_lines }}"
 
+    # The OCP 4.14, 4.16 ZTP container's app-project.yaml does not include ClusterInstance
+    # (siteconfig.open-cluster-management.io) in the namespaceResourceWhitelist.
+    # This was fixed in OCP 4.18+. We add it here if missing.
+    - name: Read ztp-app-project.yaml content
+      ansible.builtin.slurp:
+        src: "{{ ztp_workdir_out_path }}/argocd/deployment/app-project.yaml"
+      register: app_project_content
+
+    - name: Parse app-project.yaml as YAML
+      ansible.builtin.set_fact:
+        app_project_data: "{{ app_project_content.content | b64decode | from_yaml }}"
+
+    - name: Check if ClusterInstance already in whitelist
+      ansible.builtin.set_fact:
+        clusterinstance_exists: >-
+          {{ app_project_data.spec.namespaceResourceWhitelist | default([])
+             | selectattr('group', 'equalto', 'siteconfig.open-cluster-management.io')
+             | selectattr('kind', 'equalto', 'ClusterInstance')
+             | list | length > 0 }}
+
+    - name: Add ClusterInstance to namespaceResourceWhitelist
+      when: not clusterinstance_exists
+      vars:
+        updated_whitelist: >-
+          {{ app_project_data.spec.namespaceResourceWhitelist | default([]) +
+             [{'group': 'siteconfig.open-cluster-management.io', 'kind': 'ClusterInstance'}] }}
+        updated_app_project: >-
+          {{ app_project_data | combine({'spec': app_project_data.spec | combine({'namespaceResourceWhitelist': updated_whitelist})}) }}
+      ansible.builtin.copy:
+        content: "{{ updated_app_project | to_nice_yaml(indent=2) }}"
+        dest: "{{ ztp_workdir_out_path }}/argocd/deployment/app-project.yaml"
+        mode: "0644"
+
     - name: Apply ArgoCD deployment kustomization
       ansible.builtin.command:
         cmd: oc apply -k {{ ztp_workdir_out_path }}/argocd/deployment

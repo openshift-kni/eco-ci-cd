@@ -44,8 +44,8 @@
         that:
           - kubeconfig is defined
           - kubeconfig | length > 0
-          - spoke_cluster is defined
-          - spoke_cluster | length > 0
+          - spoke_clusters is defined
+          - spoke_clusters | length > 0
           - ztp_git_repo_url is defined
           - ztp_git_repo_url | length > 0
           - ztp_clusters_git_path is defined
@@ -55,10 +55,14 @@
         fail_msg: |
           Required variables must be defined:
             - kubeconfig: Path to kubeconfig file for hub cluster authentication
-            - spoke_cluster: Spoke cluster name (e.g., kni-qe-100)
+            - spoke_clusters: Spoke cluster name (e.g., kni-qe-100)
             - ztp_git_repo_url: Git repository URL for ZTP site configs
             - ztp_clusters_git_path: Git path to clusters configuration (e.g., clusters/cluster)
             - ztp_policies_git_path: Git path to policies configuration (e.g., policy/policygentemplates)
+
+    - name: Parse spoke_clusters as JSON
+      ansible.builtin.set_fact:
+        spoke_clusters: "{{ spoke_clusters | from_yaml }}"
 
     - name: Get hub cluster version
       kubernetes.core.k8s_info:
@@ -100,12 +104,20 @@
           kind: Namespace
           metadata:
             name: "{{ spoke_cluster }}"
+      loop: "{{ spoke_clusters }}"
+      loop_control:
+        label: "Creating namespace for {{ spoke_cluster }}"
+        loop_var: spoke_cluster
 
     - name: Create BMC credentials secret on hub cluster
       kubernetes.core.k8s:
         state: present
         definition: "{{ lookup('template', 'templates/bmcCredentials.j2') }}"
-
+      loop: "{{ spoke_clusters }}"
+      loop_control:
+        label: "Creating BMC credentials for {{ spoke_cluster }}"
+        loop_var: spoke_cluster
+  
     - name: Get hub cluster pull secret
       kubernetes.core.k8s_info:
         api_version: v1
@@ -129,6 +141,10 @@
       kubernetes.core.k8s:
         state: present
         definition: "{{ lookup('template', 'templates/pullSecret.j2') }}"
+      loop: "{{ spoke_clusters }}"
+      loop_control:
+        label: "Creating pull secret for {{ spoke_cluster }}"
+        loop_var: spoke_cluster
 
     - name: Create ClusterImageSet for OCP version
       kubernetes.core.k8s:
@@ -212,92 +228,13 @@
         app_status.resources[0].status.health.status | default('') in ['Healthy', 'Progressing']
       loop:
         - clusters
-        # - policies
+        - policies
       retries: 20
       delay: 30
 
-    - name: Register cluster installation type
-      kubernetes.core.k8s_info:
-        api_version: hive.openshift.io/v1
-        kind: ClusterDeployment
-        name: "{{ spoke_cluster }}"
-        namespace: "{{ spoke_cluster }}"
-      register: clusterinstallref
-
-    - name: Wait for agent cluster install to begin
-      kubernetes.core.k8s_info:
-        api_version: extensions.hive.openshift.io/v1beta1
-        kind: AgentClusterInstall
-        name: "{{ spoke_cluster }}"
-        namespace: "{{ spoke_cluster }}"
-      when: "'AgentClusterInstall' in clusterinstallref.resources[0].spec.clusterInstallRef.kind"
-      register: agentclusterinstall_info
-      until: >
-        'True' == (
-          agentclusterinstall_info.resources[0].status.conditions
-          | selectattr('type', 'equalto', 'RequirementsMet')
-          | map(attribute='status')
-          | first
-        )
-      retries: 80
-      delay: 60
-      changed_when: false
-
-    - name: Wait for installation to finish
-      kubernetes.core.k8s_info:
-        api_version: hive.openshift.io/v1
-        kind: ClusterDeployment
-        name: "{{ spoke_cluster }}"
-        namespace: "{{ spoke_cluster }}"
-      register: cluster_deployment_status
-      until: cluster_deployment_status.resources[0].spec.installed == true
-      retries: 240
-      delay: 60
-      changed_when: false
-
-    - name: Get all policies in spoke namespace
-      kubernetes.core.k8s_info:
-        api_version: policy.open-cluster-management.io/v1
-        kind: Policy
-        namespace: "{{ spoke_cluster }}"
-        kubeconfig: "{{ kubeconfig }}"
-      register: spoke_policies
-
-    - name: Display number of policies found
-      ansible.builtin.debug:
-        msg: "Found {{ spoke_policies.resources | length }} policies in namespace {{ spoke_cluster }}"
-
-    - name: Wait for all policies to be Compliant
-      kubernetes.core.k8s_info:
-        api_version: policy.open-cluster-management.io/v1
-        kind: Policy
-        namespace: "{{ spoke_cluster }}"
-        kubeconfig: "{{ kubeconfig }}"
-      register: policies
-      until:
-        - policies.resources | length > 0
-        - (policies.resources | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
-      retries: 60
-      delay: 60
-
-    - name: Get spoke cluster admin kubeconfig secret
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: "{{ spoke_cluster }}-admin-kubeconfig"
-        namespace: "{{ spoke_cluster }}"
-        kubeconfig: "{{ kubeconfig }}"
-      register: spoke_kubeconfig_secret
-
-    - name: Extract spoke kubeconfig to /tmp
-      ansible.builtin.copy:
-        content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
-        dest: "/tmp/{{ spoke_cluster }}-kubeconfig"
-        mode: '0600'
-
-    - name: Display spoke cluster info
-      ansible.builtin.debug:
-        msg:
-          - "Spoke cluster kubeconfig saved to: /tmp/{{ spoke_cluster }}-kubeconfig"
-          - "Policy compliance status: All policies in namespace {{ spoke_cluster }} are Compliant"
-          - "Cluster deployment completion: Spoke {{ spoke_cluster }} installation completed"
+    - name: Wait for spoke cluster installation and policy compliance
+      include_tasks: tasks/wait-spoke-sno.yaml
+      loop: "{{ spoke_clusters }}"
+      loop_control:
+        label: "Processing cluster: {{ spoke_cluster }}"
+        loop_var: spoke_cluster

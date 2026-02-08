@@ -78,6 +78,18 @@
   failed_when:
     - upgrade_status.resources[0].status.history[0].state == "Partial"
 
+- name: Wait for all nodes to be Schedulable (Nodes are not Cordoned)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+  register: all_nodes
+  until:
+    - not all_nodes.failed
+    - all_nodes.resources | map(attribute='spec.unschedulable', default=false) | select('equalto', true) | list | length == 0
+  retries: 150
+  delay: 10
+  failed_when: all_nodes.resources | selectattr('spec.unschedulable', 'equalto', true) | list | length > 0
+
 # ---------------------------------------------------------
 # 4. POST-VALIDATION: NODE HEALTH (Reboot Check)
 # ---------------------------------------------------------
@@ -97,11 +109,4 @@
     that:
       - "item.status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0"
     fail_msg: "Node {{ item.metadata.name }} is not Ready after upgrade."
-  loop: "{{ all_nodes.resources }}"
-
-- name: Verify Scheduling is enabled (Nodes are not Cordoned)
-  ansible.builtin.assert:
-    that:
-      - item.spec.unschedulable is not defined or item.spec.unschedulable == false
-    fail_msg: "Node {{ item.metadata.name }} is still cordoned (unschedulable)."
   loop: "{{ all_nodes.resources }}"

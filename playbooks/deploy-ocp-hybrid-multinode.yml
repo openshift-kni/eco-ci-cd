@@ -109,14 +109,21 @@
         internal_registry: true
       when: disconnected | bool
 
+    - name: Cache disconnected mode setting for other playbooks
+      ansible.builtin.set_fact:
+        cached_disconnected: "{{ disconnected | default(false) }}"
+        cached_internal_registry: "{{ internal_registry | default(false) }}"
+        cached_ipv4_only: "{{ ipv4_only | default(false) }}"
+        cached_ipv6_only: "{{ ipv6_only | default(false) }}"
+
 - name: Render nodes variables
   hosts: nodes
   gather_facts: false
   vars:
-    internal_registry: false
-    disconnected: false
-    ipv6_only: false
-    ipv4_only: false
+    internal_registry: "{{ cached_internal_registry | default(false) }}"
+    ipv6_only: "{{ cached_ipv6_only | default(false) }}"
+    ipv4_only: "{{ cached_ipv4_only | default(false) }}"
+    disconnected: "{{ cached_disconnected | default(false) }}"
   tasks:
     - name: Render nodes variables
       ansible.builtin.set_fact:
@@ -134,7 +141,7 @@
         name: redhatci.ocp.process_kvm_nodes
 
     - name: Replace DNS servers with internal registry
-      when: (internal_registry | bool)
+      when: (internal_registry | bool) or (disconnected | bool)
       ansible.builtin.set_fact:
         network_config: >-
           {{
@@ -344,11 +351,11 @@
 - name: Setup bastion environment and generate manifests for cluster deployment
   hosts: bastion
   vars:
-    internal_registry: false
-    disconnected: false
+    internal_registry: "{{ cached_internal_registry | default(false) }}"
+    disconnected: "{{ cached_disconnected | default(false) }}"
     release: "4.17"
-    ipv4_only: false
-    ipv6_only: false
+    ipv4_only: "{{ cached_ipv4_only | default(false) }}"
+    ipv6_only: "{{ cached_ipv6_only | default(false) }}"
     registry_service_name: container-registry
     pull_secret_file: /tmp/pullsecret
     api_vips: "{{ api_vips_string | from_yaml }}"
@@ -706,7 +713,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    internal_registry: false
+    internal_registry: "{{ cached_internal_registry | default(false) }}"
     trusted_ca_config_map_name: "external-registry"
   tasks:
     - name: Set Kubeconfig

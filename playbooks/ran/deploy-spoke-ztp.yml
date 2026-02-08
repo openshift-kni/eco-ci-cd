@@ -42,9 +42,9 @@
     ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"
     clusters_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/clusters-app.yaml"
     policies_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/policies-app.yaml"
-    ztp_clusters_git_path: siteconfig
-    ztp_policies_git_path: policygentemplates
-    ztp_git_repo_branch: "{{ spoke_cluster }}-{{ ocp_version }}"
+    ztp_clusters_git_path: "siteconfigs/{{ ocp_version }}/{{ spoke_cluster }}"
+    ztp_policies_git_path: "policygentemplates/{{ ocp_version }}/{{ spoke_cluster }}"
+    ztp_git_repo_branch: "{{ ztp_git_branch }}"
     openshift_gitops_namespace: "openshift-gitops"
 
   tasks:

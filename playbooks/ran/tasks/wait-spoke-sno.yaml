@@ -1,0 +1,85 @@
+- name: Register cluster installation type
+  kubernetes.core.k8s_info:
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ spoke_cluster }}"
+    namespace: "{{ spoke_cluster }}"
+  register: clusterinstallref
+
+- name: Wait for agent cluster install to begin
+  kubernetes.core.k8s_info:
+    api_version: extensions.hive.openshift.io/v1beta1
+    kind: AgentClusterInstall
+    name: "{{ spoke_cluster }}"
+    namespace: "{{ spoke_cluster }}"
+  when: "'AgentClusterInstall' in clusterinstallref.resources[0].spec.clusterInstallRef.kind"
+  register: agentclusterinstall_info
+  until: >
+    'True' == (
+      agentclusterinstall_info.resources[0].status.conditions
+      | selectattr('type', 'equalto', 'RequirementsMet')
+      | map(attribute='status')
+      | first
+    )
+  retries: 80
+  delay: 60
+  changed_when: false
+
+- name: Wait for installation to finish
+  kubernetes.core.k8s_info:
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ spoke_cluster }}"
+    namespace: "{{ spoke_cluster }}"
+  register: cluster_deployment_status
+  until: cluster_deployment_status.resources[0].spec.installed == true
+  retries: 240
+  delay: 60
+  changed_when: false
+
+- name: Get all policies in spoke namespace
+  kubernetes.core.k8s_info:
+    api_version: policy.open-cluster-management.io/v1
+    kind: Policy
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ kubeconfig }}"
+  register: spoke_policies
+
+- name: Display number of policies found
+  ansible.builtin.debug:
+    msg: "Found {{ spoke_policies.resources | length }} policies in namespace {{ spoke_cluster }}"
+  
+- name: Wait for all policies to be Compliant
+  kubernetes.core.k8s_info:
+    api_version: policy.open-cluster-management.io/v1
+    kind: Policy
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ kubeconfig }}"
+  register: policies
+  until:
+    - policies.resources | length > 0
+    - (policies.resources | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
+  retries: 60
+  delay: 60
+
+- name: Get spoke cluster admin kubeconfig secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ spoke_cluster }}-admin-kubeconfig"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ kubeconfig }}"
+  register: spoke_kubeconfig_secret
+
+- name: Extract spoke kubeconfig to /tmp
+  ansible.builtin.copy:
+    content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+    dest: "/tmp/{{ spoke_cluster }}-kubeconfig"
+    mode: '0600'
+
+- name: Display spoke cluster info
+  ansible.builtin.debug:
+    msg:
+      - "Spoke cluster kubeconfig saved to: /tmp/{{ spoke_cluster }}-kubeconfig"
+      - "Policy compliance status: All policies in namespace {{ spoke_cluster }} are Compliant"
+      - "Cluster deployment completion: Spoke {{ spoke_cluster }} installation completed"

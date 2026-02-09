@@ -31,6 +31,8 @@
 # - mirror_only (bool): set true to only mirror operators without installing them, default is false
 # - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
 # - version (str): OCP major.minor used to pick catalog index images (e.g., 4.19)
+# - ocp_operator_mirror_skip_internal_registry_cleanup (bool): set true to preserve existing mirrored
+#     images in the internal registry (skips registry storage reset before mirroring), default is false
 # - operators (list or JSON string): operator specs with fields such as:
 #     name, catalog, nsname, channel, og_name, deploy_default_config
 

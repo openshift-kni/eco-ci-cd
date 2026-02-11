@@ -479,6 +479,7 @@
       ansible.builtin.dnf:
         name:
           - nmstate
+          - libvirt-libs
         state: present
 
     - name: Ensure firewalld is running

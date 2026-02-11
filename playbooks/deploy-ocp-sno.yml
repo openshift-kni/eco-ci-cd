@@ -254,6 +254,7 @@
       ansible.builtin.dnf:
         name:
           - nmstate
+          - libvirt-libs
         state: present
 
 #     # The role below sets follwing facts. Please note values are just examples

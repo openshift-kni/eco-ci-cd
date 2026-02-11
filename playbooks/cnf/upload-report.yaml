@@ -178,7 +178,7 @@
         DATAROUTER_PASSWORD: "{{ report_router_pass }}"
         LAUNCH_NAME: "{{ reporter_template_name }}"
         LAUNCH_DESCRIPTION: "OCP {{ cluster_info.resources[0].status.version }} - {{ reporter_template_name }}"
-        REPORTS_PORTAL_ATTRIBUTES: "ocp_version:{{ cluster_info.resources[0].status.version }}"
+        REPORTS_PORTAL_ATTRIBUTES: "{{ reports_portal_attributes | default('ocp_version:' + cluster_info.resources[0].status.version) }}"
         POLARION_REPORT_PATH: "{{ report_files | join(';') }}"
         OCP_BUILD: "v{{ cluster_info.resources[0].status.version }}"
       register: report_portal_result

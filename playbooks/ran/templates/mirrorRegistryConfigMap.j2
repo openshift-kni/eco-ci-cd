@@ -4,9 +4,64 @@ metadata:
   name: mirror-registry-ca
   namespace: "{{ mce_namespace }}"
 data:
+  ca-bundle.crt: |
+    {{ disconnected_registry_cert | indent(4) }}
   registries.conf: |
     unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
     short-name-mode = ""
+    additional-layer-store-auth-helper = ""
+
+    [[registry]]
+      prefix = ""
+      location = "registry.redhat.io"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        pull-from-mirror = "digest-only"
+
+    [[registry]]
+      prefix = ""
+      location = "registry.connect.redhat.com/intel"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/operators/intel"
+        pull-from-mirror = "digest-only"
+
+    [[registry]]
+      prefix = ""
+      location = "registry.redhat.io/multicluster-engine"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/operators/multicluster-engine"
+        pull-from-mirror = "digest-only"
+
+    [[registry]]
+      prefix = ""
+      location = "registry.redhat.io/rhacm2"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/operators/rhacm2"
+        pull-from-mirror = "digest-only"
+
+    [[registry]]
+      prefix = ""
+      location = "registry.redhat.io/openshift4"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/openshift4"
+        pull-from-mirror = "digest-only"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/operators/openshift4"
+        pull-from-mirror = "digest-only"
+
+    [[registry]]
+      prefix = ""
+      location = "registry.redhat.io/openshift-logging"
+
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/operators/openshift-logging"
+        pull-from-mirror = "digest-only"
 
     [[registry]]
       prefix = ""

@@ -25,7 +25,37 @@
   gather_facts: false
   vars:
     pull_secret_path: "{{ ocp_operator_mirror_pull_secret_path | default('/tmp/auth.json') }}"
+    container_registry_service_name: "container-registry"
+    ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/repositories
+    ocp_operator_mirror_folders:
+    - openshift-release-dev
+    - operators
+    - openshift4
+
   tasks:
+
+    - name: Stop registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ container_registry_service_name }}"
+        state: stopped
+
+    - name: Remove repositories from registry storage
+      become: true
+      ansible.builtin.file:
+        path: "{{ ocp_operator_mirror_registry_path }}/{{ repo_folder_name }}"
+        state: absent
+      loop: "{{ ocp_operator_mirror_folders }}"
+      loop_control:
+        loop_var: repo_folder_name
+
+    - name: Start registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ container_registry_service_name }}"
+        state: started
+        enabled: true
+        
     - name: Validate required variables
       ansible.builtin.assert:
         that:

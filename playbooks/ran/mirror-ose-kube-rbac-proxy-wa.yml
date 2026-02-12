@@ -1,0 +1,91 @@
+---
+# Workaround for missing ose-kube-rbac-proxy in the OCP 4.14 gitops operator
+# bundle relatedImages. The image is used in the CSV deployment but not declared
+# in the bundle metadata, so oc-mirror does not mirror it automatically.
+#
+# This playbook extracts the ose-kube-rbac-proxy digest from the gitops operator
+# catalog and mirrors it to the disconnected registry.
+#
+# Prerequisites:
+#   - Valid kubeconfig for cluster authentication
+#   - oc and skopeo CLI tools installed
+#   - Access to registry.redhat.io (authenticated)
+#   - Disconnected registry reachable at {{ disconnected_registry_url }}:{{ disconnected_registry_port }}
+#
+# Usage:
+#   ansible-playbook playbooks/ran/mirror-ose-kube-rbac-proxy-wa.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "version=4.14"
+#
+# Required variables:
+#   version: OCP version (e.g., "4.14") 
+#
+- name: Mirror missing ose-kube-rbac-proxy for OCP 4.14 gitops operator
+  hosts: bastion
+  gather_facts: false
+  vars:
+    pull_secret_path: "{{ ocp_operator_mirror_pull_secret_path | default('/tmp/auth.json') }}"
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - version is defined
+          - version | string | length > 0
+        fail_msg: "The 'version' variable must be defined (e.g., version=4.14)"
+
+    - name: Create gitops-catalog directory
+      ansible.builtin.file:
+        path: /tmp/gitops-catalog
+        state: directory
+        mode: "0755"
+
+    - name: Extract catalog for gitops operator from index image
+      ansible.builtin.command:
+        cmd: >-
+          oc image extract
+          registry.redhat.io/redhat/redhat-operator-index:v{{ version.split('.')[0:2] | join('.') }}
+          --path /configs/openshift-gitops-operator/:/tmp/gitops-catalog
+          --confirm --filter-by-os linux/amd64
+      changed_when: true
+
+    - name: Read gitops operator catalog content
+      ansible.builtin.slurp:
+        src: /tmp/gitops-catalog/catalog.json
+      register: _catalog_content
+
+    - name: Extract ose-kube-rbac-proxy digest from latest bundle
+      ansible.builtin.set_fact:
+        _rbac_proxy_digest: >-
+          {{
+            (_catalog_content.content | b64decode
+              | regex_findall('ose-kube-rbac-proxy@sha256:[a-f0-9]+'))
+            | last | default('')
+          }}
+
+    - name: Display extracted digest
+      ansible.builtin.debug:
+        msg: "Found ose-kube-rbac-proxy digest: registry.redhat.io/openshift4/{{ _rbac_proxy_digest }}"
+      when: _rbac_proxy_digest | length > 0
+
+    - name: Warn if no digest found
+      ansible.builtin.debug:
+        msg: "No ose-kube-rbac-proxy reference found in catalog"
+      when: _rbac_proxy_digest | length == 0
+
+    - name: Mirror ose-kube-rbac-proxy image to disconnected registry
+      when: _rbac_proxy_digest | length > 0
+      vars:
+        _rbac_proxy_image: "registry.redhat.io/openshift4/{{ _rbac_proxy_digest }}"
+      ansible.builtin.command:
+        cmd: >-
+          skopeo copy --all
+          --authfile {{ pull_secret_path }}
+          --dest-tls-verify=false
+          docker://{{ _rbac_proxy_image }}
+          docker://{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/openshift4/{{ _rbac_proxy_digest }}
+      changed_when: true
+
+    - name: Clean up extracted catalog
+      ansible.builtin.file:
+        path: /tmp/gitops-catalog
+        state: absent

@@ -131,7 +131,8 @@
         - disconnected | bool
         - version is defined
         - version.startswith('4.14')
-        - operators | select('search', 'gitops') | list | length > 0
+        - (operators | from_json if operators is string else operators)
+          | selectattr('name', 'search', 'gitops') | list | length > 0
       block:
         - name: Extract catalog for gitops operator from index image
           ansible.builtin.command:

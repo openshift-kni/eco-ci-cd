@@ -24,7 +24,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    pull_secret_path: "{{ ocp_operator_mirror_pull_secret_path | default('/tmp/auth.json') }}"
+    pull_secret_path: "/tmp/pull-secret.json"
     container_registry_service_name: "container-registry"
     ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/repositories
     ocp_operator_mirror_folders:

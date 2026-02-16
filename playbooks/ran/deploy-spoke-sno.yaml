@@ -17,7 +17,7 @@
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
 #     playbooks/ran/deploy-spoke-sno.yaml \
 #     --extra-vars "kubeconfig=/path/to/kubeconfig \
-#                   spoke_cluster=kni-qe-100 \
+#                   spoke_clusters='["kni-qe-100"]' \
 #                   ztp_git_repo_url=https://git.example.com/repo.git \
 #                   ztp_clusters_git_path=clusters/cluster \
 #                   ztp_policies_git_path=policy/policygentemplates \

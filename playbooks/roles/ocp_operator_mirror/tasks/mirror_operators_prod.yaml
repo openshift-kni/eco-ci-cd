@@ -18,9 +18,13 @@
   loop_control:
     loop_var: operator_item
   vars:
-    make_pkg: >-
-      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
-      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_redhat_catalog_name]))}]} }}
+    channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_redhat_catalog_name]) }}"
+    channels_list: >-
+      {{
+        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
+        [{'name': channel_name}]
+      }}
+    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
   ansible.builtin.set_fact:
     pkgs_redhat: "{{ (pkgs_redhat | default([])) + [make_pkg] }}"
 
@@ -30,9 +34,13 @@
   loop_control:
     loop_var: operator_item
   vars:
-    make_pkg: >-
-      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
-      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_certified_catalog_name]))}]} }}
+    channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_certified_catalog_name]) }}"
+    channels_list: >-
+      {{
+        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
+        [{'name': channel_name}]
+      }}
+    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
   ansible.builtin.set_fact:
     pkgs_cert: "{{ (pkgs_cert | default([])) + [make_pkg] }}"
 
@@ -42,9 +50,13 @@
   loop_control:
     loop_var: operator_item
   vars:
-    make_pkg: >-
-      {{ {'name': operator_item.name, 'channels': [{'name': (operator_item.channel |
-      default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_community_catalog_name]))}]} }}
+    channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_community_catalog_name]) }}"
+    channels_list: >-
+      {{
+        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
+        [{'name': channel_name}]
+      }}
+    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
   ansible.builtin.set_fact:
     pkgs_comm: "{{ (pkgs_comm | default([])) + [make_pkg] }}"
 

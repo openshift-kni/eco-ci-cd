@@ -44,7 +44,7 @@ Key variables (see `defaults/main.yaml` for full list and defaults):
 - `ocp_operator_mirror_folder`: Target repo namespace for operators (default: operators)
 - `ocp_operator_mirror_disable_default_sources`: Disable default OperatorHub (bool, default: true)
 - `ocp_operator_mirror_prod_catalog_sources`: Catalogs to mirror
-- `ocp_operator_mirror_prod_default_channel_map`: Default channel per catalog
+- `ocp_operator_mirror_prod_default_channel_map`: Default channel per catalog. **Required** when mirroring operators with a specific channel that is not the default channel for that operator. This mapping allows the role to correctly identify and mirror non-default channels.
 - `ocp_operator_mirror_pull_secret_path`: Path to auth.json (default: /tmp/auth.json)
 - `ocp_operator_mirror_image_set_configuration_path`: Path to ImageSetConfiguration.yaml
 - `ocp_operator_mirror_workspace_path`: oc-mirror workspace root
@@ -68,6 +68,8 @@ ocp_operator_mirror_operators:
     nsname: vran-acceleration-operators
     channel: stable
 ```
+
+**Note on `default_channel`**: When mirroring an operator with a specific channel that is not the default channel for that operator, you must configure `ocp_operator_mirror_prod_default_channel_map` to map the catalog to its default channel. This ensures the role can correctly identify and mirror the non-default channel you specified.
 
 ## Usage
 Minimal playbook example:

@@ -178,7 +178,7 @@
 - name: Select bundle (latest or filtered)
   changed_when: false
   ansible.builtin.set_fact:
-    chosen_name: "{{ (filtered_names | sort | last) }}"
+    chosen_name: "{{ (filtered_names | community.general.version_sort | last) }}"
 
 - name: Collect images from selected bundle
   changed_when: false

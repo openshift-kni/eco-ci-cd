@@ -20,6 +20,7 @@
       | selectattr('type', 'equalto', 'RequirementsMet')
       | map(attribute='status')
       | first
+      | default('False')
     )
   retries: 80
   delay: 60

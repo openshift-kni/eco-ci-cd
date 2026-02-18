@@ -180,11 +180,13 @@
 - name: Mutate ocp_operator_mirror_operators_prod catalogs in place
   ansible.builtin.set_fact:
     ocp_operator_mirror_operators_prod: >-
-      [{% set cs_ver = (catalog_version | replace('.', '-')) -%}
+      [{% set prod_ver = (production_catalog_version | default(catalog_version)) | replace('.', '-') -%}
+      {% set cert_ver = (certified_catalog_version | default(catalog_version)) | replace('.', '-') -%}
+      {% set comm_ver = (community_catalog_version | default(catalog_version)) | replace('.', '-') -%}
       {% set map = {
-        ocp_operator_mirror_prod_redhat_catalog_name: 'cs-redhat-operator-index-v' ~ cs_ver,
-        ocp_operator_mirror_prod_certified_catalog_name: 'cs-certified-operator-index-v' ~ cs_ver,
-        ocp_operator_mirror_prod_community_catalog_name: 'cs-community-operator-index-v' ~ cs_ver
+        ocp_operator_mirror_prod_redhat_catalog_name: 'cs-redhat-operator-index-v' ~ prod_ver,
+        ocp_operator_mirror_prod_certified_catalog_name: 'cs-certified-operator-index-v' ~ cert_ver,
+        ocp_operator_mirror_prod_community_catalog_name: 'cs-community-operator-index-v' ~ comm_ver
       } -%}
       {%- for op in ocp_operator_mirror_operators_prod -%}
       {{ op | combine({'catalog': map.get(op.catalog, op.catalog)}) }}{{ ',' if not loop.last else '' }}

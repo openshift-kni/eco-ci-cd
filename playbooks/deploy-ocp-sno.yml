@@ -540,6 +540,50 @@
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
 
+    - name: Disable sigstore signature enforcement (OCP 4.21+ known bug workaround)
+      when:
+        - disconnected | bool
+        - ocp_version_facts_minor | int >= 21
+      block:
+        - name: Ensure openshift manifests directory exists
+          ansible.builtin.file:
+            path: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift"
+            state: directory
+            mode: "0755"
+
+        - name: Create MachineConfig to override sigstore policy
+          vars:
+            _policy_json: |
+              {
+                "default": [{"type": "insecureAcceptAnything"}],
+                "transports": {
+                  "docker-daemon": {
+                    "": [{"type": "insecureAcceptAnything"}]
+                  }
+                }
+              }
+          ansible.builtin.copy:
+            content: |
+              apiVersion: machineconfiguration.openshift.io/v1
+              kind: MachineConfig
+              metadata:
+                labels:
+                  machineconfiguration.openshift.io/role: master
+                name: 99-zz-disable-sigstore-verification
+              spec:
+                config:
+                  ignition:
+                    version: 3.2.0
+                  storage:
+                    files:
+                      - path: /etc/containers/policy.json
+                        mode: 0644
+                        overwrite: true
+                        contents:
+                          source: "data:text/plain;charset=utf-8;base64,{{ _policy_json | b64encode }}"
+            dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/99-zz-disable-sigstore-verification.yaml"
+            mode: "0644"
+
     - name: Generate boot ISO for agent-based installer
       vars:
         gai_cluster_name: "{{ cluster_name }}"

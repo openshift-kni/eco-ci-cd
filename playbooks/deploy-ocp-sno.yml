@@ -325,6 +325,35 @@
       ansible.builtin.include_role:
         name: redhatci.ocp.mirror_ocp_release
 
+    - name: Mirror sigstore signature for release image (OCP 4.21+ workaround)
+      when:
+        - disconnected | bool
+        - ocp_version_facts_minor | int >= 21
+      block:
+        - name: Resolve release image tag to digest
+          ansible.builtin.command: >-
+            skopeo inspect
+            --no-tags
+            --format {% raw %}'{{ .Digest }}'{% endraw %}
+            --authfile {{ pull_secret_file }}
+            docker://{{ ocp_version_facts_pull_spec }}
+          register: _release_digest_result
+          changed_when: false
+
+        - name: Mirror sigstore .sig artifact to disconnected registry
+          vars:
+            _release_digest: "{{ _release_digest_result.stdout | replace(':', '-') }}"
+            _mirror_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+            _mirror_path: "ocp4/openshift"
+          ansible.builtin.command: >-
+            {{ ansible_user_dir }}/.local/bin/oc image mirror
+            --insecure=true
+            -a {{ pull_secret_file }}
+            "quay.io/openshift-release-dev/ocp-release:{{ _release_digest }}.sig"
+            "{{ _mirror_registry }}/{{ _mirror_path }}:{{ _release_digest }}.sig"
+          register: _sig_mirror_result
+          changed_when: _sig_mirror_result.rc == 0
+
 - name: Render masters variables
   hosts: masters
   gather_facts: false

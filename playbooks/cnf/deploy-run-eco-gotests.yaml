@@ -47,6 +47,7 @@
 # test_timeout                      # string: Timeout example 12h
 # eco_cnf_core_net_mlb_addr_list    # string: List of mlb addresses
 # eco_cnf_core_net_switch_ip:       # string: switch ip address
+# pull_container_image: true        # boolean: Whether to pull the eco-gotests image from the registry.
 # eco_cnf_core_net_switch_user      # string: Username for accessing the intermediate switch.
 # eco_cnf_core_net_switch_pass      # string: Password for accessing the intermediate switch.
 # eco_worker_label                  # string: Label for the CNF worker role.
@@ -61,6 +62,8 @@
     eco_gotest_dir: /tmp/eco_gotests
     eco_gotests_report_path: "{{ eco_gotest_dir}}/report"
     test_timeout: "12h"
+    script_name: "eco-gotests-run.sh"
+    pull_container_image: true
     eco_cnf_core_net_mlb_addr_list: "{{ tests_mlb_addr_list | default(undefined) }}"
     eco_cnf_core_net_switch_ip: "{{ hostvars['switch'].ansible_host | default(undefined) }}"
     eco_cnf_core_net_switch_user: "{{ hostvars['switch'].ansible_user | default(undefined) }}"
@@ -104,6 +107,7 @@
         msg: "Cluster version: {{ version }}"
 
     - name: Remove eco-gotests image
+      when: pull_container_image is true
       containers.podman.podman_image:
         name: "{{ eco_gotests_image }}"
         state: absent
@@ -111,13 +115,13 @@
       loop: "{{ (['v' + version + '.0', 'latest'] + ([eco_gotests_tag] if eco_gotests_tag is defined else [])) | unique }}"
 
     - name: Pull user-specified eco-gotests image
-      when: eco_gotests_tag is defined
+      when: eco_gotests_tag is defined and pull_container_image is true
       containers.podman.podman_image:
         name: "{{ eco_gotests_image }}"
         tag: "{{ eco_gotests_tag }}"
 
     - name: Try pulling cluster version matched image, fallback to latest if it fails
-      when: eco_gotests_tag is not defined
+      when: eco_gotests_tag is not defined and pull_container_image is true
       block:
         - name: Pull a cluster version matched eco-gotests image
           containers.podman.podman_image:
@@ -141,5 +145,5 @@
     - name: Prepare execute shell script
       ansible.builtin.template:
         src: run_eco_gotests.j2
-        dest: "{{ eco_gotest_dir }}/eco-gotests-run.sh"
+        dest: "{{ eco_gotest_dir }}/{{ script_name }}"
         mode: "0764"

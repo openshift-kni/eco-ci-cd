@@ -1,0 +1,341 @@
+---
+# Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook: Deploy RAN two SNO tests script
+# -------------------------------------------------
+# This playbook prepares the bastion for RAN tests with two Single-Node OpenShift
+# (SNO) spokes managed by an ACM hub. It resets the localimages namespace in the disconnected registry, mirrors
+# the OCP release image to the localimages namespace, collects hub and spoke kubeconfigs and BMC info, then
+# runs three eco-gotests suites: TALM, GitOps ZTP, and deployment types.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Deploy RAN two SNO tests script
+# Description  : Runs on the bastion host. Resets the localimages namespace in the disconnected registry,
+#                builds a pull secret with the disconnected registry, mirrors the hub's OCP release to the localimages namespace,
+#                prepares a kubeconfig directory with hub and both spoke kubeconfigs, extracts BMC IP for spoke one,
+#                and invokes deploy-run-eco-gotests three times (talm, gitopsztp, deploymenttypes) with the appropriate env vars and volume mounts.
+#
+# Prerequisites:
+#   - Inventory must define a bastion host with SSH access (ansible_user,
+#     ansible_password or key-based auth).
+#   - Variables hub_kubeconfig, pull_secret_string, disconnected_registry_url,
+#     disconnected_registry_port, share_http_iso_port must be defined.
+#   - For TALM tests: bmc_user and bmc_password must be defined.
+#   - Bastion must have container-registry (systemd), oc, and access to the hub
+#     cluster; hub must have two ManagedClusters with labels sites=worker-0 and
+#     sites=worker-1, and spoke one must have a BareMetalHost for BMC IP.
+#
+# Key Tasks:
+#   - Stop registry, remove localimages repos, start registry
+#   - Prepare pull secret with disconnected registry auth, write auth.json (for oc adm release mirror)
+#   - Get hub ClusterVersion, download OCP release graph, mirror release image to the localimages namespace
+#   - Create auth kubeconfig directory, copy hub kubeconfig, get both spoke clusters
+#   - Get spoke admin kubeconfig secrets, write spoke-one-kubeconfig and spoke-two-kubeconfig
+#   - Get BMC address for spoke one and extract BMC IP
+#   - import_playbook deploy-run-eco-gotests (talm, gitopsztp, deploymenttypes)
+#
+# Usage:
+#   ansible-playbook -vv ./playbooks/ran/deploy-two-sno-tests-script.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "hub_kubeconfig=/home/telcov10n/project/generated/fthub-01/auth/kubeconfig"
+#
+# Available extra-vars (arguments):
+#
+# hub_kubeconfig                  # string: Path to the hub cluster kubeconfig file.
+# pull_secret_string              # string: Base64-encoded pull secret (e.g. from cluster).
+# disconnected_registry_url       # string: Hostname of the disconnected registry (no port).
+# disconnected_registry_port     # string or int: Port of the disconnected registry (e.g. 5000).
+# share_http_iso_port             # string or int: Port for HTTP store serving upgrade graph.
+# bmc_user                        # string: BMC username (required for TALM tests).
+# bmc_password                    # string: BMC password (required for TALM tests).
+#
+# Optional (have defaults in play vars):
+#
+# http_store_data_dir             # string: Directory for upgrade graph file (default: /opt/http_store/data).
+# ocp_operator_mirror_pull_secret_path  # string: Path to auth.json for oc adm release mirror (default: /tmp/auth.json).
+# registry_localimages_path       # string: Registry v2 repositories path to clear (default: .../repositories/localimages).
+# spoke_cluster_label_selectors   # list: Label selectors for the two spokes (default: sites=worker-0, sites=worker-1).
+# spoke_kubeconfig_dest_map       # list: List of {idx, dest} for spoke kubeconfig filenames.
+
+- name: Deploy RAN two SNO tests script
+  hosts: bastion
+  gather_facts: false
+  vars:
+    http_store_data_dir: /opt/http_store/data
+    ocp_operator_mirror_pull_secret_path: /tmp/auth.json
+    registry_localimages_path: /opt/registry/data/docker/registry/v2/repositories/localimages
+    spoke_cluster_label_selectors:
+      - "sites=worker-0"
+      - "sites=worker-1"
+    spoke_kubeconfig_dest_map:
+      - { idx: 0, dest: "spoke-one-kubeconfig" }
+      - { idx: 1, dest: "spoke-two-kubeconfig" }
+
+  tasks:
+
+    - name: Set auth kubeconfig directory path
+      ansible.builtin.set_fact:
+        auth_kubeconfig_path: "/tmp/auth_kubeconfigs"
+
+    - name: Stop registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "container-registry"
+        state: stopped
+
+    - name: Remove repositories from registry storage
+      become: true
+      ansible.builtin.file:
+        path: "{{ registry_localimages_path }}"
+        state: absent
+
+    - name: Start registry service
+      become: true
+      ansible.builtin.systemd:
+        name: "container-registry"
+        state: started
+        enabled: true
+
+    - name: Prepare pull secret
+      ansible.builtin.set_fact:
+        pull_secret_ocp: "{{ pull_secret_string | b64decode }}"
+
+    - name: Ensure auth.json is absent
+      ansible.builtin.file:
+        path: "{{ ocp_operator_mirror_pull_secret_path }}"
+        state: absent
+
+    - name: Add disconnected registry entry
+      ansible.builtin.set_fact:
+        pull_secret: >-
+          {{
+            pull_secret_ocp | combine({
+              'auths': pull_secret_ocp.auths | combine({
+                (disconnected_registry_url ~ ':' ~ disconnected_registry_port): {
+                  'auth': ((ansible_user ~ ':' ~ ansible_password) | b64encode)
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Stat pull secret dir
+      ansible.builtin.stat:
+        path: "{{ ocp_operator_mirror_pull_secret_path | dirname }}"
+      register: pull_secret_dir_stat
+
+    - name: Create pull secret dir when missing (do not change perms if exists)
+      ansible.builtin.file:
+        path: "{{ ocp_operator_mirror_pull_secret_path | dirname }}"
+        state: directory
+        mode: '0700'
+      when: not pull_secret_dir_stat.stat.exists
+
+    - name: Write auth.json
+      ansible.builtin.copy:
+        content: "{{ pull_secret | to_nice_json }}"
+        dest: "{{ ocp_operator_mirror_pull_secret_path }}"
+        mode: '0600'
+
+    - name: Get hub cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: hub_cluster_version
+
+    - name: Extract hub OCP version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+        ocp_full_version: "{{ hub_cluster_version.resources[0].status.desired.version }}"
+
+    - name: Set graph file path
+      ansible.builtin.set_fact:
+        graph_file: "{{ http_store_data_dir }}/upgrade-graph_stable-{{ ocp_version }}"
+
+    - name: Remove existing graph file if present
+      ansible.builtin.file:
+        path: "{{ graph_file }}"
+        state: absent
+
+    - name: Download OCP release graph from releases.ci.openshift.org
+      ansible.builtin.get_url:
+        url: "https://amd64.ocp.releases.ci.openshift.org/graph?channel=stable-{{ ocp_version }}"
+        dest: "{{ graph_file }}"
+
+    - name: Read graph file
+      ansible.builtin.slurp:
+        src: "{{ graph_file }}"
+      register: graph_content
+
+    - name: Set srcimage from graph node matching OCP version
+      ansible.builtin.set_fact:
+        srcimage: "{{ ((graph_content.content | b64decode | from_json).nodes | selectattr('version', 'equalto', ocp_full_version) | list | first | default({})).get('payload', '') }}"
+
+    - name: Set digest from image reference (part after @)
+      ansible.builtin.set_fact:
+        digest: "{{ (srcimage | default('')).split('@')[-1] }}"
+
+    - name: Set srcimage digest for release image
+      ansible.builtin.set_fact:
+        srcimage_digest: "{{ srcimage | default('') }}"
+
+    - name: Set destination registry repo for release mirror
+      ansible.builtin.set_fact:
+        dest_repo: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/localimages/local-release-image"
+
+    - name: Set destination release image reference
+      ansible.builtin.set_fact:
+        dest_image: "{{ dest_repo }}/local-release-image@{{ digest }}"
+
+    - name: Set upgrade graph URL for HTTP store
+      ansible.builtin.set_fact:
+        upgrade_graph_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/{{ graph_file | basename }}"
+
+    - name: Get operator-registry image pull spec from payload
+      ansible.builtin.command:
+        cmd: "oc adm release mirror -a {{ ocp_operator_mirror_pull_secret_path }} --insecure --from {{ srcimage }} --to {{ dest_repo }} --to-release-image {{ dest_repo }}:{{ocp_full_version }}-x86_64"
+      register: operator_registry_cmd
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+
+    - name: Ensure auth_kubeconfig_path directory does not exist
+      ansible.builtin.file:
+        path: "{{ auth_kubeconfig_path }}"
+        state: absent
+
+    - name: Ensure auth_kubeconfig directory is present
+      ansible.builtin.file:
+        path: "{{ auth_kubeconfig_path }}"
+        state: directory
+        recurse: true
+        mode: "0760"
+
+    - name: Prepare container mount directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0777"
+      loop:
+        - "{{ auth_kubeconfig_path }}/hub_kubeconfig"
+        - "{{ auth_kubeconfig_path }}/spokes"
+
+    - name: Copy hub kubeconfig to test directory
+      ansible.builtin.copy:
+        src: "{{ hub_kubeconfig }}"
+        remote_src: true
+        dest: "{{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig"
+        mode: "0600"
+
+    - name: Get managed clusters (spoke one and spoke two)
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        kubeconfig: "{{ hub_kubeconfig }}"
+        label_selectors: "{{ item }}"
+      loop: "{{ spoke_cluster_label_selectors }}"
+      register: spoke_clusters
+
+    - name: Set spoke one and spoke two from cluster results
+      ansible.builtin.set_fact:
+        spoke_one: "{{ spoke_clusters.results[0] }}"
+        spoke_two: "{{ spoke_clusters.results[1] }}"
+
+    - name: Get spoke admin kubeconfig secrets
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}-admin-kubeconfig"
+        namespace: "{{ item }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      loop: "{{ [spoke_one.resources[0].metadata.name, spoke_two.resources[0].metadata.name] }}"
+      register: spoke_kubeconfig_secrets
+
+    - name: Get BMC address of spoke one
+      kubernetes.core.k8s_info:
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ spoke_one.resources[0].metadata.name }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: spoke_one_bmc_host
+
+    - name: Extract BMC IP from spoke one BMC address
+      ansible.builtin.set_fact:
+        spoke_one_bmc_ip: "{{
+         spoke_one_bmc_host.resources[0].spec.bmc.address |
+         regex_search('\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}') }}"
+
+    - name: Write spoke kubeconfigs to test directory
+      ansible.builtin.copy:
+        content: "{{ spoke_kubeconfig_secrets.results[item.idx].resources[0].data.kubeconfig | b64decode }}"
+        dest: "{{ auth_kubeconfig_path }}/spokes/{{ item.dest }}"
+        mode: "0600"
+      loop: "{{ spoke_kubeconfig_dest_map }}"
+
+- name: Set TALM test execution script
+  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  vars:
+    eco_cnf_core_net_switch_user: ""
+    eco_cnf_core_net_switch_pass: ""
+    eco_worker_label: ""
+    script_name: "eco-gotests-run.sh"
+    eco_gotest_dir: "/tmp/eco_gotests_talm"
+    labels: "!no-container"
+    kubeconfig: "{{ auth_kubeconfig_path }}/spokes/spoke-one-kubeconfig"
+    features: "talm"
+    eco_gotests_tag: "latest"
+    additional_test_env_variables: "-e ECO_CNF_RAN_KUBECONFIG_HUB=/kubeconfig/hub-kubeconfig \
+      -e ECO_CNF_RAN_OCP_UPGRADE_UPSTREAM_URL={{ upgrade_graph_url}} \
+      -e ECO_CNF_RAN_KUBECONFIG_SPOKE2=/kubeconfig/spoke-two-kubeconfig \
+      -e ECO_CNF_RAN_BMC_USERNAME={{ bmc_user }} \
+      -e ECO_CNF_RAN_BMC_PASSWORD={{ bmc_password }} \
+      -e ECO_CNF_RAN_BMC_HOSTS={{ spoke_one_bmc_ip }} \
+      -e ECO_CNF_RAN_ACM_OPERATOR_NAMESPACE=open-cluster-management \
+      -e ECO_TEST_TRACE=true \
+      -e ECO_VERBOSE_SCRIPT=true \
+      -v {{ auth_kubeconfig_path }}/spokes/spoke-two-kubeconfig:/kubeconfig/spoke-two-kubeconfig:Z \
+      -v {{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig:/kubeconfig/hub-kubeconfig:Z"
+
+- name: Set ZTP test execution script
+  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  vars:
+    eco_cnf_core_net_switch_user: ""
+    eco_cnf_core_net_switch_pass: ""
+    eco_worker_label: ""
+    script_name: "eco-gotests-run.sh"
+    eco_gotest_dir: "/tmp/eco_gotests_ztp"
+    pull_container_image: false
+    labels: "!no-container"
+    kubeconfig: "{{ auth_kubeconfig_path }}/spokes/spoke-one-kubeconfig"
+    features: "gitopsztp"
+    eco_gotests_tag: "latest"
+    additional_test_env_variables: "-e ECO_CNF_RAN_KUBECONFIG_HUB=/kubeconfig/hub-kubeconfig \
+      -e ECO_TEST_TRACE=true \
+      -e ECO_VERBOSE_SCRIPT=true \
+      -e ECO_CNF_RAN_ACM_OPERATOR_NAMESPACE=open-cluster-management \
+      -v {{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig:/kubeconfig/hub-kubeconfig:Z"
+
+- name: Set Deployment Types test execution script
+  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  vars:
+    eco_cnf_core_net_switch_user: ""
+    eco_cnf_core_net_switch_pass: ""
+    eco_worker_label: ""
+    script_name: "eco-gotests-run.sh"
+    pull_container_image: false
+    eco_gotest_dir: "/tmp/eco_gotests_deploymenttypes"
+    labels: "!no-container"
+    kubeconfig: "{{ auth_kubeconfig_path }}/spokes/spoke-one-kubeconfig"
+    features: "deploymenttypes"
+    eco_gotests_tag: "latest"
+    additional_test_env_variables: "-e ECO_CNF_RAN_KUBECONFIG_HUB=/kubeconfig/hub-kubeconfig \
+      -e ECO_CNF_RAN_SKIP_TLS_VERIFY=true \
+      -e ECO_TEST_TRACE=true \
+      -e ECO_CNF_RAN_KUBECONFIG_SPOKE2=/kubeconfig/spoke-two-kubeconfig \
+      -e ECO_VERBOSE_SCRIPT=true \
+      -v {{ auth_kubeconfig_path }}/spokes/spoke-two-kubeconfig:/kubeconfig/spoke-two-kubeconfig:Z \
+      -v {{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig:/kubeconfig/hub-kubeconfig:Z"

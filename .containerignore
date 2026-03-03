@@ -12,6 +12,10 @@
 !requirements.yml
 !ansible.cfg
 
+# Ignore local vars
+**/group_vars/
+**/host_vars/
+
 # Yet exclude specific subdirs even from allowed directories
 **/unit/
 **/fixtures/

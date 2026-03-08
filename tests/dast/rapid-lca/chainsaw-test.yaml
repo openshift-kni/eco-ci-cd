@@ -21,7 +21,7 @@ spec:
     try:
     - script:
         timeout: 30s
-        content: ./create_rapidast_configmap.sh
+        content: ./02-create_rapidast_configmap.sh
     - assert:
         file: 02-assert.yaml
   - name: step-03
@@ -36,7 +36,7 @@ spec:
     try:
     - script:
         timeout: 6m
-        content: ./results.sh
+        content: ./04-results.sh
     finally:
       - command:
           timeout: 1m

@@ -7,10 +7,8 @@ TMP_DIR=/tmp
 ARTIFACT_DIR=${ARTIFACT_DIR}
 
 # Name for rapiterm pod
-RANDOM_NAME=rapiterm-talm
+RANDOM_NAME=rapiterm-nrop
 
-# Name of PVC in RapiDAST Resource, i.e. which PVC to mount to grab results
-PVC=rapidast-pvc
 IMAGE_REPOSITORY=quay.io/redhatproductsecurity/rapidast-term
 IMAGE_TAG=latest
 
@@ -19,13 +17,16 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: $RANDOM_NAME
-  namespace: rapidast-talm
+  namespace: rapidast-nrop
 spec:
+  serviceAccountName: privileged-sa
   containers:
     - name: terminal
       image: '$IMAGE_REPOSITORY:$IMAGE_TAG'
       command: ['sleep', '300']
       imagePullPolicy: Always
+      securityContext:
+        privileged: true
       volumeMounts:
         - name: results-volume
           mountPath: /zap/results/
@@ -38,18 +39,19 @@ spec:
           memory: 100Mi
   volumes:
     - name: results-volume
-      persistentVolumeClaim:
-        claimName: $PVC
+      hostPath:
+        path: /tmp/rapidast-results-nrop
+        type: DirectoryOrCreate
 EOF
 
 kubectl apply -f $TMP_DIR/$RANDOM_NAME
 rm $TMP_DIR/$RANDOM_NAME
-kubectl -n rapidast-talm wait --for=condition=Ready pod/$RANDOM_NAME
-kubectl -n rapidast-talm cp $RANDOM_NAME:/zap/results $ARTIFACT_DIR
+kubectl -n rapidast-nrop wait --for=condition=Ready pod/$RANDOM_NAME
+kubectl -n rapidast-nrop cp $RANDOM_NAME:/zap/results $ARTIFACT_DIR
 
 # Function to search for 'session' file and zap-report.json recursively
 search_for_files() {
-  local dir="$1/talm"
+  local dir="$1/nrop"
   local found_session=0
   local found_zap_report=0
 

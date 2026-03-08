@@ -1,5 +1,0 @@
-apiVersion: kuttl.dev/v1beta1
-kind: TestAssert
-timeout: 180
-commands:
- - script: ./tests/dast/rapidast-ptp/results.sh

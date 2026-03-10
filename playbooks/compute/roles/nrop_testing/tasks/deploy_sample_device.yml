@@ -1,0 +1,29 @@
+---
+- name: Delete namespace sample-dev-ns if it exists
+  kubernetes.core.k8s:
+    kind: Namespace
+    name: sample-dev-ns
+    state: absent
+    wait: true
+    wait_timeout: 180
+
+- name: Generate sample device manifests
+  ansible.builtin.template:
+    src: "{{ item }}.yaml.j2"
+    dest: "{{ tmp_workdir }}/artifacts/{{ item}}_{{ topology_manager_scope }}.yaml"
+    mode: '0644'
+  loop:
+    - "setup-sample-device"
+    - "sample-device-A"
+    - "sample-device-B"
+    - "sample-device-C"
+
+- name: Deploy Sample Device
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ tmp_workdir }}/artifacts/{{ item }}_{{ topology_manager_scope }}.yaml"
+  loop:
+    - "setup-sample-device"
+    - "sample-device-A"
+    - "sample-device-B"
+    - "sample-device-C"

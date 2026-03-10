@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: device-c-configmap
+  namespace: sample-dev-ns
+data:
+  example_com_deviceC.yaml: |
+      devicename: tty3
+      devices:
+        '*':
+          - id: DevC1
+            healthy: true
+            numanode: 0
+          - id: DevC2
+            healthy: true
+            numanode: 0
+          - id: DevC3
+            healthy: true
+            numanode: 0
+          - id: DevC4
+            healthy: true
+            numanode: 0
+          - id: DevC5
+            healthy: true
+            numanode: 0
+          - id: DevC6
+            healthy: true
+            numanode: 0
+          - id: DevC7
+            healthy: true
+            numanode: 0
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: device-plugin-c-ds
+  namespace: sample-dev-ns
+spec:
+  selector:
+      matchLabels:
+        name: device-plugin-c
+  template:
+    metadata:
+      labels:
+        name: device-plugin-c
+    spec:
+      serviceAccountName: sampledevices-sa
+      containers:
+      - name: device-plugin-c-container
+        securityContext:
+          privileged: true
+        image: {{ device_plugin_image }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: DEVICE_RESOURCE_NAME
+          value: "example.com/deviceC"
+        command:
+          - /bin/deviceplugin
+        args:
+          - --alsologtostderr
+          - --config-dir=/etc/devices
+        volumeMounts:
+        - name: kubeletsockets
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: device-c-config-vol
+          mountPath: /etc/devices
+      volumes:
+      - name: kubeletsockets
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: Directory
+      - configMap:
+          name: device-c-configmap
+        name: device-c-config-vol

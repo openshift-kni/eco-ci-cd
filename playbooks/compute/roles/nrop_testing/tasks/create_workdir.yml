@@ -1,0 +1,13 @@
+---
+- name: Ensure work directory is absent
+  ansible.builtin.file:
+    state: absent
+    path: "{{ tmp_workdir }}"
+
+- name: Create working directory
+  ansible.builtin.file:
+    state: directory
+    recurse: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    path: "{{ tmp_workdir }}/artifacts"

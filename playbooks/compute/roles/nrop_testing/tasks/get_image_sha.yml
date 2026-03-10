@@ -1,0 +1,37 @@
+---
+- name: Get FBC image sha
+  when: test_env == "stage"
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  ansible.builtin.shell: |
+    set -o pipefail
+    POD_NAME=$(oc -n openshift-marketplace get pods -o name | grep numaresource | head -n 1)
+    oc -n openshift-marketplace get "$POD_NAME" -o json | jq -r '.status.containerStatuses[0].imageID'
+  changed_when: fbc_image_sha.rc == 0
+  register: fbc_image_sha
+
+- name: Get must gather sha
+  ansible.builtin.shell: >
+    skopeo inspect
+    --authfile /tmp/pull_secret docker://{{ must_gather_image }}
+    --format '{% raw %}{{.Digest}}{% endraw %}'
+  changed_when: mustgather_image_sha.rc == 0
+  register: mustgather_image_sha
+
+- name: Get Scheduler image sha
+  ansible.builtin.shell: >
+    skopeo inspect
+    --authfile /tmp/pull_secret  docker://{{ scheduler_image_uri }}
+    --format '{% raw %}{{.Digest}}{% endraw %}'
+  changed_when: scheduler_image_sha.rc == 0
+  register: scheduler_image_sha
+
+- name: Save images sha information
+  ansible.builtin.copy:
+    dest: "{{ tmp_workdir }}/artifacts/image-sha.yaml"
+    mode: '0664'
+    owner: "{{ ansible_user }}"
+    content: |
+      fbc_image_sha: {{ fbc_image_sha.stdout | default("No SHA on Prod") }}
+      "{{ must_gather_image }}": {{ mustgather_image_sha.stdout }}
+      "{{ scheduler_image_uri }}": {{ scheduler_image_sha.stdout }}

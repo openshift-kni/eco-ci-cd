@@ -1,0 +1,59 @@
+---
+- name: Ensure must gather directory is empty
+  ansible.builtin.file:
+    path: "{{ must_gather_path }}"
+    state: absent
+
+- name: Collect Must Gather
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir="{{ must_gather_path }}"
+  register: must_gather
+  changed_when: must_gather.rc == 0
+
+- name: Generate Performance Profile using PPC container
+  containers.podman.podman_container:
+    name: ppc_tool
+    image: "{{ ppc_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+    rm: true
+    entrypoint: performance-profile-creator
+    detach: false
+    authfile: /tmp/pull_secret
+    volumes:
+      - "{{ must_gather_path }}:/must-gather:Z"
+    command: >
+      --mcp-name={{ nrop_target_pool }}
+      --reserved-cpu-count={{ reserved_cpu_count }}
+      --rt-kernel={{ rt_kernel }}
+      --must-gather-dir-path=/must-gather
+      --power-consumption-mode=ultra-low-latency
+  register: ppc_output
+
+- name: Save generated profile to file
+  copy:
+    content: "{{ ppc_output.stdout }}"
+    dest: "{{ manifest_dir }}/{{ topology_manager_scope }}_{{ performance_profile }}"
+    mode: '0664'
+
+- name: Read PerformanceProfile file
+  ansible.builtin.slurp:
+    src: "{{ manifest_dir }}/{{ topology_manager_scope }}_{{ performance_profile }}"
+  register: profile_file
+
+- name: Extract CPU settings
+  set_fact:
+    cpu_isolated: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.isolated }}"
+    cpu_reserved: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.reserved }}"
+
+- name: Save Performance Profile
+  ansible.builtin.template:
+    src: nrop_pp_bm.yaml.j2
+    dest: "{{ manifest_dir }}/{{ topology_manager_scope }}_{{ performance_profile }}"
+    mode: '0664'
+
+- name: Apply PerformanceProfile
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ manifest_dir }}/{{ topology_manager_scope }}_{{ performance_profile }}"
+
+- name: Wait for MCP restart
+  ansible.builtin.include_tasks: wait_for_mcp.yml

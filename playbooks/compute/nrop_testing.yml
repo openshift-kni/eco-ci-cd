@@ -1,0 +1,11 @@
+- name: Nrop Deploy testing
+  hosts: bastion
+  gather_facts: false
+  vars:
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Run role nrop_testing
+      ansible.builtin.include_role:
+        name: nrop_testing

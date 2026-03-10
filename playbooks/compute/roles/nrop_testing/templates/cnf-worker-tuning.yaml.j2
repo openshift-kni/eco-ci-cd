@@ -1,0 +1,26 @@
+# Not used 
+apiVersion: machineconfiguration.openshift.io/v1
+kind: KubeletConfig
+metadata:
+  name: cnf-worker-tuning
+spec:
+  machineConfigPoolSelector:
+    matchLabels:
+      pools.operator.machineconfiguration.openshift.io/{{ nrop_target_pool }}: ""
+  kubeletConfig:
+    cpuManagerPolicy: "static"
+    cpuManagerReconcilePeriod: "5s"
+    reservedSystemCPUs: "0,40"
+    memoryManagerPolicy: "Static"
+    evictionHard:
+      memory.available: "100Mi"
+    kubeReserved:
+      memory: "512Mi"
+    reservedMemory:
+      - numaNode: 0
+        limits:
+          memory: "1124Mi"
+    systemReserved:
+      memory: "512Mi"
+    topologyManagerPolicy: "single-numa-node"
+    topologyManagerScope: {{ topology_manager_scope }}

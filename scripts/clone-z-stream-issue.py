@@ -46,8 +46,9 @@ def parse_arguments():
     parser.add_argument("--jira-issue", default="CNF-3244", help="JIRA issue key to clone (default: %(default)s)")
     parser.add_argument("--assignee", default="rhn-cnf-elevin", help="Assignee for the new issue (default: %(default)s)")
     parser.add_argument("--jira-server", default="https://issues.redhat.com", help="JIRA server URL (default: %(default)s)")
-    
     return parser.parse_args()
+
+CONTRIBUTORS = ["rh-ee-ajaggapa", "gkopels@redhat.com", "rhn-cnf-elevin"]
 
 def create_issue_fields(original_issue, z_stream_version, assignee):
     """Create the fields dictionary for the new cloned issue."""
@@ -59,6 +60,14 @@ def create_issue_fields(original_issue, z_stream_version, assignee):
         'assignee': {'name': assignee}
     }
 
+def add_contributors(jira_client, issue, contributors):
+    """Set contributors on the issue using the contributors custom field."""
+    try:
+        usernames = [{'name': c.strip()} for c in contributors if c.strip()]
+        issue.update(fields={'customfield_12315950': usernames})
+    except Exception as e:
+        logging.warning(f"⚠️  Could not set contributors: {e}")
+
 def clone_jira_issue(jira_client, jira_issue, z_stream_version, assignee, shared_dir):
     """Clone a JIRA issue and save the link."""
     try:
@@ -66,27 +75,36 @@ def clone_jira_issue(jira_client, jira_issue, z_stream_version, assignee, shared
         logging.info(f"Fetching original issue: {jira_issue}")
         issue_to_clone = jira_client.issue(jira_issue)
         logging.info(f"✅ Successfully fetched issue: {issue_to_clone.key}")
-        
+
         # Create new issue fields
         new_issue_fields = create_issue_fields(issue_to_clone, z_stream_version, assignee)
-        
+
         # Create the cloned issue
         logging.info("Creating cloned issue...")
         cloned_issue = jira_client.create_issue(fields=new_issue_fields)
-        
+
+        # Set story points to 1
+        logging.info("Setting story points...")
+        cloned_issue.update(fields={'customfield_12310243': 1})
+        logging.info("✅ Story points set to 1")
+
+        # Add contributors
+        logging.info(f"Setting contributors: {CONTRIBUTORS}")
+        add_contributors(jira_client, cloned_issue, CONTRIBUTORS)
+
         # Save the jira link to a file for slack notification
         jira_link_path = os.path.join(shared_dir, "jira_link")
         with open(jira_link_path, "w") as f:
             f.write(cloned_issue.permalink())
-        
+
         # Log success information
         logging.info(f"✅ Successfully cloned issue '{issue_to_clone.key}'")
         logging.info(f"📋 New cloned issue key: {cloned_issue.key}")
         logging.info(f"📝 New cloned issue summary: {cloned_issue.fields.summary}")
         logging.info(f"🔗 View new issue at: {cloned_issue.permalink()}")
-        
+
         return True
-    
+
     except Exception as e:
         logging.error(f"❌ Unable to clone issue: {e}")
         return False
@@ -99,16 +117,16 @@ def main():
     z_stream_version = args.z_stream_version or os.environ.get("Z_STREAM_VERSION")
     jira_token = args.jira_token or os.environ.get("JIRA_TOKEN")
     shared_dir = args.shared_dir or os.environ.get("SHARED_DIR")
-    
+
     # Check required values
     if not z_stream_version:
         logging.error("❌ Z-stream version is required. Provide via --z-stream-version or Z_STREAM_VERSION env var.")
         sys.exit(1)
-    
+
     if not jira_token:
         logging.error("❌ JIRA token is required. Provide via --jira-token or JIRA_TOKEN env var.")
         sys.exit(1)
-    
+
     if not shared_dir:
         logging.error("❌ Shared directory is required. Provide via --shared-dir or SHARED_DIR env var.")
         sys.exit(1)

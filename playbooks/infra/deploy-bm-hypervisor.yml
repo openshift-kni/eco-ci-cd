@@ -49,7 +49,7 @@
 #     mask: "255.255.255.0"                               # Subnet mask
 #     gw: "10.1.1.254"                                    # Gateway address
 #     dns: "10.1.1.254"                                   # DNS server address
-#   seconday_networks: |-                                 # BM secondary networks
+#   secondary_networks: |-                                 # BM secondary networks
 #     bridge-1:                                           # Name of the bridge interface
 #       ipv4: "192.168.1.1/24"                            # IPv4 address and subnet
 #       vlan: 998                                         # VLAN ID
@@ -224,12 +224,12 @@
       ansible.builtin.gather_facts:
 
     - name: Configure secondary interfaces if required
-      when: seconday_networks is defined
+      when: secondary_networks is defined
       block:
 
         - name: Configure secondary interface bridges
           when: item.value.ifname in ansible_facts.interfaces
-          loop: "{{ seconday_networks | from_yaml | dict2items }}"
+          loop: "{{ secondary_networks | from_yaml | dict2items }}"
           community.general.nmcli:
             type: bridge
             conn_name: "{{ item.key }}"
@@ -244,7 +244,7 @@
 
         - name: Set up network connection bridge-slave for secondary connection
           when: item.value.vlan is not defined
-          loop: "{{ seconday_networks | from_yaml | dict2items }}"
+          loop: "{{ secondary_networks | from_yaml | dict2items }}"
           community.general.nmcli:
             type: ethernet
             slave_type: bridge
@@ -257,7 +257,7 @@
 
         - name: Configure vlan interfaces for secondary connection
           when: item.value.ifname in ansible_facts.interfaces and item.value.vlan is defined
-          loop: "{{ seconday_networks | from_yaml | dict2items }}"
+          loop: "{{ secondary_networks | from_yaml | dict2items }}"
           community.general.nmcli:
             type: vlan
             conn_name: "vlan{{ item.value.vlan }}"

@@ -45,6 +45,13 @@ def construct_message(args):
         section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
+    # TWO SNO section
+    if args.reportportal_url_two_sno:
+        section = "\n*Two SNO*\n____________"
+        section += f"\nSent to Report Portal: {args.reportportal_url_two_sno}"
+        section += f"\nSent to Polarion: {args.polarion_url}"
+        sections.append(section)
+
     # Footer with Prow job URL
     if args.job_url:
         sections.append(f"\nProw Job: {args.job_url}")
@@ -88,8 +95,9 @@ def parse_arguments():
     parser.add_argument("--build", required=True, help="OCP build version")
     parser.add_argument("--polarion-url", required=True, help="Polarion test run URL")
     parser.add_argument("--job-url", required=True, help="Prow job URL for 'more info' link")
-    parser.add_argument("--reportportal-url-3node", required=True, help="Report Portal URL for 3-node")
-    parser.add_argument("--reportportal-url-standard", required=True, help="Report Portal URL for standard")
+    parser.add_argument("--reportportal-url-3node", required=False, help="Report Portal URL for 3-node")
+    parser.add_argument("--reportportal-url-standard", required=False, help="Report Portal URL for standard")
+    parser.add_argument("--reportportal-url-two-sno", required=False, help="Report Portal URL for Two SNO")
     return parser.parse_args()
 
 

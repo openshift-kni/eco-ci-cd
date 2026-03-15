@@ -23,11 +23,11 @@
     name: cluster
   register: scheduler_info
 
-- name: Set NROP traget pool
+- name: Set NROP target pool
   ansible.builtin.set_fact:
     nrop_target_pool: "{{ 'master' if scheduler_info.resources[0].spec.mastersSchedulable | default(false) else 'worker' }}"
 
-- name: Print traget pool
+- name: Print target pool
   ansible.builtin.debug:
     msg: "Traget pool: {{ nrop_target_pool }}"
 
@@ -56,5 +56,4 @@
   ansible.builtin.copy:
     content: "{{ pull_secret_string | b64decode }}"
     dest: /tmp/pull_secret
-    mode: '0664'
-
+    mode: '0660'

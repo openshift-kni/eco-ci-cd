@@ -12,7 +12,7 @@
   ansible.builtin.include_tasks: mirror.yml
   when: disconnected | default(false) | bool is true
 
-- name: Generate performance Performance Performance
+- name: Generate performance profile
   ansible.builtin.include_tasks: performance_profile.yml
 
 - name: Deploy Operator config

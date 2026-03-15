@@ -38,7 +38,6 @@
         path: "{{ must_gather_dir }}"
 
     - name: Run must-gather
-      environment:
       ansible.builtin.shell: |
         oc adm must-gather --kubeconfig={{ kubeconfig }} --image={{ must_gather_uri }} --dest-dir={{ must_gather_dir }}  |
         tee {{ must_gather_artifacts_dir }}/mustgather-{{ scope }}.log

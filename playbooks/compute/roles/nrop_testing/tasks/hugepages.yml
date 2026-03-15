@@ -1,0 +1,42 @@
+---
+# TODO: for now, not in use
+- name: Download huagepage generator
+  ansible.builtin.get_url:
+    mode: '0775'
+    group: "{{ ansible_user }}"
+    owner: "{{ ansible_user }}"
+    url: "{{ machine_config_generator }}"
+    dest: "{{ tmp_workdir }}/{{ generator_executable }}"
+
+    # TODO:  check if the files should be the same for all node
+- name: Copy PPC template
+  ansible.builtin.template:
+    src: perf-profile.yaml.j2
+    dest: "{{ tmp_workdir }}/artifacts/perf-profile.yaml"
+    group: "{{ ansible_user }}"
+    owner: "{{ ansible_user }}"
+    mode: '0664'
+
+- name: Generate huagepage profile
+  ansible.builtin.shell: >
+    set -o pipefail &&
+      cd {{ tmp_workdir }}
+      cat ./artifacts/perf-profile.yaml | ./{{ generator_executable }} -o ./artifacts/hp_mc.yaml &&
+      cat ./artifacts/hp_mc.yaml
+  register: generated_profile
+  changed_when: generated_profile.rc == 0
+
+- name: Print generated profile
+  ansible.builtin.debug:
+    msg: "{{ generated_profile | to_nice_yaml }}"
+
+- name: Deploy generated machine profile
+  when: not dry_run | bool
+  block:
+    - name: Deploy huagepage manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifest_dir }}/hp_mc.yaml"
+
+- name: Wait for MCP restart
+  ansible.builtin.include_tasks: wait_for_mcp.yml

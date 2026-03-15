@@ -1,0 +1,17 @@
+apiVersion: nodetopology.openshift.io/v1
+kind: NUMAResourcesOperator
+metadata:
+  name: numaresourcesoperator
+spec:
+  nodeGroups:
+  - machineConfigPoolSelector:
+      matchLabels:
+        pools.operator.machineconfiguration.openshift.io/{{ nrop_target_pool }}: ""
+  logLevel: Trace
+---
+apiVersion: nodetopology.openshift.io/v1
+kind: NUMAResourcesScheduler
+metadata:
+  name: numaresourcesscheduler
+spec:
+  imageSpec: {{ scheduler_image_uri }}

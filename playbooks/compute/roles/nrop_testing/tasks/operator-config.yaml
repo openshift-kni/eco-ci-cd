@@ -1,0 +1,23 @@
+- name: Create manifest
+  ansible.builtin.template:
+    src: operator.yaml.j2
+    dest: "{{ manifest_dir }}/{{ nrop_target_pool }}_operator-config.yaml"
+    mode: '0664'
+
+- name: Apply Operator config
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ manifest_dir }}/{{ nrop_target_pool }}_operator-config.yaml"
+
+- name: Wait until all replicas are ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: secondary-scheduler
+    namespace: openshift-numaresources
+  register: deployment_info
+  until:
+    - deployment_info.resources[0].status.readyReplicas is defined
+    - deployment_info.resources[0].status.readyReplicas == deployment_info.resources[0].spec.replicas
+  retries: 20
+  delay: 10

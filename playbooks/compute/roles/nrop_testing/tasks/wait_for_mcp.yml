@@ -1,0 +1,20 @@
+---
+- name: Wait for MCP to change
+  ansible.builtin.pause:
+    minutes: 1
+
+- name: Wait for machine config pool to be updated
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+  register: machine_config_pool_post
+  retries: 120
+  delay: 10
+  until: |
+    not machine_config_pool_post.failed
+    and
+    machine_config_pool_post.resources | length > 0
+    and
+    (machine_config_pool_post.resources
+      | community.general.json_query('[*].status.readyMachineCount') ==
+      (machine_config_pool_post.resources | community.general.json_query('[*].status.machineCount')))

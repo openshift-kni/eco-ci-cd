@@ -1,0 +1,20 @@
+---
+- name: Print test scope
+  ansible.builtin.debug:
+    msg: "Running {{ topology_manager_scope }} scope"
+
+- name: Copy PPC template
+  ansible.builtin.template:
+    src: nrop_pp_bm.yaml.j2
+    dest: "{{ tmp_workdir }}/artifacts/nrop_pp_bm_{{ topology_manager_scope }}.yaml"
+    group: "{{ ansible_user }}"
+    owner: "{{ ansible_user }}"
+    mode: '0664'
+
+- name: Deploy Performance Profile manifest
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ tmp_workdir }}/artifacts/nrop_pp_bm_{{ topology_manager_scope }}.yaml"
+
+- name: Wait for MCP restart
+  ansible.builtin.include_tasks: wait_for_mcp.yml

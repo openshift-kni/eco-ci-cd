@@ -1,0 +1,14 @@
+---
+- name: Copy image from source to destination registry
+  ansible.builtin.command: >
+      skopeo copy
+      docker://{{ item }}
+      docker://{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/openshift4/{{ item.split('/')[2:] | join(".") }}
+  loop:
+    - "{{ numa_mustgather_image }}"
+    - "{{ nrop_test_image_tag }}"
+    - "{{ device_plugin_image }}"
+    - "{{ rte_image }}"
+    - "{{ scheduler_image_uri }}"
+  register: skopeo
+  changed_when: skopeo.rc == 0

@@ -1,0 +1,40 @@
+tmp_workdir: "/tmp/wip"
+manifest_dir: "{{ tmp_workdir }}/artifacts"
+machine_config_generator: "https://github.com/openshift-kni/performance-addon-operators/releases/download/v0.0.41100/hugepages-machineconfig-generator"
+generator_executable: "hp_mc_generator"
+dry_run: true
+run_reboot_tests_only: false
+nrop_test_dir: "{{ tmp_workdir }}/tests"
+test_env: prod
+
+# Images
+numa_mustgather_image: "registry.stage.redhat.io/openshift4/numaresources-must-gather-rhel9"
+nrop_test_image_tag: "quay.io/openshift-kni/numaresources-operator-tests:latest"
+device_plugin_image: "quay.io/k8stopologyawareschedwg/sample-device-plugin:v0.2.2"
+rte_image: "quay.io/openshift-kni/resource-topology-exporter:test-ci"
+
+# scheduler settings
+# add custom scheduler
+# scheduler_image_uri: ""
+scheduler_image_name: noderesourcetopology-scheduler
+image_uri:
+  prod: registry.redhat.io/openshift4
+  stage: registry.stage.redhat.io/openshift4
+
+# performance-profile settings
+reserved_cpu_count: 4
+rt_kernel: "true"
+must_gather_path: "/tmp/must-gather-data"
+performance_profile: "performance-profile.yaml"
+ppc_image: "registry.redhat.io/openshift4/ose-cluster-node-tuning-rhel9-operator"
+
+# devices
+device_t1: tty1
+device_t2: tty2
+device_t3: tty3
+
+# Test to skip
+ginkgo_skip: 84312
+
+# Test Conigurations
+ginkgo_label: "tier0"  # run only this labled tests

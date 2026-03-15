@@ -1,0 +1,59 @@
+---
+# pre-config.yml
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+    ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+- name: Set Gather Image version
+  ansible.builtin.set_fact:
+    must_gather_image: "{{ numa_mustgather_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+
+- name: Get scheduler configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Scheduler
+    name: cluster
+  register: scheduler_info
+
+- name: Set NROP target pool
+  ansible.builtin.set_fact:
+    nrop_target_pool: "{{ 'master' if scheduler_info.resources[0].spec.mastersSchedulable | default(false) else 'worker' }}"
+
+- name: Print target pool
+  ansible.builtin.debug:
+    msg: "Traget pool: {{ nrop_target_pool }}"
+
+- name: Set UBI base image
+  ansible.builtin.set_fact:
+    base_image: "{% if ocp_version_minor | float < 4.14 %}rhel8{% else %}rhel9{% endif %}"
+  when: custom_scheduler is not defined
+
+- name: Set scheduler image uri
+  ansible.builtin.set_fact:
+    scheduler_image_uri: "{{ image_uri[test_env] }}/{{ scheduler_image_name }}-{{ base_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+  when: custom_scheduler is not defined
+
+- name: Overwrite scheduler image uri
+  ansible.builtin.set_fact:
+    scheduler_image_uri: "{{ custom_scheduler }}"
+  when: custom_scheduler is defined
+
+# stage operator works in Disconnected mode only
+- name: Ensure enviorment is Disconnected
+  ansible.builtin.set_fact:
+    disconnected: true
+  when: custom_scheduler is defined or test_env == "stage"
+
+- name: Save pull secret
+  ansible.builtin.copy:
+    content: "{{ pull_secret_string | b64decode }}"
+    dest: /tmp/pull_secret
+    mode: '0660'

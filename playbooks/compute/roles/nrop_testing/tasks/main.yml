@@ -1,0 +1,28 @@
+---
+- name: Create workdir
+  ansible.builtin.include_tasks: create_workdir.yml
+
+- name: Ensure MCP is ready
+  ansible.builtin.include_tasks: wait_for_mcp.yml
+
+- name: Start pre config
+  ansible.builtin.include_tasks: pre-config.yml
+
+- name: Clone must gather image to local registry
+  ansible.builtin.include_tasks: mirror.yml
+  when: disconnected | default(false) | bool is true
+
+- name: Generate performance profile
+  ansible.builtin.include_tasks: performance_profile.yml
+
+- name: Deploy Operator config
+  ansible.builtin.include_tasks: operator-config.yaml
+
+- name: Deploy sample device
+  ansible.builtin.include_tasks: deploy_sample_device.yml
+
+- name: Gather sha images
+  ansible.builtin.include_tasks: get_image_sha.yml
+
+- name: Get Skip list
+  ansible.builtin.include_tasks: skip_list.yml

@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: device-a-configmap
+  namespace: sample-dev-ns
+data:
+  example_com_deviceA.yaml: |
+      devicename: tty1
+      devices:
+        '*':
+          - id: DevA1
+            healthy: true
+            numanode: 0
+          - id: DevA2
+            healthy: true
+            numanode: 0
+          - id: DevA3
+            healthy: true
+            numanode: 0
+          - id: DevA4
+            healthy: true
+            numanode: 0
+          - id: DevA5
+            healthy: true
+            numanode: 0
+          - id: DevA6
+            healthy: true
+            numanode: 0
+          - id: DevA7
+            healthy: true
+            numanode: 0
+          - id: DevA8
+            healthy: true
+            numanode: 0
+          - id: DevA9
+            healthy: true
+            numanode: 0
+          - id: DevA10
+            healthy: true
+            numanode: 0
+          - id: DevA11
+            healthy: true
+            numanode: 1
+          - id: DevA12
+            healthy: true
+            numanode: 1
+          - id: DevA13
+            healthy: true
+            numanode: 1
+          - id: DevA14
+            healthy: true
+            numanode: 1
+          - id: DevA15
+            healthy: true
+            numanode: 1
+          - id: DevA16
+            healthy: true
+            numanode: 1
+          - id: DevA17
+            healthy: true
+            numanode: 1
+          - id: DevA18
+            healthy: true
+            numanode: 1
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: device-plugin-a-ds
+  namespace: sample-dev-ns
+spec:
+  selector:
+      matchLabels:
+        name: device-plugin-a
+  template:
+    metadata:
+      labels:
+        name: device-plugin-a
+    spec:
+      serviceAccountName: sampledevices-sa
+      containers:
+      - name: device-plugin-a-container
+        securityContext:
+          privileged: true
+        image: {{ device_plugin_image }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: DEVICE_RESOURCE_NAME
+          value: "example.com/deviceA"
+        command:
+          - /bin/deviceplugin
+        args:
+          - --alsologtostderr
+          - --config-dir=/etc/devices
+        volumeMounts:
+        - name: kubeletsockets
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: device-a-config-vol
+          mountPath: /etc/devices
+      volumes:
+      - name: kubeletsockets
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: Directory
+      - configMap:
+          name: device-a-configmap
+        name: device-a-config-vol

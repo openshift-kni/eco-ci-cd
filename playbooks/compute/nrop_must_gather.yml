@@ -1,0 +1,53 @@
+- name: NROP must gather post tests
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    must_gather_image: registry.stage.redhat.io/openshift4/numaresources-must-gather-rhel9
+    must_gather_dir: /tmp/must_gather
+    must_gather_artifacts_dir: /tmp/wip/artifacts
+  tasks:
+    - name: Get Cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: api_version
+
+    - name: Set ocp_version
+      ansible.builtin.set_fact:
+        ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+        ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+    - name: Set must gather image uri
+      ansible.builtin.set_fact:
+        must_gather_uri: "{{ must_gather_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+
+    - name: Ensure work directory is absent
+      ansible.builtin.file:
+        state: absent
+        path: "{{ must_gather_dir }}"
+
+    - name: Create working directory
+      ansible.builtin.file:
+        state: directory
+        recurse: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        path: "{{ must_gather_dir }}"
+
+    - name: Run must-gather
+      ansible.builtin.shell: |
+        oc adm must-gather --kubeconfig={{ kubeconfig }} --image={{ must_gather_uri }} --dest-dir={{ must_gather_dir }}  |
+        tee {{ must_gather_artifacts_dir }}/mustgather-{{ scope }}.log
+      register: reg_must_gather
+      changed_when: reg_must_gather.rc == 0
+      ignore_errors: true
+
+    - name: Archive Must Gather
+      community.general.archive:
+        path: "{{ must_gather_dir }}"
+        dest: "{{ must_gather_artifacts_dir }}/must-gather-{{ scope }}.tar.gz"
+        mode: '0775'
+        format: gz

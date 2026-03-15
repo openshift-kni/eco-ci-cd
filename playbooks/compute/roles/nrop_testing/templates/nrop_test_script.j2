@@ -1,0 +1,47 @@
+podman run --rm --name nrop-container-tests \
+--entrypoint /usr/local/bin/run-e2e-nrop-serial.sh \
+--net=host \
+-v {{ nrop_test_dir }}:/nrop:z \
+-v {{ kubeconfig }}:/tmp/kubeconfig:z \
+-e KUBECONFIG=/tmp/kubeconfig \
+{% if disconnected_install|default(true)|bool %}
+  -e E2E_NROP_INSTALL_SKIP_KC=true \
+  -e E2E_NUMACELL_DEVICE_PLUGIN_URL={{ nrop_test_image_tag }} \
+  -e E2E_PAUSE_IMAGE_URL={{ nrop_test_image_tag }} \
+{% endif %}
+{% if teardown_timeout|default("") != "" %}
+  -e E2E_NROP_TEST_TEARDOWN={{ teardown_timeout }} \
+{% endif %}
+{% if cooldown_timeout|default("") != "" %}
+  -e E2E_NROP_TEST_COOLDOWN={{ cooldown_timeout }} \
+{% endif %}
+{% if device_t1|default("") != "" %}
+  -e E2E_NROP_DEVICE_TYPE_1={{ device_t1 }} \
+{% endif %}
+{% if device_t2|default("") != "" %}
+  -e E2E_NROP_DEVICE_TYPE_2={{ device_t2 }} \
+{% endif %}
+{% if device_t3|default("") != "" %}
+  -e E2E_NROP_DEVICE_TYPE_3={{ device_t3 }} \
+{% endif %}
+  -e E2E_NROP_INFRA_SETUP_SKIP=true \
+  -e E2E_NROP_MUSTGATHER_IMAGE={{ numa_mustgather_image }} \
+  -e E2E_NROP_MUSTGATHER_TAG=v{{ ocp_version_major }}:{{ ocp_version_minor }} \
+  -v $(which oc):/usr/local/bin/oc \
+{{ nrop_test_image_tag }} \
+  --report-file /nrop/junit/junit.xml \
+{% if ginkgo_focus | default("") != "" %}
+  --focus "{{ ginkgo_focus }}" \
+{% endif %}
+{% if ginkgo_skip | default("") != "" %}
+  --skip "{{ ginkgo_skip }}" \
+{% endif %}
+{% if run_reboot_tests_only | default(false) | bool %}
+  --label-filter "reboot_required && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!hypershift" \
+{% else %}
+  {% if ginkgo_label | default("") != "" %}
+  --label-filter "{{ ginkgo_label }} && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!schedrst && !reboot_required && !hypershift" \
+    {% else %}
+  --label-filter "{% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!schedrst && !reboot_required && !hypershift"
+  {% endif %}
+{% endif %}

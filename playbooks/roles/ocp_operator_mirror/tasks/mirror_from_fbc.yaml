@@ -255,11 +255,14 @@
       {{
         (image_pairs | default([])) + [
           {
-            'src': (image
-                    if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
-                    else ((image | regex_search('@sha256:[0-9a-f]{64}'))
-                          | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)))
-            ,
+            'src': ( (ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')))
+                    if (((ocp_operator_mirror_art_images_share | default('')) | length > 0)
+                        and (operator.ocp_operator_mirror_use_art_images_share | default(false) | bool))
+                    else (image
+                          if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
+                          else ((image | regex_search('@sha256:[0-9a-f]{64}'))
+                                | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)))
+                  ),
             'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
           }
         ]

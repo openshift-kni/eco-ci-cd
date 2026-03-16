@@ -10,22 +10,13 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-def init_jira_client(server_url, bearer_token):
-    """Create JIRA client with Bearer authentication."""
-    try: 
-        headers = {
-            "Authorization": f"Bearer {bearer_token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        }
-        
-        options = {
-            'server': server_url,
-            'headers': headers
-        }
-        
+def init_jira_client(server_url, api_token):
+    """Create JIRA client with Basic authentication (email + API token)."""
+    try:
+        email = os.environ.get("JIRA_EMAIL", "sobarzan@redhat.com")
+
         logging.info(f"Attempting to connect to Jira server: {server_url}")
-        jira = JIRA(options)
+        jira = JIRA(server=server_url, basic_auth=(email, api_token))
         logging.info("✅ JIRA client successfully initialized")
         return jira
     
@@ -44,27 +35,46 @@ def parse_arguments():
     
     # Optional arguments with defaults
     parser.add_argument("--jira-issue", default="CNF-3244", help="JIRA issue key to clone (default: %(default)s)")
-    parser.add_argument("--assignee", default="rhn-cnf-elevin", help="Assignee for the new issue (default: %(default)s)")
-    parser.add_argument("--jira-server", default="https://issues.redhat.com", help="JIRA server URL (default: %(default)s)")
+    parser.add_argument("--assignee", default="elevin@redhat.com", help="Assignee for the new issue (default: %(default)s)")
+    parser.add_argument("--jira-server", default="https://redhat.atlassian.net", help="JIRA server URL (default: %(default)s)")
     return parser.parse_args()
 
-CONTRIBUTORS = ["rh-ee-ajaggapa", "gkopels@redhat.com", "rhn-cnf-elevin"]
+CONTRIBUTORS = ["ajaggapa@redhat.com", "gkopels@redhat.com", "elevin@redhat.com"]
 
-def create_issue_fields(original_issue, z_stream_version, assignee):
+def get_account_id_by_email(jira_client, identifier):
+    """Resolve an email or username to a Jira Cloud accountId."""
+    if not identifier:
+        return None
+    users = jira_client.search_users(query=identifier, maxResults=1)
+    if users:
+        return users[0].accountId
+    logging.warning(f"⚠️  Could not resolve user: {identifier}")
+    return None
+
+def create_issue_fields(jira_client, original_issue, z_stream_version, assignee):
     """Create the fields dictionary for the new cloned issue."""
-    return {
+    fields = {
         'project': {'key': original_issue.fields.project.key},
         'issuetype': {'name': original_issue.fields.issuetype.name},
         'description': original_issue.fields.description,
         'summary': f'QE Zstream Verification Release {z_stream_version}',
-        'assignee': {'name': assignee}
     }
+    account_id = get_account_id_by_email(jira_client, assignee)
+    if account_id:
+        fields['assignee'] = {'accountId': account_id}
+    return fields
 
 def add_contributors(jira_client, issue, contributors):
     """Set contributors on the issue using the contributors custom field."""
     try:
-        usernames = [{'name': c.strip()} for c in contributors if c.strip()]
-        issue.update(fields={'customfield_12315950': usernames})
+        accounts = []
+        for c in contributors:
+            account_id = get_account_id_by_email(jira_client, c.strip())
+            if account_id:
+                accounts.append({'accountId': account_id})
+        if not accounts:
+            return
+        issue.update(fields={'customfield_10466': accounts})
     except Exception as e:
         logging.warning(f"⚠️  Could not set contributors: {e}")
 
@@ -77,7 +87,7 @@ def clone_jira_issue(jira_client, jira_issue, z_stream_version, assignee, shared
         logging.info(f"✅ Successfully fetched issue: {issue_to_clone.key}")
 
         # Create new issue fields
-        new_issue_fields = create_issue_fields(issue_to_clone, z_stream_version, assignee)
+        new_issue_fields = create_issue_fields(jira_client, issue_to_clone, z_stream_version, assignee)
 
         # Create the cloned issue
         logging.info("Creating cloned issue...")
@@ -85,7 +95,7 @@ def clone_jira_issue(jira_client, jira_issue, z_stream_version, assignee, shared
 
         # Set story points to 1
         logging.info("Setting story points...")
-        cloned_issue.update(fields={'customfield_12310243': 1})
+        cloned_issue.update(fields={'customfield_10028': 1})
         logging.info("✅ Story points set to 1")
 
         # Add contributors

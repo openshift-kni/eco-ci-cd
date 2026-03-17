@@ -29,7 +29,7 @@ podman run --rm --name nrop-container-tests \
   -e E2E_NROP_MUSTGATHER_TAG=v{{ ocp_version_major }}:{{ ocp_version_minor }} \
   -v $(which oc):/usr/local/bin/oc \
 {{ nrop_test_image_tag }} \
-  --report-file /nrop/junit/junit.xml \
+  --report-file /nrop/junit/{{ scope }}_junit.xml \
 {% if ginkgo_focus | default("") != "" %}
   --focus "{{ ginkgo_focus }}" \
 {% endif %}

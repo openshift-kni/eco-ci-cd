@@ -60,6 +60,16 @@
     dest: "{{ tmp_workdir }}/artifacts/skip_filter.json"
     mode: '0664'
 
+- name: Set Scope if Reboot
+  ansible.builtin.set_fact:
+    scope: "reboot"
+  when: run_reboot_tests_only is true
+
+- name: Set scope for Non-reboot tests
+  ansible.builtin.set_fact:
+    scope: "{{ topology_manager_scope }}"
+  when: run_reboot_tests_only is false
+
 - name: Create Test dir
   ansible.builtin.file:
     state: directory

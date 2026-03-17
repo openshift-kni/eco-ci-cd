@@ -70,3 +70,16 @@
         path: "{{ item }}"
         state: absent
       loop: "{{ vm_disks_to_delete | union(agent_images_files_to_delete) }}"
+
+    - name: Find all tmp directories for agent ISO
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: 'tmp*'
+        file_type: directory
+      register: found_folders
+
+    - name: Delete the discovered folders for agent.iso
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ found_folders.files }}"

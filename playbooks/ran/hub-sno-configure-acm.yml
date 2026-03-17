@@ -326,6 +326,14 @@
       register: mch_siteconfig_patch
       failed_when: false
 
+    - name: Report siteconfig component not supported
+      ansible.builtin.debug:
+        msg: >-
+          Siteconfig component is not supported by this MCH version.
+          Skipping siteconfig-controller-manager wait.
+          Patch result: {{ mch_siteconfig_patch.msg | default('N/A') }}
+      when: mch_siteconfig_patch.status is defined and mch_siteconfig_patch.status == 403
+
     - name: Wait for siteconfig-controller-manager deployment to exist
       kubernetes.core.k8s_info:
         api_version: apps/v1
@@ -336,6 +344,7 @@
       until: siteconfig_deployment_exists.resources | length > 0
       retries: 30
       delay: 10
+      when: mch_siteconfig_patch is changed or (mch_siteconfig_patch.status is defined and mch_siteconfig_patch.status != 403)
 
     - name: Wait for siteconfig-controller-manager deployment to become available
       kubernetes.core.k8s_info:
@@ -350,8 +359,11 @@
         - siteconfig_deployment_status.resources[0].status.availableReplicas >= 1
       retries: 20
       delay: 15
+      when: siteconfig_deployment_exists is not skipped and siteconfig_deployment_exists is succeeded
 
     - name: Report siteconfig-controller-manager status
       ansible.builtin.debug:
         msg: "siteconfig-controller-manager deployment in namespace '{{ mce_namespace }}' is Available."
-      when: siteconfig_deployment_status is succeeded
+      when:
+        - siteconfig_deployment_status is not skipped
+        - siteconfig_deployment_status is succeeded

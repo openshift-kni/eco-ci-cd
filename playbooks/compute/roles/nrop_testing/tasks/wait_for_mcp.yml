@@ -8,7 +8,7 @@
     api_version: machineconfiguration.openshift.io/v1
     kind: MachineConfigPool
   register: machine_config_pool_post
-  retries: 120
+  retries: 360
   delay: 10
   until: |
     not machine_config_pool_post.failed

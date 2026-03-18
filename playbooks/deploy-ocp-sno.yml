@@ -587,6 +587,30 @@
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
 
+    - name: Create extra manifest to disable Insights operator
+      when: disable_insights | bool
+      block:
+        - name: Ensure extra manifests directory exists
+          ansible.builtin.file:
+            path: "{{ extra_manifest_dir }}"
+            state: directory
+            mode: "0775"
+
+        - name: Write Insights operator disable manifest
+          ansible.builtin.copy:
+            content: |
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: insights-config
+                namespace: openshift-config
+              data:
+                config.yaml: |
+                  dataReporting:
+                    enabled: false
+            dest: "{{ extra_manifest_dir }}/disable-insights-operator.yml"
+            mode: "0644"
+
     - name: Generate boot ISO for agent-based installer
       vars:
         gai_cluster_name: "{{ cluster_name }}"

@@ -548,22 +548,6 @@
       when:
         - extra_manifests_folder is defined and extra_manifests_folder | length > 0
 
-    - name: Create extra manifest to disable Insights operator
-      ansible.builtin.copy:
-        content: |
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: insights-config
-            namespace: openshift-config
-          data:
-            config.yaml: |
-              dataReporting:
-                enabled: false
-        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/disable-insights-operator.yml"
-        mode: "0644"
-      when: disable_insights | bool
-
     - name: Configure trusted CA for internal registry (SNO)
       when: disconnected | bool
       block:
@@ -586,6 +570,30 @@
             ocp_registry_image: openshift
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
+
+    - name: Create extra manifest to disable Insights operator
+      when: disable_insights | bool
+      block:
+        - name: Ensure extra manifests directory exists
+          ansible.builtin.file:
+            path: "{{ extra_manifest_dir }}"
+            state: directory
+            mode: "0775"
+
+        - name: Write Insights operator disable manifest
+          ansible.builtin.copy:
+            content: |
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: insights-config
+                namespace: openshift-config
+              data:
+                config.yaml: |
+                  dataReporting:
+                    enabled: false
+            dest: "{{ extra_manifest_dir }}/disable-insights-operator.yml"
+            mode: "0644"
 
     - name: Generate boot ISO for agent-based installer
       vars:

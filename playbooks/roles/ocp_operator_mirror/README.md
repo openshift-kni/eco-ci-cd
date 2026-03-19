@@ -56,6 +56,10 @@ Key variables (see `defaults/main.yaml` for full list and defaults):
 - `ocp_operator_mirror_art_images_share`: Registry/repo prefix used to pull ART images by digest when mapping source digests to a shared location.
 - `ocp_operator_mirror_bundle_version`: Optional bundle version substring used to filter channel entries when selecting a bundle from FBC catalogs (e.g., `4.19.3`). Leave empty to select the latest entry.
 
+**FBC operator item (optional):**
+- `multifile_catalog`: Set `true` on an FBC operator to read `bundles.yaml` under the package dir and resolve the package from the first `olm.bundle`’s `package` field; omit or `false` uses `catalog.yaml` and resolves from the first `olm.package`’s `name` (default). This only affects catalog parsing, not `skopeo` source URLs.
+- FBC **image pair `src` remaps** (org path → `/acm-d/`, `registry.stage.redhat.io` → `quay.io:443`) apply when `catalog` contains the substring `acm` or `mce` (case-insensitive). Other FBC operators use `image_list` as-is for `src` when mirroring from FBC.
+
 **Operator item (production catalogs):**
 - `catalog_version_override`: Optional. When set on an operator that uses a production catalog (redhat-operators, certified-operators, community-operators), that catalog’s index image version is overridden (e.g. `"4.18"`). Useful to pin one catalog to a different major.minor than `ocp_operator_mirror_version`.
 

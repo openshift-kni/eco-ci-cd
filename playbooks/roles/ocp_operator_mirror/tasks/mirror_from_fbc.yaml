@@ -37,6 +37,7 @@
     tag: "{{ fbc_tag }}"
     state: present
     force: true
+    authfile: "{{ ocp_operator_mirror_pull_secret_path }}"
 
 - name: Mirror FBC index image to internal registry (if missing)
   changed_when: true
@@ -109,16 +110,16 @@
           {{ item | to_nice_yaml(indent=2) }}
           {% endfor %}
 
-- name: Set catalog.yaml path
+- name: Set FBC catalog file path (bundles.yaml vs catalog.yaml)
   ansible.builtin.set_fact:
-    catalog_path: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
+    catalog_path: "{{ fbc_pkg_catalog_dir }}/{{ 'bundles.yaml' if ((operator.multifile_catalog | default(false)) | bool) else 'catalog.yaml' }}"
 
-- name: Read catalog.yaml
+- name: Read catalog file
   ansible.builtin.slurp:
     src: "{{ catalog_path }}"
   register: cat
 
-- name: Parse catalog.yaml into documents
+- name: Parse catalog file into documents
   changed_when: false
   ansible.builtin.set_fact:
     docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
@@ -126,19 +127,28 @@
 - name: Detect package name from catalog
   changed_when: false
   ansible.builtin.set_fact:
-    package: "{{ (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first) }}"
+    package: >-
+      {{
+        (docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | first)
+        if ((operator.multifile_catalog | default(false)) | bool)
+        else (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first)
+      }}
 
 - name: Assert package is present in catalog
   ansible.builtin.assert:
     that:
       - package is defined
       - package | length > 0
-    fail_msg: "No package found in catalog. Packages seen: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}"
+    fail_msg: >-
+      No package found in catalog (multifile_catalog={{ operator.multifile_catalog | default(false) }}).
+      olm.package names: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}.
+      olm.bundle package values: {{ docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | unique | list }}.
 
 - name: Collect all entry names for package/channel
   changed_when: false
   ansible.builtin.set_fact:
-    entry_names: >-
+    # Prefer olm.channel entries when present; fallback to all bundle names for this package (FBC may have only bundles.yaml)
+    _channel_entries: >-
       {{
         (docs
           | selectattr('schema','equalto','olm.channel')
@@ -147,6 +157,11 @@
           | map(attribute='entries') | first | default([])
           | map(attribute='name') | list)
       }}
+- name: Set entry_names from channel or from bundles
+  ansible.builtin.set_fact:
+    entry_names: "{{ _channel_entries if (_channel_entries | length) > 0 else 
+      (docs | selectattr('schema','equalto','olm.bundle') | selectattr('package','equalto', package) | map(attribute='name') | list) }}"
+  changed_when: false
 
 - name: Ensure channel has entries
   ansible.builtin.assert:
@@ -198,18 +213,18 @@
 - name: Build unique image list
   changed_when: false
   ansible.builtin.set_fact:
-    image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
+    _image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
 
 - name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
   changed_when: false
   ansible.builtin.set_fact:
-    image_list: "{{ image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
+    _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
   when: "((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0"
 
 - name: Collect unique source repositories (strip digests)
   changed_when: false
   ansible.builtin.set_fact:
-    source_repos: "{{ image_list | map('regex_replace', '@.*', '') | list | unique }}"
+    source_repos: "{{ _image_list | map('regex_replace', '@.*', '') | list | unique }}"
 
 - name: Select source repositories for mirror mapping
   changed_when: false
@@ -251,9 +266,9 @@
 - name: Build source/destination image pairs (map prod digest to FBC share; preserve original repo for destination)
   changed_when: false
   ansible.builtin.set_fact:
-    image_pairs: >-
+    _image_pairs: >-
       {{
-        (image_pairs | default([])) + [
+        (_image_pairs | default([])) + [
           {
             'src': (image
                     if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
@@ -264,10 +279,47 @@
           }
         ]
       }}
-  loop: "{{ image_list }}"
+  loop: "{{ _image_list }}"
   loop_control:
     loop_var: image
     label: "{{ image }}"
+
+- block:
+    - name: Reset image pairs for this FBC operator
+      changed_when: false
+      ansible.builtin.set_fact:
+        _image_pairs: []
+    - name: Build source/destination image pairs (ACM/MCE catalog; FBC source remap to acm-d / quay)
+      changed_when: false
+      ansible.builtin.set_fact:
+        _image_pairs: >-
+          {{
+            (_image_pairs | default([])) + [
+              {
+                'src': (
+                  (image
+                  | replace('registry.stage.redhat.io/rhacm2', 'quay.io:443/acm-d')
+                  | replace('registry.stage.redhat.io/multicluster-engine', 'quay.io:443/acm-d'))
+                  if (((operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base | default(''))) | length) > 0)
+                  else ((image | regex_search('@sha256:[0-9a-f]{64}'))
+                        | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image))
+                ),
+                'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
+              }
+            ]
+          }}
+      loop: "{{ _image_list }}"
+      loop_control:
+        loop_var: image
+        label: "{{ image }}"
+  when: >-
+    ('acm' in ((operator.catalog | default('')) | lower))
+    or ('mce' in ((operator.catalog | default('')) | lower))
+
+- name: Set image pairs
+  ansible.builtin.set_fact:
+    image_pairs: "{{ (image_pairs | default([])) + (_image_pairs | default([])) }}"
+  changed_when: false
 
 - name: Ensure CatalogSource for mirrored index is present
   kubernetes.core.k8s:

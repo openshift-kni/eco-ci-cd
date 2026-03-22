@@ -517,7 +517,8 @@
       register: policies
       until:
         - policies.resources | length > 0
-        - (policies.resources | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
+        - (policies.resources | selectattr('status', 'defined') | selectattr('status.compliant', 'defined') | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
+        - (policies.resources | rejectattr('status', 'defined') | list | length) == 0
       retries: 60
       delay: 60
 

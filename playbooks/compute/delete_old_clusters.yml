@@ -4,8 +4,17 @@
   become: true
   vars:
     libvirt_storage_path: /var/lib/libvirt/images
-
   tasks:
+    - name: Force power off node via Redfish
+      community.general.redfish_command:
+        category: Systems
+        command: PowerForceOff
+        baseuri: "{{ hostvars[item].bmc_address }}"
+        username: "{{ hostvars[item].bmc_user }}"
+        password: "{{ hostvars[item].bmc_password }}"
+      when: hostvars[item].vendor | default('') | lower != 'kvm'
+      loop: "{{ groups['nodes'] | default([]) }}"
+      
     - name: Get all Running VMs
       community.libvirt.virt:
         command: list_vms

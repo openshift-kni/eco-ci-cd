@@ -7,7 +7,7 @@
         kind: Subscription
         name: ptp-operator-subscription
         namespace: openshift-ptp
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _ptp_sub
 
     - name: Set PTP operator version fact

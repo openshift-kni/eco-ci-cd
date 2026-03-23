@@ -5,9 +5,9 @@ This role is provided as-is, without any guarantees of support or maintenance.
 The author or contributors are not responsible for any issues arising from the use of this role. Use it at your own discretion.
 
 ## Overview
-The `collect_metrics` role collects operator versions and cluster metadata from OpenShift hub and/or spoke clusters. It writes a `REPORTS_PORTAL_ATTRIBUTES` string to a metrics file for use by the upload-report playbook.
+The `collect_metrics` role collects operator versions and cluster metadata from OpenShift hub and/or spoke clusters. It writes a semicolon-delimited metrics string to a file for use by the upload-report playbook.
 
-The role is designed to be modular — each metric category is an independent task file that can be included or excluded via the `metrics_list` variable. If a single metric fails to collect, the role continues and sets that metric to `N/A`.
+The role is designed to be modular — each metric category is an independent task file that can be included or excluded via the `collect_metrics_list` variable. If a single metric fails to collect, the role continues and sets that metric to `N/A`.
 
 ## Requirements
 - Ansible 2.9+
@@ -20,17 +20,17 @@ All variables are **required** (no defaults):
 
 | Variable | Description |
 |---|---|
-| `spoke_kubeconfig` | Path to the spoke cluster kubeconfig file |
-| `hub_kubeconfig` | Path to the hub cluster kubeconfig file (required only when hub metrics are in `metrics_list`) |
-| `ci_lane` | CI lane identifier for the test run |
-| `metrics_list` | List of metric categories to collect (see below) |
-| `metrics_output_file` | Path to the output file |
+| `collect_metrics_spoke_kubeconfig` | Path to the spoke cluster kubeconfig file |
+| `collect_metrics_hub_kubeconfig` | Path to the hub cluster kubeconfig file (required only when hub metrics are in `collect_metrics_list`) |
+| `collect_metrics_ci_lane` | CI lane identifier for the test run |
+| `collect_metrics_list` | List of metric categories to collect (see below) |
+| `collect_metrics_output_file` | Path to the output file |
 
 ### Output
 
-The role sets the `metrics_attributes` fact containing the full semicolon-delimited metrics string, which can be used in subsequent tasks.
+The role sets the `collect_metrics_attributes` fact containing the full semicolon-delimited metrics string, which can be used in subsequent tasks.
 
-## Metric Categories (can be extended)
+## Metric Categories
 
 | Category | Cluster | Description |
 |---|---|---|
@@ -53,11 +53,11 @@ The role sets the `metrics_attributes` fact containing the full semicolon-delimi
   gather_facts: false
   roles:
     - role: collect_metrics
-      spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
-      hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
-      ci_lane: "{{ ran_ci_lane }}"
-      metrics_output_file: /tmp/metrics/ran-metrics.txt
-      metrics_list:
+      collect_metrics_spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
+      collect_metrics_hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
+      collect_metrics_ci_lane: "{{ ran_ci_lane }}"
+      collect_metrics_output_file: /tmp/metrics/ran-metrics.txt
+      collect_metrics_list:
         - spoke_general_ocp
         - hub_general_ocp
         - sriov
@@ -76,16 +76,15 @@ The role sets the `metrics_attributes` fact containing the full semicolon-delimi
   gather_facts: false
   roles:
     - role: collect_metrics
-      spoke_kubeconfig: /path/to/kubeconfig
-      ci_lane: my-lane
-      metrics_output_file: /tmp/metrics/metrics.txt
-      metrics_list:
+      collect_metrics_spoke_kubeconfig: /path/to/kubeconfig
+      collect_metrics_ci_lane: my-lane
+      collect_metrics_output_file: /tmp/metrics/metrics.txt
+      collect_metrics_list:
         - spoke_general_ocp
         - sriov
         - ptp
         - logging
 ```
-
 
 ## Error Handling
 

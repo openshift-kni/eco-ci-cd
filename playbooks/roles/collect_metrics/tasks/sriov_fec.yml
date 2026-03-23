@@ -7,7 +7,7 @@
         kind: Subscription
         name: sriov-fec
         namespace: vran-acceleration-operators
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _sriov_fec_sub
 
     - name: Set SR-IOV FEC operator version fact

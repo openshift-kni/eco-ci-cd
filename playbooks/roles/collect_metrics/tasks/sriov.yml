@@ -7,7 +7,7 @@
         kind: Subscription
         name: sriov-network-operator-subscription
         namespace: openshift-sriov-network-operator
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _sriov_sub
 
     - name: Set SR-IOV operator version fact

@@ -7,7 +7,7 @@
         kind: Subscription
         name: acm-operator-subscription
         namespace: open-cluster-management
-        kubeconfig: "{{ hub_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _acm_sub
 
     - name: Set ACM operator version fact

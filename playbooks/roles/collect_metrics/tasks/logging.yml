@@ -7,7 +7,7 @@
         kind: Subscription
         name: cluster-logging
         namespace: openshift-logging
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _cluster_logging_sub
 
     - name: Set cluster-logging operator version fact

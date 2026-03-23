@@ -1,9 +1,10 @@
 ---
-# Ansible Playbook: Collect Metrics for Report Portal
+# Ansible Playbook: Collect RAN Metrics
 # -------------------------------------------------
 # This playbook collects operator versions and cluster metadata from hub and
-# spoke OpenShift clusters, then writes a REPORTS_PORTAL_ATTRIBUTES string
-# to a metrics file for use by the upload-report playbook.
+# spoke OpenShift clusters, then writes a semicolon-delimited metrics string
+# to a file for use by the upload-report playbook.
+# It uses the collect_metrics role to gather all RAN-relevant metrics.
 
 # Requirements:
 # - Bastion host with access to the hub and spoke clusters
@@ -39,11 +40,11 @@
           and ran_output_file must be provided via --extra-vars
   roles:
     - role: collect_metrics
-      spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
-      hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
-      ci_lane: "{{ ran_ci_lane }}"
-      metrics_output_file: "{{ ran_output_file }}"
-      metrics_list:
+      collect_metrics_spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
+      collect_metrics_hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
+      collect_metrics_ci_lane: "{{ ran_ci_lane }}"
+      collect_metrics_output_file: "{{ ran_output_file }}"
+      collect_metrics_list:
         - spoke_general_ocp
         - hub_general_ocp
         - sriov

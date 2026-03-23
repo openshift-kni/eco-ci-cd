@@ -7,7 +7,7 @@
         kind: Subscription
         name: openshift-gitops-operator
         namespace: openshift-gitops-operator
-        kubeconfig: "{{ hub_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _gitops_sub
 
     - name: Set GitOps operator version fact

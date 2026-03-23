@@ -6,7 +6,7 @@
         api_version: config.openshift.io/v1
         kind: ClusterVersion
         name: version
-        kubeconfig: "{{ hub_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _hub_cluster_version
 
     - name: Set hub version facts
@@ -44,7 +44,7 @@
         api_version: config.openshift.io/v1
         kind: Infrastructure
         name: cluster
-        kubeconfig: "{{ hub_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _hub_infra
 
     - name: Append hub cluster name to metrics

@@ -6,7 +6,7 @@
         api_version: config.openshift.io/v1
         kind: ClusterVersion
         name: version
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _spoke_cluster_version
 
     - name: Set spoke version facts
@@ -44,7 +44,7 @@
         api_version: config.openshift.io/v1
         kind: Infrastructure
         name: cluster
-        kubeconfig: "{{ spoke_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _spoke_infra
 
     - name: Append spoke cluster name to metrics

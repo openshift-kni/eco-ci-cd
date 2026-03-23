@@ -7,7 +7,7 @@
         kind: Subscription
         name: topology-aware-lifecycle-manager
         namespace: openshift-operators
-        kubeconfig: "{{ hub_kubeconfig }}"
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _talm_sub
 
     - name: Set TALM operator version fact

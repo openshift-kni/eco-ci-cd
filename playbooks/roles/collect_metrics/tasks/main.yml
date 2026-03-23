@@ -2,83 +2,88 @@
 - name: Validate required variables
   ansible.builtin.assert:
     that:
-      - spoke_kubeconfig is defined
-      - ci_lane is defined
-      - metrics_list is defined
-      - metrics_output_file is defined
+      - collect_metrics_spoke_kubeconfig is defined
+      - collect_metrics_ci_lane is defined
+      - collect_metrics_list is defined
+      - collect_metrics_output_file is defined
     fail_msg: >-
-      spoke_kubeconfig, ci_lane, metrics_list and metrics_output_file
-      must be provided
+      collect_metrics_spoke_kubeconfig, collect_metrics_ci_lane,
+      collect_metrics_list and collect_metrics_output_file must be provided
 
 - name: Validate hub kubeconfig when hub metrics are requested
-  when: "'hub_general_ocp' in metrics_list or 'acm' in metrics_list or 'talm' in metrics_list or 'gitops' in metrics_list"
+  when: "'hub_general_ocp' in collect_metrics_list or 'acm' in collect_metrics_list or 'talm' in collect_metrics_list or 'gitops' in collect_metrics_list"
   ansible.builtin.assert:
     that:
-      - hub_kubeconfig is defined
+      - collect_metrics_hub_kubeconfig is defined
     fail_msg: >-
-      hub_kubeconfig must be provided when
-      hub_general_ocp, acm, talm or gitops is in metrics_list
+      collect_metrics_hub_kubeconfig must be provided when
+      hub_general_ocp, acm, talm or gitops is in collect_metrics_list
 
 - name: Initialize collected metrics
   ansible.builtin.set_fact:
     _collect_metrics_entries: []
 
 - name: Collect spoke general OCP metrics
-  when: "'spoke_general_ocp' in metrics_list"
+  when: "'spoke_general_ocp' in collect_metrics_list"
   ansible.builtin.include_tasks: spoke_general_ocp.yml
 
 - name: Collect hub general OCP metrics
-  when: "'hub_general_ocp' in metrics_list"
+  when: "'hub_general_ocp' in collect_metrics_list"
   ansible.builtin.include_tasks: hub_general_ocp.yml
 
 - name: Collect SR-IOV metrics
-  when: "'sriov' in metrics_list"
+  when: "'sriov' in collect_metrics_list"
   ansible.builtin.include_tasks: sriov.yml
 
 - name: Collect SR-IOV FEC metrics
-  when: "'sriov_fec' in metrics_list"
+  when: "'sriov_fec' in collect_metrics_list"
   ansible.builtin.include_tasks: sriov_fec.yml
 
 - name: Collect PTP metrics
-  when: "'ptp' in metrics_list"
+  when: "'ptp' in collect_metrics_list"
   ansible.builtin.include_tasks: ptp.yml
 
 - name: Collect ACM metrics
-  when: "'acm' in metrics_list"
+  when: "'acm' in collect_metrics_list"
   ansible.builtin.include_tasks: acm.yml
 
 - name: Collect TALM metrics
-  when: "'talm' in metrics_list"
+  when: "'talm' in collect_metrics_list"
   ansible.builtin.include_tasks: talm.yml
 
 - name: Collect GitOps metrics
-  when: "'gitops' in metrics_list"
+  when: "'gitops' in collect_metrics_list"
   ansible.builtin.include_tasks: gitops.yml
 
 - name: Collect logging metrics
-  when: "'logging' in metrics_list"
+  when: "'logging' in collect_metrics_list"
   ansible.builtin.include_tasks: logging.yml
 
 - name: Append CI lane to metrics
   ansible.builtin.set_fact:
-    _collect_metrics_entries: "{{ _collect_metrics_entries + ['ci_lane:' + ci_lane] }}"
+    _collect_metrics_entries: "{{ _collect_metrics_entries + ['ci_lane:' + collect_metrics_ci_lane] }}"
 
 - name: Build metrics attributes string
   ansible.builtin.set_fact:
-    metrics_attributes: "{{ _collect_metrics_entries | join(';') }}"
+    collect_metrics_attributes: "{{ _collect_metrics_entries | join(';') }}"
 
-- name: Ensure output directory exists
+- name: Remove output directory to ensure clean state
   ansible.builtin.file:
-    path: "{{ metrics_output_file | dirname }}"
+    path: "{{ collect_metrics_output_file | dirname }}"
+    state: absent
+
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ collect_metrics_output_file | dirname }}"
     state: directory
     mode: "0775"
 
 - name: Write metrics to file
   ansible.builtin.copy:
-    content: 'REPORTS_PORTAL_ATTRIBUTES="{{ metrics_attributes }}"'
-    dest: "{{ metrics_output_file }}"
+    content: "{{ collect_metrics_attributes }}"
+    dest: "{{ collect_metrics_output_file }}"
     mode: "0644"
 
 - name: Display collected metrics
   ansible.builtin.debug:
-    msg: "{{ metrics_attributes }}"
+    msg: "{{ collect_metrics_attributes }}"

@@ -1,0 +1,55 @@
+---
+# Ansible Playbook: Collect Metrics for Report Portal
+# -------------------------------------------------
+# This playbook collects operator versions and cluster metadata from hub and
+# spoke OpenShift clusters, then writes a REPORTS_PORTAL_ATTRIBUTES string
+# to a metrics file for use by the upload-report playbook.
+
+# Requirements:
+# - Bastion host with access to the hub and spoke clusters
+# - Valid kubeconfig files for hub and spoke clusters
+
+# Usage:
+# ansible-playbook ./playbooks/ran/collect-metrics.yml \
+#   -i ./inventories/ocp-deployment/build-inventory.py \
+#   --extra-vars "ran_hub_kubeconfig=/path/to/hub/kubeconfig \
+#   ran_spoke_kubeconfig=/path/to/spoke/kubeconfig \
+#   ran_ci_lane=my-lane \
+#   ran_output_file=/tmp/metrics/ran-metrics.txt"
+
+# Vars needed:
+# ran_spoke_kubeconfig  Path to the spoke cluster kubeconfig file. Example: /home/user/.kube/spoke-kubeconfig
+# ran_hub_kubeconfig    Path to the hub cluster kubeconfig file. Example: /home/user/.kube/hub-kubeconfig
+# ran_ci_lane           CI lane identifier for the test run. Example: ran-4.17
+# ran_output_file       Path to the output file. Example: /tmp/metrics/ran-metrics.txt
+
+- name: Collect metrics for report portal
+  hosts: bastion
+  gather_facts: false
+  pre_tasks:
+    - name: Validate RAN required variables
+      ansible.builtin.assert:
+        that:
+          - ran_spoke_kubeconfig is defined
+          - ran_hub_kubeconfig is defined
+          - ran_ci_lane is defined
+          - ran_output_file is defined
+        fail_msg: >-
+          ran_spoke_kubeconfig, ran_hub_kubeconfig, ran_ci_lane
+          and ran_output_file must be provided via --extra-vars
+  roles:
+    - role: collect_metrics
+      spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
+      hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
+      ci_lane: "{{ ran_ci_lane }}"
+      metrics_output_file: "{{ ran_output_file }}"
+      metrics_list:
+        - spoke_general_ocp
+        - hub_general_ocp
+        - sriov
+        - sriov_fec
+        - ptp
+        - acm
+        - talm
+        - gitops
+        - logging

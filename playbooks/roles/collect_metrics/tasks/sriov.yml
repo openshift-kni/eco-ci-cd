@@ -1,0 +1,33 @@
+---
+- name: Collect SR-IOV operator version
+  block:
+    - name: Get SR-IOV subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: sriov-network-operator-subscription
+        namespace: openshift-sriov-network-operator
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: _sriov_sub
+
+    - name: Set SR-IOV operator version fact
+      ansible.builtin.set_fact:
+        _sriov_operator: "{{ _sriov_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _sriov_sub.resources | length > 0
+
+    - name: Append SR-IOV operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['sriov_operator:' + (_sriov_operator | default('N/A'))] }}"
+
+    - name: Display SR-IOV operator version
+      ansible.builtin.debug:
+        msg: "SR-IOV operator: {{ _sriov_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle SR-IOV operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect SR-IOV operator version, setting to N/A"
+
+    - name: Append default SR-IOV operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['sriov_operator:N/A'] }}"

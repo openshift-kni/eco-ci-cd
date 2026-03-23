@@ -1,0 +1,33 @@
+---
+- name: Collect GitOps operator version
+  block:
+    - name: Get GitOps subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: openshift-gitops-operator
+        namespace: openshift-gitops-operator
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: _gitops_sub
+
+    - name: Set GitOps operator version fact
+      ansible.builtin.set_fact:
+        _gitops_operator: "{{ _gitops_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _gitops_sub.resources | length > 0
+
+    - name: Append GitOps operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['gitops_operator:' + (_gitops_operator | default('N/A'))] }}"
+
+    - name: Display GitOps operator version
+      ansible.builtin.debug:
+        msg: "GitOps operator: {{ _gitops_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle GitOps operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect GitOps operator version, setting to N/A"
+
+    - name: Append default GitOps operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['gitops_operator:N/A'] }}"

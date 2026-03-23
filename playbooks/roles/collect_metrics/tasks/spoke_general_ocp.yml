@@ -1,0 +1,67 @@
+---
+- name: Collect spoke OCP version
+  block:
+    - name: Get spoke OCP version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: _spoke_cluster_version
+
+    - name: Set spoke version facts
+      ansible.builtin.set_fact:
+        _spoke_ocp_build: "{{ _spoke_cluster_version.resources[0].status.desired.version }}"
+        _spoke_ocp_version: "{{ _spoke_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+
+    - name: Append spoke OCP version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             ['spoke_ocp_build:' + _spoke_ocp_build,
+              'spoke_ocp_version:' + _spoke_ocp_version] }}
+
+    - name: Display spoke version
+      ansible.builtin.debug:
+        msg: "Spoke OCP: {{ _spoke_ocp_build }} ({{ _spoke_ocp_version }})"
+
+  rescue:
+    - name: Handle spoke OCP version collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect spoke OCP version, setting to N/A"
+
+    - name: Append default spoke OCP version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             ['spoke_ocp_build:N/A',
+              'spoke_ocp_version:N/A'] }}
+
+- name: Collect spoke cluster name
+  block:
+    - name: Get spoke cluster infrastructure
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: _spoke_infra
+
+    - name: Append spoke cluster name to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             ['spoke_cluster_name:' + _spoke_infra.resources[0].status.infrastructureName] }}
+
+    - name: Display spoke cluster name
+      ansible.builtin.debug:
+        msg: "Spoke cluster: {{ _spoke_infra.resources[0].status.infrastructureName }}"
+
+  rescue:
+    - name: Handle spoke cluster name collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect spoke cluster name, setting to N/A"
+
+    - name: Append default spoke cluster name to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['spoke_cluster_name:N/A'] }}"

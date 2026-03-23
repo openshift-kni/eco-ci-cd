@@ -1,0 +1,33 @@
+---
+- name: Collect cluster-logging operator version
+  block:
+    - name: Get cluster-logging subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-logging
+        namespace: openshift-logging
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: _cluster_logging_sub
+
+    - name: Set cluster-logging operator version fact
+      ansible.builtin.set_fact:
+        _cluster_logging_operator: "{{ _cluster_logging_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _cluster_logging_sub.resources | length > 0
+
+    - name: Append cluster-logging operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['cluster_logging_operator:' + (_cluster_logging_operator | default('N/A'))] }}"
+
+    - name: Display cluster-logging operator version
+      ansible.builtin.debug:
+        msg: "Cluster Logging operator: {{ _cluster_logging_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle cluster-logging operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect cluster-logging operator version, setting to N/A"
+
+    - name: Append default cluster-logging operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['cluster_logging_operator:N/A'] }}"

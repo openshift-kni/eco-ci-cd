@@ -1,0 +1,33 @@
+---
+- name: Collect ACM operator version
+  block:
+    - name: Get ACM subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: acm-operator-subscription
+        namespace: open-cluster-management
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: _acm_sub
+
+    - name: Set ACM operator version fact
+      ansible.builtin.set_fact:
+        _acm_operator: "{{ _acm_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _acm_sub.resources | length > 0
+
+    - name: Append ACM operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['acm_operator:' + (_acm_operator | default('N/A'))] }}"
+
+    - name: Display ACM operator version
+      ansible.builtin.debug:
+        msg: "ACM operator: {{ _acm_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle ACM operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect ACM operator version, setting to N/A"
+
+    - name: Append default ACM operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['acm_operator:N/A'] }}"

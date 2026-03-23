@@ -1,0 +1,33 @@
+---
+- name: Collect PTP operator version
+  block:
+    - name: Get PTP subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: ptp-operator-subscription
+        namespace: openshift-ptp
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: _ptp_sub
+
+    - name: Set PTP operator version fact
+      ansible.builtin.set_fact:
+        _ptp_operator: "{{ _ptp_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _ptp_sub.resources | length > 0
+
+    - name: Append PTP operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['ptp_operator:' + (_ptp_operator | default('N/A'))] }}"
+
+    - name: Display PTP operator version
+      ansible.builtin.debug:
+        msg: "PTP operator: {{ _ptp_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle PTP operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect PTP operator version, setting to N/A"
+
+    - name: Append default PTP operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['ptp_operator:N/A'] }}"

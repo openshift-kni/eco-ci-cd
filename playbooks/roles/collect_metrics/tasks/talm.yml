@@ -1,0 +1,33 @@
+---
+- name: Collect TALM operator version
+  block:
+    - name: Get TALM subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: topology-aware-lifecycle-manager
+        namespace: openshift-operators
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: _talm_sub
+
+    - name: Set TALM operator version fact
+      ansible.builtin.set_fact:
+        _talm_operator: "{{ _talm_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _talm_sub.resources | length > 0
+
+    - name: Append TALM operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['talm_operator:' + (_talm_operator | default('N/A'))] }}"
+
+    - name: Display TALM operator version
+      ansible.builtin.debug:
+        msg: "TALM operator: {{ _talm_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle TALM operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect TALM operator version, setting to N/A"
+
+    - name: Append default TALM operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['talm_operator:N/A'] }}"

@@ -1,9 +1,4 @@
 ---
-## Disclaimer:
-# This playbook is not officially supported and comes with no guarantees.
-# Use it at your own risk. Be sure to test thoroughly in your environment
-# before deploying to production.
-
 # Ansible Playbook: Collect Metrics for Report Portal
 # -------------------------------------------------
 # This playbook collects operator versions and cluster metadata from hub and
@@ -11,260 +6,50 @@
 # to a metrics file for use by the upload-report playbook.
 
 # Requirements:
-# - Hub and spoke OpenShift clusters
-# - Bastion host with access to both clusters
-# - Ansible and the `kubernetes.core` collection installed
-# - Valid kubeconfig files for both hub and spoke clusters
+# - Bastion host with access to the hub and spoke clusters
+# - Valid kubeconfig files for hub and spoke clusters
 
 # Usage:
 # ansible-playbook ./playbooks/ran/collect-metrics.yml \
-#   --extra-vars "hub_kubeconfig=/path/to/hub/kubeconfig \
-#   spoke_kubeconfig=/path/to/spoke/kubeconfig \
-#   ci_lane=my-lane"
+#   -i ./inventories/ocp-deployment/build-inventory.py \
+#   --extra-vars "ran_hub_kubeconfig=/path/to/hub/kubeconfig \
+#   ran_spoke_kubeconfig=/path/to/spoke/kubeconfig \
+#   ran_ci_lane=my-lane \
+#   ran_output_file=/tmp/metrics/ran-metrics.txt"
 
 # Vars needed:
-# hub_kubeconfig       Path to the hub cluster kubeconfig file. Example: /home/user/.kube/hub-kubeconfig
-# spoke_kubeconfig     Path to the spoke cluster kubeconfig file. Example: /home/user/.kube/spoke-kubeconfig
-# ci_lane              CI lane identifier for the test run. Example: ran-4.17
+# ran_spoke_kubeconfig  Path to the spoke cluster kubeconfig file. Example: /home/user/.kube/spoke-kubeconfig
+# ran_hub_kubeconfig    Path to the hub cluster kubeconfig file. Example: /home/user/.kube/hub-kubeconfig
+# ran_ci_lane           CI lane identifier for the test run. Example: ran-4.17
+# ran_output_file       Path to the output file. Example: /tmp/metrics/ran-metrics.txt
 
 - name: Collect metrics for report portal
   hosts: bastion
   gather_facts: false
-  vars:
-    metrics_dir: /tmp/metrics
-  tasks:
-    - name: Validate required variables
+  pre_tasks:
+    - name: Validate RAN required variables
       ansible.builtin.assert:
         that:
-          - hub_kubeconfig is defined
-          - spoke_kubeconfig is defined
-          - ci_lane is defined
-        fail_msg: "hub_kubeconfig, spoke_kubeconfig and ci_lane must be provided via --extra-vars"
-
-    - name: Create metrics directory
-      ansible.builtin.file:
-        path: "{{ metrics_dir }}"
-        state: directory
-        mode: '0775'
-
-    - name: Get spoke OCP version
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: ClusterVersion
-        name: version
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: spoke_cluster_version
-
-    - name: Set spoke version facts
-      ansible.builtin.set_fact:
-        spoke_ocp_build: "{{ spoke_cluster_version.resources[0].status.desired.version }}"
-        spoke_ocp_version: "{{ spoke_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
-
-    - name: Display spoke version
-      ansible.builtin.debug:
-        msg: "Spoke OCP: {{ spoke_ocp_build }} ({{ spoke_ocp_version }})"
-
-    - name: Get hub OCP version
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: ClusterVersion
-        name: version
-        kubeconfig: "{{ hub_kubeconfig }}"
-      register: hub_cluster_version
-
-    - name: Set hub version facts
-      ansible.builtin.set_fact:
-        hub_ocp_build: "{{ hub_cluster_version.resources[0].status.desired.version }}"
-        hub_ocp_version: "{{ hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
-
-    - name: Display hub version
-      ansible.builtin.debug:
-        msg: "Hub OCP: {{ hub_ocp_build }} ({{ hub_ocp_version }})"
-
-    - name: Get spoke cluster name
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: Infrastructure
-        name: cluster
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: spoke_infra
-
-    - name: Set spoke cluster name
-      ansible.builtin.set_fact:
-        spoke_cluster_name: "{{ spoke_infra.resources[0].status.infrastructureName }}"
-
-    - name: Display spoke cluster name
-      ansible.builtin.debug:
-        msg: "Spoke cluster: {{ spoke_cluster_name }}"
-
-    - name: Get hub cluster name
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: Infrastructure
-        name: cluster
-        kubeconfig: "{{ hub_kubeconfig }}"
-      register: hub_infra
-
-    - name: Set hub cluster name
-      ansible.builtin.set_fact:
-        hub_cluster_name: "{{ hub_infra.resources[0].status.infrastructureName }}"
-
-    - name: Display hub cluster name
-      ansible.builtin.debug:
-        msg: "Hub cluster: {{ hub_cluster_name }}"
-
-    - name: Get sriov version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: sriov-network-operator-subscription
-        namespace: openshift-sriov-network-operator
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: sriov_sub
-
-    - name: Set sriov operator facts
-      ansible.builtin.set_fact:
-        sriov_operator: "{{ sriov_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: sriov_sub.resources | length > 0
-
-    - name: Display sriov operator version
-      ansible.builtin.debug:
-        msg: "SR-IOV operator: {{ sriov_operator | default('N/A') }}"
-
-    - name: Get ptp version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: ptp-operator-subscription
-        namespace: openshift-ptp
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: ptp_sub
-
-    - name: Set ptp operator facts
-      ansible.builtin.set_fact:
-        ptp_operator: "{{ ptp_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: ptp_sub.resources | length > 0
-
-    - name: Display ptp operator version
-      ansible.builtin.debug:
-        msg: "PTP operator: {{ ptp_operator | default('N/A') }}"
-
-    - name: Get ACM version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: acm-operator-subscription
-        namespace: open-cluster-management
-        kubeconfig: "{{ hub_kubeconfig }}"
-      register: acm_sub
-
-    - name: Set acm operator facts
-      ansible.builtin.set_fact:
-        acm_operator: "{{ acm_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: acm_sub.resources | length > 0
-
-    - name: Display ACM operator version
-      ansible.builtin.debug:
-        msg: "ACM operator: {{ acm_operator | default('N/A') }}"
-
-    - name: Get TALM version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: topology-aware-lifecycle-manager
-        namespace: openshift-operators
-        kubeconfig: "{{ hub_kubeconfig }}"
-      register: talm_sub
-
-    - name: Set talm operator facts
-      ansible.builtin.set_fact:
-        talm_operator: "{{ talm_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: talm_sub.resources | length > 0
-
-    - name: Display TALM operator version
-      ansible.builtin.debug:
-        msg: "TALM operator: {{ talm_operator | default('N/A') }}"
-
-    - name: Get GitOps version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: openshift-gitops-operator
-        namespace: openshift-gitops-operator
-        kubeconfig: "{{ hub_kubeconfig }}"
-      register: gitops_sub
-
-    - name: Set gitops operator facts
-      ansible.builtin.set_fact:
-        gitops_operator: "{{ gitops_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: gitops_sub.resources | length > 0
-
-    - name: Display GitOps operator version
-      ansible.builtin.debug:
-        msg: "GitOps operator: {{ gitops_operator | default('N/A') }}"
-
-    - name: Get sriov-fec version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: sriov-fec
-        namespace: vran-acceleration-operators
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: sriov_fec_sub
-
-    - name: Set sriov-fec operator facts
-      ansible.builtin.set_fact:
-        sriov_fec_operator: "{{ sriov_fec_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: sriov_fec_sub.resources | length > 0
-
-    - name: Display SR-IOV FEC operator version
-      ansible.builtin.debug:
-        msg: "SR-IOV FEC operator: {{ sriov_fec_operator | default('N/A') }}"
-
-    - name: Get cluster-logging version
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: Subscription
-        name: cluster-logging
-        namespace: openshift-logging
-        kubeconfig: "{{ spoke_kubeconfig }}"
-      register: cluster_logging_sub
-
-    - name: Set cluster logging operator facts
-      ansible.builtin.set_fact:
-        cluster_logging_operator: "{{ cluster_logging_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: cluster_logging_sub.resources | length > 0
-
-    - name: Display Cluster Logging operator version
-      ansible.builtin.debug:
-        msg: "Cluster Logging operator: {{ cluster_logging_operator | default('N/A') }}"
-
-    - name: Build metrics attributes string
-      ansible.builtin.set_fact:
-        reports_portal_attributes: "{{ metrics_list | join(';') }}"
-      vars:
-        metrics_list:
-          - "spoke_ocp_build:{{ spoke_ocp_build }}"
-          - "spoke_ocp_version:{{ spoke_ocp_version }}"
-          - "hub_ocp_build:{{ hub_ocp_build }}"
-          - "hub_ocp_version:{{ hub_ocp_version }}"
-          - "spoke_cluster_name:{{ spoke_cluster_name }}"
-          - "hub_cluster_name:{{ hub_cluster_name }}"
-          - "ci_lane:{{ ci_lane }}"
-          - "sriov_operator:{{ sriov_operator | default('N/A') }}"
-          - "ptp_operator:{{ ptp_operator | default('N/A') }}"
-          - "acm_operator:{{ acm_operator | default('N/A') }}"
-          - "talm_operator:{{ talm_operator | default('N/A') }}"
-          - "gitops_operator:{{ gitops_operator | default('N/A') }}"
-          - "sriov_fec_operator:{{ sriov_fec_operator | default('N/A') }}"
-          - "cluster_logging_operator:{{ cluster_logging_operator | default('N/A') }}"
-
-    - name: Write metrics to file
-      ansible.builtin.copy:
-        content: "REPORTS_PORTAL_ATTRIBUTES=\"{{ reports_portal_attributes }}\"\n"
-        dest: "{{ metrics_dir }}/metrics.txt"
-        mode: '0644'
-
-    - name: Display collected metrics
-      ansible.builtin.debug:
-        msg: "{{ reports_portal_attributes }}"
+          - ran_spoke_kubeconfig is defined
+          - ran_hub_kubeconfig is defined
+          - ran_ci_lane is defined
+          - ran_output_file is defined
+        fail_msg: >-
+          ran_spoke_kubeconfig, ran_hub_kubeconfig, ran_ci_lane
+          and ran_output_file must be provided via --extra-vars
+  roles:
+    - role: collect_metrics
+      spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
+      hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
+      ci_lane: "{{ ran_ci_lane }}"
+      metrics_output_file: "{{ ran_output_file }}"
+      metrics_list:
+        - spoke_general_ocp
+        - hub_general_ocp
+        - sriov
+        - sriov_fec
+        - ptp
+        - acm
+        - talm
+        - gitops
+        - logging

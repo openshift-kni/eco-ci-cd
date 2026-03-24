@@ -84,6 +84,12 @@
     dest: "{{ collect_metrics_output_file }}"
     mode: "0644"
 
+- name: Fetch metrics file from bastion to localhost
+  ansible.builtin.fetch:
+    src: "{{ collect_metrics_output_file }}"
+    dest: "{{ collect_metrics_output_file }}"
+    flat: true
+
 - name: Display collected metrics
   ansible.builtin.debug:
     msg: "{{ collect_metrics_attributes }}"

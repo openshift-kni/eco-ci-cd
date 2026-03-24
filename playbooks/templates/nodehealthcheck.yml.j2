@@ -1,0 +1,22 @@
+apiVersion: remediation.medik8s.io/v1alpha1
+kind: NodeHealthCheck
+metadata:
+  name: nhc-worker-self
+spec:
+  minHealthy: {{ nhc_min_healthy }}
+  remediationTemplate:
+    apiVersion: self-node-remediation.medik8s.io/v1alpha1
+    kind: SelfNodeRemediationTemplate
+    name: self-node-remediation-outofservicetaint-strategy-template
+    namespace: {{ _nhc_ns }}
+  selector:
+    matchExpressions:
+    - key: {{ nhc_worker_label }}
+      operator: Exists
+  unhealthyConditions:
+  - duration: {{ nhc_unhealthy_duration }}
+    status: "False"
+    type: Ready
+  - duration: {{ nhc_unhealthy_duration }}
+    status: "Unknown"
+    type: Ready

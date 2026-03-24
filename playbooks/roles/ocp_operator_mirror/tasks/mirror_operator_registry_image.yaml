@@ -33,24 +33,127 @@
   ansible.builtin.set_fact:
     operator_registry_mirror_image: "{{ operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url) }}"
     operator_registry_mirror_repo: "{{ (operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url)).split('@')[0] }}"
+    opreg_image_set_config_path: /tmp/opreg-ImageSetConfiguration.yaml
+    opreg_workspace_path: /tmp/opreg-oc-mirror-workspace
 
-- name: Check operator-registry image on mirror # noqa: command-instead-of-shell
+- name: Check if operator-registry image exists in mirror # noqa: command-instead-of-shell
   ansible.builtin.shell: >-
-    env -u REGISTRY_AUTH_FILE skopeo inspect --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+    env -u REGISTRY_AUTH_FILE skopeo inspect --raw
+    --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
     docker://{{ operator_registry_mirror_image }}
   register: opreg_check
   failed_when: false
   changed_when: false
 
-- name: Copy operator-registry image to mirror (if missing) # noqa: command-instead-of-shell
-  ansible.builtin.shell: >-
-    env -u REGISTRY_AUTH_FILE skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
-    docker://{{ operator_registry_image }}
-    docker://{{ operator_registry_mirror_image }}
+- name: Look up existing IDMS mirrors for operator-registry source repo
   when: opreg_check.rc != 0
-  changed_when: true
+  block:
+    - name: Get existing ImageDigestMirrorSets
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: ImageDigestMirrorSet
+      register: existing_idms
 
-- name: Ensure IDMS for ocp-v4.0-art-dev is present
+    - name: Find mirrors for operator-registry source repo
+      ansible.builtin.set_fact:
+        opreg_existing_mirrors: >-
+          {{ existing_idms.resources
+             | map(attribute='spec.imageDigestMirrors')
+             | flatten
+             | selectattr('source', 'equalto', operator_registry_repo)
+             | map(attribute='mirrors')
+             | flatten
+             | list }}
+
+    - name: Show existing mirrors for operator-registry
+      ansible.builtin.debug:
+        msg: "Existing mirrors for {{ operator_registry_repo }}: {{ opreg_existing_mirrors }}"
+
+- name: Mirror operator-registry image if missing
+  when: opreg_check.rc != 0
+  block:
+    - name: Try copying operator-registry from existing mirror # noqa: command-instead-of-shell
+      when: (opreg_existing_mirrors | default([])) | length > 0
+      ansible.builtin.shell: >-
+        env -u REGISTRY_AUTH_FILE skopeo copy
+        --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+        docker://{{ opreg_existing_mirrors[0] }}@{{ operator_registry_image.split('@')[1] }}
+        docker://{{ operator_registry_mirror_image }}
+      register: opreg_copy_local
+      failed_when: false
+      changed_when: opreg_copy_local.rc == 0
+
+    - name: Fall back to oc-mirror from upstream if local copy failed
+      when: >-
+        (opreg_existing_mirrors | default([])) | length == 0
+        or (opreg_copy_local.rc | default(1)) != 0
+      block:
+        - name: Write operator-registry ImageSetConfiguration
+          ansible.builtin.copy:
+            content: |
+              apiVersion: mirror.openshift.io/v1alpha2
+              kind: ImageSetConfiguration
+              mirror:
+                additionalImages:
+                  - name: {{ operator_registry_image }}
+            dest: "{{ opreg_image_set_config_path }}"
+            mode: '0644'
+
+        - name: Ensure operator-registry oc-mirror workspace is clean
+          ansible.builtin.file:
+            path: "{{ opreg_workspace_path }}"
+            state: absent
+
+        - name: Mirror operator-registry image with oc-mirror # noqa: command-instead-of-shell
+          args:
+            chdir: /tmp
+          register: opreg_mirror
+          changed_when: true
+          retries: 3
+          delay: 30
+          until: opreg_mirror.rc == 0
+          ansible.builtin.shell: >-
+            env -u REGISTRY_AUTH_FILE oc-mirror
+            --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
+            -c "{{ opreg_image_set_config_path }}"
+            --workspace file://{{ opreg_workspace_path }}
+            docker://{{ ocp_operator_mirror_registry_url }}
+            --ignore-release-signature --v2
+
+        - name: Show oc-mirror result
+          ansible.builtin.debug:
+            var: opreg_mirror.stdout
+
+        - name: Find generated IDMS manifests
+          register: opreg_manifests
+          ansible.builtin.find:
+            paths: "{{ opreg_workspace_path }}/{{ ocp_operator_mirror_working_dir_path }}"
+            patterns:
+              - "idms*.yaml"
+            file_type: file
+
+        - name: Apply IDMS manifests
+          loop: "{{ opreg_manifests.files | map(attribute='path') | list }}"
+          loop_control:
+            loop_var: manifest_item
+          kubernetes.core.k8s:
+            kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+            state: present
+            src: "{{ manifest_item }}"
+          when: opreg_manifests.files | length > 0
+
+        - name: Clean up operator-registry mirror artifacts
+          loop:
+            - "{{ opreg_image_set_config_path }}"
+            - "{{ opreg_workspace_path }}"
+          loop_control:
+            loop_var: artifact
+          ansible.builtin.file:
+            path: "{{ artifact }}"
+            state: absent
+
+- name: Ensure IDMS for operator-registry is present
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"

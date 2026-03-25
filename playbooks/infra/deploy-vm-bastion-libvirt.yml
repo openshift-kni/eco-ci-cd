@@ -440,10 +440,8 @@
     # TODO: Uncomment once rehdatci bump completed
     - name: Add auth credentials for container registres
       ansible.builtin.set_fact:
-        pull_secret: >
-            {
-            "auths": {{ podman_registry_credentials }}
-            }
+        pull_secret:
+          auths: "{{ podman_registry_credentials | from_json }}"
 
     - name: Setup Internal registry
       ansible.builtin.import_role:

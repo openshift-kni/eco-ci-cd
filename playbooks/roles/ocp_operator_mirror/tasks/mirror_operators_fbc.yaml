@@ -8,7 +8,7 @@
   ansible.builtin.command: >-
     skopeo copy --authfile "{{ ocp_operator_mirror_pull_secret_path }}" --all --src-tls-verify=false --dest-tls-verify=false
     docker://{{ image.src }} docker://{{ image.dst }}
-  loop: "{{ image_pairs }}"
+  loop: "{{ image_pairs | unique }}"
   loop_control:
     loop_var: image
     label: "{{ image.src }} -> {{ image.dst }}"

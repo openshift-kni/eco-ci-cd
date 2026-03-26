@@ -42,6 +42,7 @@ The role sets the `collect_metrics_attributes` fact containing the full semicolo
 | `acm` | hub | ACM operator version |
 | `talm` | hub | TALM operator version |
 | `gitops` | hub | GitOps operator version |
+| `local_storage` | hub | Local Storage operator version |
 | `logging` | spoke | Cluster Logging operator version |
 
 ## Usage
@@ -111,6 +112,7 @@ collect_metrics/
 │   ├── acm.yml               # ACM operator version
 │   ├── talm.yml              # TALM operator version
 │   ├── gitops.yml            # GitOps operator version
+│   ├── local_storage.yml     # Local Storage operator version
 │   └── logging.yml           # Cluster Logging operator version
 └── README.md
 ```

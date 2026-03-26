@@ -18,7 +18,7 @@
 #     "ran_spoke_kubeconfig": "/path/to/spoke/kubeconfig",
 #     "ran_ci_lane": "my-lane",
 #     "ran_output_file": "/tmp/metrics/ran-metrics.txt",
-#     "ran_metrics_list": ["spoke_general_ocp", "hub_general_ocp", "sriov", "acm"]
+#     "ran_metrics_list": "spoke_general_ocp,hub_general_ocp,sriov,acm"
 #   }'
 
 # Vars needed:
@@ -26,7 +26,7 @@
 # ran_hub_kubeconfig    Path to the hub cluster kubeconfig file. Example: /home/user/.kube/hub-kubeconfig
 # ran_ci_lane           CI lane identifier for the test run. Example: ran-4.17
 # ran_output_file       Path to the output file. Example: /tmp/metrics/ran-metrics.txt
-# ran_metrics_list      List of metrics to collect (JSON array). Example: ["spoke_general_ocp", "acm"]
+# ran_metrics_list      Comma-separated list of metrics to collect. Example: spoke_general_ocp,acm,gitops
 
 - name: Collect metrics for report portal
   hosts: bastion
@@ -49,5 +49,5 @@
       collect_metrics_hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
       collect_metrics_ci_lane: "{{ ran_ci_lane }}"
       collect_metrics_output_file: "{{ ran_output_file }}"
-      collect_metrics_list: "{{ ran_metrics_list }}"
+      collect_metrics_list: "{{ ran_metrics_list.split(',') }}"
 

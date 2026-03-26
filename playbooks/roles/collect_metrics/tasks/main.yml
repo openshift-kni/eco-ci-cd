@@ -11,13 +11,13 @@
       collect_metrics_list and collect_metrics_output_file must be provided
 
 - name: Validate hub kubeconfig when hub metrics are requested
-  when: "'hub_general_ocp' in collect_metrics_list or 'acm' in collect_metrics_list or 'talm' in collect_metrics_list or 'gitops' in collect_metrics_list"
+  when: "'hub_general_ocp' in collect_metrics_list or 'acm' in collect_metrics_list or 'talm' in collect_metrics_list or 'gitops' in collect_metrics_list or 'local_storage' in collect_metrics_list"
   ansible.builtin.assert:
     that:
       - collect_metrics_hub_kubeconfig is defined
     fail_msg: >-
       collect_metrics_hub_kubeconfig must be provided when
-      hub_general_ocp, acm, talm or gitops is in collect_metrics_list
+      hub_general_ocp, acm, talm, gitops or local_storage is in collect_metrics_list
 
 - name: Initialize collected metrics
   ansible.builtin.set_fact:
@@ -54,6 +54,10 @@
 - name: Collect GitOps metrics
   when: "'gitops' in collect_metrics_list"
   ansible.builtin.include_tasks: gitops.yml
+
+- name: Collect Local Storage metrics
+  when: "'local_storage' in collect_metrics_list"
+  ansible.builtin.include_tasks: local_storage.yml
 
 - name: Collect logging metrics
   when: "'logging' in collect_metrics_list"

@@ -65,3 +65,33 @@
     - name: Append default spoke cluster name to metrics
       ansible.builtin.set_fact:
         _collect_metrics_entries: "{{ _collect_metrics_entries + ['spoke_cluster_name:N/A'] }}"
+
+- name: Collect spoke worker kernel versions
+  block:
+    - name: Get spoke worker nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
+        label_selectors:
+          - node-role.kubernetes.io/worker
+      register: _spoke_worker_nodes
+
+    - name: Append kernel version for each spoke worker
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['spoke_' + item.metadata.name + '_kernel_version:' + item.status.nodeInfo.kernelVersion] }}"
+      loop: "{{ _spoke_worker_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Display spoke worker kernel versions
+      ansible.builtin.debug:
+        msg: "{{ item.metadata.name }}: {{ item.status.nodeInfo.kernelVersion }}"
+      loop: "{{ _spoke_worker_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+  rescue:
+    - name: Handle spoke worker kernel version collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect spoke worker kernel versions, skipping"

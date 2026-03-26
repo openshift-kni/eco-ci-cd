@@ -637,9 +637,18 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
 
+    - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
+      when:
+        - ocp_version_facts_release_type in ['nightly', 'engineering-candidate', 'release-candidate']
+        - (ocp_version_facts_minor | int) >= 21
+      set_fact:
+        disable_image_policy: true
+ 
     - name: Generate boot ISO for agent-based installer
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_agent_iso
+      environment:
+        OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY: "{{ disable_image_policy | default(false) }}"
       vars:
         gai_cluster_name: "{{ cluster_name }}"
         gai_repo_root_path: "{{ repo_root_path }}"

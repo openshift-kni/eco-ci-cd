@@ -97,7 +97,7 @@ cp "${SHARED_DIR}"/report_*.xml /tmp/reports/ 2>/dev/null || echo "No reports fo
 cp "${SHARED_DIR}"/junit_*.xml /tmp/junit/ 2>/dev/null || echo "No junit files found"
 
 # Run report upload playbook
-ansible-playbook ./playbooks/cnf/upload-report.yaml
+ansible-playbook ./playbooks/upload-report.yaml
 ```
 
 ## Workflow Composition

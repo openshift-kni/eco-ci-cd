@@ -26,7 +26,7 @@
 
 # Usage:
 # Run this playbook using Ansible:
-# ansible-playbook ./playbooks/cnf/upload-report.yaml \
+# ansible-playbook ./playbooks/upload-report.yaml \
 #   -i ./inventories/cnf/switch-config.yaml \
 #   --extra-vars "kubeconfig=/path/to/kubeconfig \
 #   reporter_template_name='Cluster regression' \

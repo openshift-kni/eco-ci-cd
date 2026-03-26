@@ -34,7 +34,7 @@ The role sets the `collect_metrics_attributes` fact containing the full semicolo
 
 | Category | Cluster | Description |
 |---|---|---|
-| `spoke_general_ocp` | spoke | Spoke OCP version, build, and cluster name |
+| `spoke_general_ocp` | spoke | Spoke OCP version, build, cluster name, and kernel version per worker node |
 | `hub_general_ocp` | hub | Hub OCP version, build, and cluster name |
 | `sriov` | spoke | SR-IOV operator version |
 | `sriov_fec` | spoke | SR-IOV FEC operator version |

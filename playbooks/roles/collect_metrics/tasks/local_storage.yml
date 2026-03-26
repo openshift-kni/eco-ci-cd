@@ -1,0 +1,33 @@
+---
+- name: Collect Local Storage operator version
+  block:
+    - name: Get Local Storage subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: local-storage-operator
+        namespace: openshift-local-storage
+        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
+      register: _local_storage_sub
+
+    - name: Set Local Storage operator version fact
+      ansible.builtin.set_fact:
+        _local_storage_operator: "{{ _local_storage_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _local_storage_sub.resources | length > 0
+
+    - name: Append Local Storage operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['local_storage_operator:' + (_local_storage_operator | default('N/A'))] }}"
+
+    - name: Display Local Storage operator version
+      ansible.builtin.debug:
+        msg: "Local Storage operator: {{ _local_storage_operator | default('N/A') }}"
+
+  rescue:
+    - name: Handle Local Storage operator collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect Local Storage operator version, setting to N/A"
+
+    - name: Append default Local Storage operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + ['local_storage_operator:N/A'] }}"

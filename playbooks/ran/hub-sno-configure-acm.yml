@@ -326,6 +326,43 @@
       register: mch_siteconfig_patch
       failed_when: false
 
+    - name: Enable siteconfig component in MCH if not enabled
+      when:
+        - mch_siteconfig_patch.status is defined
+        - mch_siteconfig_patch.changed is false
+      block:
+      - name: Get MulticlusterHub resource
+        kubernetes.core.k8s_info:
+          api_version: operator.open-cluster-management.io/v1
+          kind: MultiClusterHub
+          name: "{{ mch_cr_name }}"
+          namespace: "{{ mce_namespace }}"
+        register: mch_info
+        retries: 3
+        delay: 20
+        until: mch_info.resources | length > 0
+
+      - name: Find index of siteconfig component
+        set_fact:
+          siteconfig_component_index: "{{ idx }}"
+        loop: "{{ mch_info.resources[0].spec.overrides.components }}"
+        loop_control:
+          index_var: idx
+        when: item.name == "siteconfig"
+
+      - name: Enable siteconfig component in MCH
+        kubernetes.core.k8s_json_patch:
+          api_version: operator.open-cluster-management.io/v1
+          kind: MultiClusterHub
+          name: "{{ mch_cr_name }}"
+          namespace: "{{ mce_namespace }}"
+          patch:
+            - op: replace
+              path: /spec/overrides/components/{{ siteconfig_component_index }}/enabled
+              value: true
+        failed_when: false
+        register: mch_siteconfig_patch
+
     - name: Report siteconfig component not supported
       ansible.builtin.debug:
         msg: >-

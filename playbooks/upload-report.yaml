@@ -19,7 +19,7 @@
 # - Upload reports using the reporter project
 
 # Requirements:
-# - OpenShift cluster
+# - OpenShift cluster f
 # - Bastion host
 # - Ansible and the `kubernetes.core` collection installed
 # - A valid kubeconfig file for cluster authentication

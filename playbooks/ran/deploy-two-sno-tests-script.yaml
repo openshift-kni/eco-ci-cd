@@ -277,7 +277,7 @@
       loop: "{{ spoke_kubeconfig_dest_map }}"
 
 - name: Set TALM test execution script
-  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  import_playbook: ../deploy-run-eco-gotests.yaml
   vars:
     eco_cnf_core_net_switch_user: ""
     eco_cnf_core_net_switch_pass: ""
@@ -301,7 +301,7 @@
       -v {{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig:/kubeconfig/hub-kubeconfig:Z"
 
 - name: Set ZTP test execution script
-  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  import_playbook: ../deploy-run-eco-gotests.yaml
   vars:
     eco_cnf_core_net_switch_user: ""
     eco_cnf_core_net_switch_pass: ""
@@ -320,7 +320,7 @@
       -v {{ auth_kubeconfig_path }}/hub_kubeconfig/kubeconfig:/kubeconfig/hub-kubeconfig:Z"
 
 - name: Set Deployment Types test execution script
-  import_playbook: ../cnf/deploy-run-eco-gotests.yaml
+  import_playbook: ../deploy-run-eco-gotests.yaml
   vars:
     eco_cnf_core_net_switch_user: ""
     eco_cnf_core_net_switch_pass: ""

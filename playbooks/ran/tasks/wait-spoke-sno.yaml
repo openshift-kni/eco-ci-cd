@@ -59,10 +59,9 @@
   register: policies
   until:
     - policies.resources | length > 0
-    - >
-      (policies.resources if not (policies.resources is mapping)
-       else (policies.resources | dict2items | map(attribute='value') | list))
-      | selectattr('status.compliant', 'ne', 'Compliant') | list | length == 0
+    - policies.resources | map(attribute='status', default=None) | select('none') | list | length == 0
+    - policies.resources | map(attribute='status.compliant', default=None) | select('none') | list | length == 0
+    - policies.resources | selectattr('status.compliant', 'ne', 'Compliant') | list | length == 0
   retries: 60
   delay: 60
 

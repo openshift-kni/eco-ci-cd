@@ -219,7 +219,9 @@
   changed_when: false
   ansible.builtin.set_fact:
     _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
-  when: "((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0"
+  when:
+    - ((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0
+    - not (('acm' in ((operator.catalog | default('')) | lower)) or ('mce' in ((operator.catalog | default('')) | lower)))
 
 - name: Collect unique source repositories (strip digests)
   changed_when: false
@@ -236,16 +238,21 @@
         else source_repos
       }}
 
+- name: Set empty image_digest_mirrors
+  changed_when: false
+  ansible.builtin.set_fact:
+    image_digest_mirrors: []
+
 - name: Set mirror mapping for each repository
   changed_when: false
   ansible.builtin.set_fact:
     image_digest_mirrors: >-
       {{
-        (image_digest_mirrors | default([]))
+        image_digest_mirrors
         + [ {
           'source': item,
           'mirrors': [
-            item | regex_replace('^[^/]+', ocp_operator_mirror_registry_url)
+            item | regex_replace('^[^/]+', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder)
           ]
         } ]
       }}
@@ -275,7 +282,7 @@
                     else ((image | regex_search('@sha256:[0-9a-f]{64}'))
                           | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image)))
             ,
-            'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
+            'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder))
           }
         ]
       }}
@@ -289,6 +296,7 @@
       changed_when: false
       ansible.builtin.set_fact:
         _image_pairs: []
+
     - name: Build source/destination image pairs (ACM/MCE catalog; FBC source remap to acm-d / quay)
       changed_when: false
       ansible.builtin.set_fact:
@@ -299,12 +307,16 @@
                 'src': (
                   (image
                   | replace('registry.stage.redhat.io/rhacm2', 'quay.io:443/acm-d')
-                  | replace('registry.stage.redhat.io/multicluster-engine', 'quay.io:443/acm-d'))
+                  | replace('registry.stage.redhat.io/multicluster-engine', 'quay.io:443/acm-d')
+                  | replace('registry.redhat.io/rhacm2', 'quay.io:443/acm-d')
+                  | replace('registry.redhat.io/multicluster-engine', 'quay.io:443/acm-d'))
                   if (((operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base | default(''))) | length) > 0)
                   else ((image | regex_search('@sha256:[0-9a-f]{64}'))
                         | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image))
                 ),
-                'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url))
+                'dst': (
+                  (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder))
+                )
               }
             ]
           }}

@@ -59,8 +59,6 @@
         that:
           - kubeconfig is defined
           - kubeconfig | length > 0
-          - ocp_version is defined
-          - ocp_version | length > 0
         fail_msg: |
           Required variables must be defined:
             - kubeconfig: Path to kubeconfig file
@@ -68,7 +66,7 @@
 
           Usage:
             ansible-playbook playbooks/ran/hub-sno-configure-acm.yml \
-              --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
+              --extra-vars "kubeconfig=/path/to/kubeconfig"
 
 - name: OpenShift MultiClusterHub and Assisted Service Configuration
   hosts: bastion
@@ -84,13 +82,26 @@
     timeout_metal3: 300
     http_store_data_dir: /opt/http_store/data
     # RHCOS OS Image configuration for spoke cluster deployments
-    # ocp_version: REQUIRED - Set via --extra-vars "ocp_version=4.19"
     # rhcos_version: Auto-extracted from ISO filename in cache directory
     # rhcos_iso_url: Auto-generated URL pointing to local bastion HTTP server
     rhcos_version: ""  # Auto-populated from ISO filename
     rhcos_cache_dir: /opt/cache  # Directory containing pre-downloaded RHCOS ISO file
   tasks:
 
+    - name: Gather cluster network information
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: cluster_info
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        ocp_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+        ocp_hub_major_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}"
+        ocp_hub_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+        ocp_hub_patch_version: "{{ cluster_info.resources[0].status.version.split('.')[2] }}"
+    
     - name: Validate required variables for HTTP store
       ansible.builtin.assert:
         that:
@@ -404,3 +415,28 @@
       when:
         - siteconfig_deployment_status is not skipped
         - siteconfig_deployment_status is succeeded
+
+    - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
+      when: ocp_hub_patch_version is search('(ec|rc|nightly)') and ocp_hub_minor_version | int >= 21
+      vars:
+        disable_image_policy_config_map_name: assisted-installer-config-override
+      block:
+
+        - name: Create ConfigMap for disable image policy
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('template', 'templates/acmDisableImagePolicy.j2') }}"
+
+        - name: Annotate AgentServiceConfig with assisted-service configmap override
+          kubernetes.core.k8s_json_patch:
+            api_version: agent-install.openshift.io/v1beta1
+            kind: AgentServiceConfig
+            name: agent
+            namespace: "{{ mce_namespace }}"
+            patch:
+              - op: add
+                path: /metadata/annotations
+                value: {}
+              - op: add
+                path: /metadata/annotations/unsupported.agent-install.openshift.io~1assisted-service-configmap
+                value: "{{ disable_image_policy_config_map_name }}"

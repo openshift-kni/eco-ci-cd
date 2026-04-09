@@ -1,0 +1,12 @@
+  $TTL {{ dns_ttl | default('60') }}                                                                                                                                         
+  @   IN  SOA  {{ dns_server_fqdn }}. admin.redhat.com. (
+              {{ ansible_date_time.date | replace('-', '') }}01 ; Serial                                                                                                     
+              3600 1800 604800 {{ dns_ttl | default('60') }} )
+                                                                                                                                                                             
+      IN  NS   {{ dns_server_fqdn }}.                                                                                    
+   
+  {{ dns_server_hostname }}    IN  A    {{ dns_server_ip }}                                                                                                         
+
+  {% for record in dns_records | default([]) %}
+  {{ record.name }}    IN  A    {{ record.ip }}                                                                                                                              
+  {% endfor %}

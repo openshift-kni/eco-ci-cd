@@ -81,5 +81,5 @@
 - name: Save test script
   ansible.builtin.template:
     src: nrop_test_script.j2
-    dest: "{{ manifest_dir }}/{{ topology_manager_scope }}_nrop_test_script.sh"
+    dest: "{{ manifest_dir }}/{{ scope }}_nrop_test_script.sh"
     mode: '0776'

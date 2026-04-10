@@ -147,7 +147,7 @@
     -c "{{ ocp_operator_mirror_image_set_configuration_path }}"
     --workspace file:///{{ ocp_operator_mirror_workspace_path }}
     docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
-    --ignore-release-signature --v2
+    --ignore-release-signature --remove-signatures --v2
 
 - name: Show oc-mirror result
   ansible.builtin.debug:

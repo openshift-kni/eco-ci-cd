@@ -363,7 +363,7 @@
         - name: Download CA certificate to pki directory
           ansible.builtin.get_url:
             url: "{{ ca_update_link }}"
-            dest: /etc/pki/tls/certs/certificate.crt
+            dest: /etc/pki/ca-trust/source/anchors/certificate.crt
             mode: '0644'
 
         - name: Update certificate

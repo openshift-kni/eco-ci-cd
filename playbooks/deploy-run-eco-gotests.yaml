@@ -54,6 +54,8 @@
 # additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
 # hub_clusterconfigs_path           # string: Path to hub clusterconfigs directory (for RAN tests, contains auth/kubeconfig)
 # eco_gotests_tag                   # string: Override image tag (e.g., "latest", "v4.18.0"). If not set, auto-detects from cluster version.
+# mirror_registry                  # string: Disconnected registry URL (host:port). When set, the
+#                                  #   eco-gotests image is mirrored there before pulling.
 - name: Set up eco-gotests
   hosts: bastion
   gather_facts: true
@@ -68,6 +70,7 @@
     eco_cnf_core_net_switch_ip: "{{ hostvars['switch'].ansible_host | default(undefined) }}"
     eco_cnf_core_net_switch_user: "{{ hostvars['switch'].ansible_user | default(undefined) }}"
     eco_cnf_core_net_switch_pass: "{{ hostvars['switch'].ansible_password | default(undefined) }}"
+    mirror_registry: ""
     eco_worker_label: workercnf
   tasks:
     - name: Ensure required variables are defined
@@ -105,6 +108,26 @@
     - name: Print cluster version
       ansible.builtin.debug:
         msg: "Cluster version: {{ version }}"
+
+    - name: Mirror eco-gotests image to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      block:
+        - name: Set eco-gotests mirror tag
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "{{ eco_gotests_tag | default('v' ~ version ~ '.0') }}"
+
+        - name: Copy eco-gotests image to disconnected registry
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            docker://{{ eco_gotests_image }}:{{ eco_gotests_tag }}
+            docker://{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}:{{ eco_gotests_tag }}
+          register: skopeo_result
+          changed_when: skopeo_result.rc == 0
+
+        - name: Override eco-gotests image source to disconnected registry
+          ansible.builtin.set_fact:
+            eco_gotests_image: "{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}"
 
     - name: Remove eco-gotests image
       when: pull_container_image is true

@@ -422,7 +422,7 @@
         disable_image_policy_config_map_name: assisted-installer-config-override
       block:
 
-        - name: Create ConfigMap for disable image policy
+        - name: Create ConfigMap to disable image policy
           kubernetes.core.k8s:
             state: present
             definition: "{{ lookup('template', 'templates/acmDisableImagePolicy.j2') }}"

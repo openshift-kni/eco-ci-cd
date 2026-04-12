@@ -63,6 +63,19 @@
           - version | string | length > 0
         fail_msg: "The 'version' variable must be defined (e.g., version=4.14)"
 
+    - name: Ensure pull secret path exists
+      ansible.builtin.file:
+        path: "{{ pull_secret_path }}"
+        state: absent
+        mode: "0700"
+
+    - name: Populate pull secret
+      ansible.builtin.copy:
+        content: "{{ pull_secret_string | b64decode | from_json | to_nice_json }}"
+        dest: "{{ pull_secret_path }}"
+        mode: "0600"
+      no_log: true
+
     - name: Create gitops-catalog directory
       ansible.builtin.file:
         path: /tmp/gitops-catalog
@@ -77,6 +90,8 @@
           --path /configs/openshift-gitops-operator/:/tmp/gitops-catalog
           --confirm --filter-by-os linux/amd64
       changed_when: true
+      environment:
+        REGISTRY_AUTH_FILE: "{{ pull_secret_path }}"
 
     - name: Read gitops operator catalog content
       ansible.builtin.slurp:
@@ -118,4 +133,10 @@
     - name: Clean up extracted catalog
       ansible.builtin.file:
         path: /tmp/gitops-catalog
+        state: absent
+
+  handlers:
+    - name: Remove pull secret
+      ansible.builtin.file:
+        path: "{{ pull_secret_path }}"
         state: absent

@@ -127,7 +127,7 @@
   changed_when: true
   notify: Remove working directory
 
-- name: Ensure destionation directory exists
+- name: Ensure destination directory exists
   become: true
   ansible.builtin.file:
     state: directory

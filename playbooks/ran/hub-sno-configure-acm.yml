@@ -373,6 +373,7 @@
               value: true
         failed_when: false
         register: mch_siteconfig_patch
+        when: siteconfig_component_index is defined
 
     - name: Report siteconfig component not supported
       ansible.builtin.debug:

@@ -97,9 +97,6 @@
 #   "vm_name": "primary-dns-vm"
 # }
 # Notes:
-# - SOA serial format: YYYYMMDDNN (e.g., 2026041201 = April 12, 2026, change #01)
-# - Multiple changes on the same day automatically increment the counter (01->02->03)
-# - Validation, git commit/push, and DNS reload sections are commented out by default
 # - Test in a non-production environment before deploying
 
 
@@ -299,3 +296,4 @@
         - name: Display reload result
           ansible.builtin.debug:
             msg: "Zone file deployed and bind-dns service restarted"
+            

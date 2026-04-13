@@ -1,0 +1,301 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for DNS Record Creation in Zone Files
+
+## Overview:
+# This playbook automates the creation and management of DNS A records by:
+# 1. Pulling DNS zone files from a GitLab repository
+# 2. Creating new zone files from template if they don't exist
+# 3. Adding or updating DNS A records in the zone file
+# 4. Incrementing the SOA serial number using YYYYMMDDNN format
+# 5. Optionally validating, committing, and deploying changes
+
+## Playbook Workflow
+# 1. Variable Validation:
+#    - Verifies required GitLab connection variables are defined.
+#    - Ensures authentication token and repository information are available.
+#
+# 2. GitLab Repository Management:
+#    - Clones or updates the DNS zone repository from GitLab.
+#    - Uses OAuth2 token authentication with SSL verification disabled.
+#    - Pulls the latest zone file configuration.
+#
+# 3. Zone File Creation (if needed):
+#    - Checks if the zone file exists for the specified domain.
+#    - Creates zone directory structure if missing.
+#    - Generates new zone file from template (db.zone.j2) with:
+#      * SOA record with initial serial (YYYYMMDD01)
+#      * NS record pointing to the DNS server
+#      * Initial A record for the DNS server itself
+#
+# 4. DNS Record Management:
+#    - Adds or updates A record in the zone file.
+#    - Uses regex to replace existing records with same hostname.
+#    - Creates backup before modification.
+#
+# 5. SOA Serial Increment:
+#    - Extracts current 10-digit serial number (YYYYMMDDNN).
+#    - Compares current date with serial date:
+#      * If date changed: resets to YYYYMMDD01
+#      * If same day: increments counter (01 -> 02 -> 03...)
+#    - Updates zone file with new serial.
+#
+# 6. GitLab Commit and Push:
+#    - Configures git user credentials.
+#    - Commits zone file changes with descriptive message.
+#    - Pushes changes back to GitLab repository.
+#
+# 7. DNS Server Deployment:
+#    - Copies updated zone file to DNS container.
+
+## Prerequisites:
+# - Ansible 2.10+ installed on the control node
+# - SSH access to bastion host
+# - GitLab repository with DNS zone files
+# - GitLab project access token with read/write permissions
+# - DNS server (BIND) running in Podman container (if deploying)
+
+## Running the Playbook
+# Ensure that host_vars and group_vars are properly configured.
+# Execute the playbook with the following command:
+# ansible-playbook playbooks/infra/create-dns-record.yml \
+#   -i ./inventories/infra/create-dns-record.yml \
+#   -e "dns_record_hostname=server01 dns_record_ip=10.46.29.50"
+
+## Variables Used by Playbook
+# all:
+#   ansible_user: user                          # SSH username for remote access
+#   ansible_ssh_private_key: 'ssh-key'          # Path to the private SSH key for authentication
+#   gitlab_url: gitlab.example.com/             # GitLab instance URL (with trailing slash)
+#   gitlab_repo: group/dns-zones                # GitLab repository path
+#   gitlab_project_token: glpat-xxxxx           # GitLab project access token
+#
+# bastion:
+#   ansible_host: 10.10.10.10                   # IP address or hostname of the bastion VM
+#   hostname: ns2.example.com                   # FQDN of the bastion (DNS server FQDN)
+#   dns_server_name: ns2                        # Hostname for the DNS nameserver
+#
+#
+# Example inventory (JSON format):
+# {
+#   "ansible_host": "192.168.100.10",
+#   "dns": "1.1.1.1",
+#   "dns2": "8.8.8.8",
+#   "dns_base_domain": "corp.example.com",
+#   "dns_domain": "lab-project",
+#   "dns_server_name": "ns1",
+#   "gateway": "192.168.100.1",
+#   "gitlab_project_token": "glpat-xxxxxxxxxxxxxxxxxxxx",
+#   "gitlab_repo": "infrastructure-as-code",
+#   "gitlab_url": "gitlab.example.com/automation-team/",
+#   "hostname": "ns1.lab-project.corp.example.com",
+#   "net_prefix": "24",
+#   "vm_bridge_name": "br-internal",
+#   "vm_name": "primary-dns-vm"
+# }
+# Notes:
+# - SOA serial format: YYYYMMDDNN (e.g., 2026041201 = April 12, 2026, change #01)
+# - Multiple changes on the same day automatically increment the counter (01->02->03)
+# - Validation, git commit/push, and DNS reload sections are commented out by default
+# - Test in a non-production environment before deploying
+
+
+---
+- name: Create DNS Record in Zone Files
+  hosts: bastion
+  gather_facts: true
+  vars:
+    dns_server_ip: "{{ hostvars['bastion']['ansible_host'] }}"
+    dns_server_fqdn: "{{ hostvars['bastion'].hostname }}"
+    dns_server_hostname: "{{ hostvars['bastion'].dns_server_name }}"
+    dns_repo_local_path: "/tmp/{{ gitlab_repo }}"
+    dns_repo_url: "{{ gitlab_url }}{{ gitlab_repo }}.git"
+    zone_file: "{{ dns_repo_local_path }}/dns/{{ dns_server_fqdn }}/zones/db.{{ dns_domain }}"
+    dns_record_hostname: ""
+    dns_record_ip: ""
+
+  tasks:
+    - name: Validate variables
+      ansible.builtin.assert:
+        that:
+          - gitlab_url is defined
+          - gitlab_repo is defined
+          - gitlab_project_token is defined
+          - dns_record_hostname is defined
+          - dns_record_ip is defined
+        fail_msg: "Missing required GitLab variables (gitlab_url, gitlab_repo, gitlab_project_token)"
+        quiet: true
+
+
+    - name: Pull DNS files from GitLab
+      block:
+        - name: Clone GitLab repository
+          ansible.builtin.git:
+            repo: "https://oauth2:{{ gitlab_project_token }}@{{ gitlab_url }}{{ gitlab_repo }}.git"
+            dest: "{{ dns_repo_local_path }}"
+            version: main
+            force: true
+            update: true
+          environment:
+            GIT_SSL_NO_VERIFY: "true"
+
+        - name: Display repository information
+          ansible.builtin.debug:
+            msg:
+              - "Repository cloned/updated successfully"
+              - "Location: {{ dns_repo_local_path }}"
+              - "Remote URL: {{ dns_repo_url }}"
+              - "Zone file: {{ zone_file }}"
+              - "Record to add: {{ dns_record_hostname }}   {{ dns_record_ip }}"
+
+        - name: Check if zone file exists
+          ansible.builtin.stat:
+            path: "{{ zone_file }}"
+          register: zone_file_stat
+
+
+        - name: Create new zone file from template if it does not exist
+          when: not zone_file_stat.stat.exists
+          block:
+            - name: Create zone directory
+              ansible.builtin.file:
+                path: "{{ zone_file | dirname }}"
+                state: directory
+                mode: "0755"
+
+            - name: Create zone file
+              ansible.builtin.template:
+                src: db.zone.j2
+                dest: "{{ zone_file }}"
+                mode: "0644"
+
+            - name: Display zone file
+              ansible.builtin.debug:
+                msg:
+                  - "New zone file created: {{ zone_file }}"
+                  - "Domain: {{ dns_domain }}"
+
+
+        - name: Add A record to zone file
+          ansible.builtin.lineinfile:
+            path: "{{ zone_file }}"
+            line: "{{ dns_record_hostname }}    IN  A    {{ dns_record_ip }}"
+            regexp: "^{{ dns_record_hostname }}\\s+IN\\s+A\\s+"
+            insertafter: EOF
+            state: present
+            backup: true
+          register: zone_file_edit
+
+        - name: Display zone file edit results
+          ansible.builtin.debug:
+            msg:
+              - "Zone file edited: {{ zone_file_edit.changed }}"
+              - "A Record added: {{ dns_record_hostname }} IN A {{ dns_record_ip }}"
+              - "Zone file location: {{ zone_file }}"
+
+    - name: Increment SOA serial number
+      block:
+        - name: Get current Serial
+          ansible.builtin.shell:
+            cmd: "grep -oP '\\d{10}(?=\\s*;\\s*[Ss]erial)' {{ zone_file }}"
+          register: serial_grep
+          changed_when: false
+
+        - name: Extract current SOA serial
+          ansible.builtin.set_fact:
+            current_serial: "{{ serial_grep.stdout }}"
+
+        - name: Calculate new serial number
+          ansible.builtin.set_fact:
+            today_date: "{{ ansible_date_time.date | replace('-', '') }}"
+            serial_date: "{{ current_serial[:8] }}"
+            serial_counter: "{{ current_serial[8:] }}"
+
+        - name: Determine new serial
+          ansible.builtin.set_fact:
+            new_serial: "{{ (today_date + '01') if today_date != serial_date else (serial_date + '%02d' | format((serial_counter | int) + 1)) }}"
+
+        - name: Update SOA serial in zone file
+          ansible.builtin.replace:
+            path: "{{ zone_file }}"
+            regexp: '(\d{10})(\s*;\s*Serial)'
+            replace: '{{ new_serial }}\2'
+            backup: true
+          register: serial_update
+
+        - name: Display serial update
+          ansible.builtin.debug:
+            msg:
+              - "SOA serial updated: {{ current_serial }} -> {{ new_serial }}"
+
+
+    - name: Commit and push zone file changes to GitLab
+      block:
+        - name: Configure git user for commit
+          ansible.builtin.command:
+            cmd: "git config user.email 'ansible@telcov10n.lab.eng.tlv2.redhat.com'"
+            chdir: "{{ dns_repo_local_path }}"
+          changed_when: false
+
+        - name: Configure git username
+          ansible.builtin.command:
+            cmd: "git config user.name 'Ansible Automation'"
+            chdir: "{{ dns_repo_local_path }}"
+          changed_when: false
+
+        - name: Add zone file to git
+          ansible.builtin.command:
+            cmd: "git add {{ zone_file | relpath(dns_repo_local_path) }}"
+            chdir: "{{ dns_repo_local_path }}"
+          changed_when: false
+
+        - name: Commit zone file changes
+          ansible.builtin.command:
+            cmd: "git commit -m 'Add A record: {{ dns_record_hostname }} IN A {{ dns_record_ip }}'"
+            chdir: "{{ dns_repo_local_path }}"
+          register: git_commit
+          changed_when: "'nothing to commit' not in git_commit.stdout"
+          failed_when:
+            - git_commit.rc != 0
+            - "'nothing to commit' not in git_commit.stdout"
+
+        - name: Push changes to GitLab
+          ansible.builtin.command:
+            cmd: "git push"
+            chdir: "{{ dns_repo_local_path }}"
+          register: git_push
+          when: git_commit.changed
+          environment:
+            GIT_SSL_NO_VERIFY: "true"
+
+        - name: Display git push result
+          ansible.builtin.debug:
+            msg: "Changes pushed to GitLab"
+          when: git_push.changed
+
+      rescue:
+        - name: Handle git commit/push failure
+          ansible.builtin.fail:
+            msg: "Failed to commit/push changes to GitLab"
+
+    - name: Deploy zone file to DNS server and reload
+      block:
+        - name: Copy zone file to bind zones directory
+          ansible.builtin.copy:
+            src: "{{ zone_file }}"
+            dest: "{{ ansible_user_dir }}/bind/zones/{{ zone_file | basename }}"
+            mode: "0644"
+            remote_src: true
+
+        - name: Restart bind-dns service
+          ansible.builtin.systemd:
+            name: bind-dns
+            state: restarted
+            scope: user
+
+        - name: Display reload result
+          ansible.builtin.debug:
+            msg: "Zone file deployed and bind-dns service restarted"

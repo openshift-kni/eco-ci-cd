@@ -127,107 +127,98 @@
         quiet: true
 
 
-    - name: Pull DNS files from GitLab
+    - name: Clone GitLab repository
+      ansible.builtin.git:
+        repo: "https://oauth2:{{ gitlab_project_token }}@{{ gitlab_url }}{{ gitlab_repo }}.git"
+        dest: "{{ dns_repo_local_path }}"
+        version: main
+        force: true
+        update: true
+      environment:
+        GIT_SSL_NO_VERIFY: "true"
+
+    - name: Display repository information
+      ansible.builtin.debug:
+        msg:
+          - "Repository cloned/updated successfully"
+          - "Location: {{ dns_repo_local_path }}"
+          - "Remote URL: {{ dns_repo_url }}"
+          - "Zone file: {{ zone_file }}"
+          - "Record to add: {{ dns_record_hostname }}   {{ dns_record_ip }}"
+
+    - name: Check if zone file exists
+      ansible.builtin.stat:
+        path: "{{ zone_file }}"
+      register: zone_file_stat
+
+    - name: Create new zone file from template if it does not exist
+      when: not zone_file_stat.stat.exists
       block:
-        - name: Clone GitLab repository
-          ansible.builtin.git:
-            repo: "https://oauth2:{{ gitlab_project_token }}@{{ gitlab_url }}{{ gitlab_repo }}.git"
-            dest: "{{ dns_repo_local_path }}"
-            version: main
-            force: true
-            update: true
-          environment:
-            GIT_SSL_NO_VERIFY: "true"
+        - name: Create zone directory
+          ansible.builtin.file:
+            path: "{{ zone_file | dirname }}"
+            state: directory
+            mode: "0755"
 
-        - name: Display repository information
+        - name: Create zone file from template
+          ansible.builtin.template:
+            src: db.zone.j2
+            dest: "{{ zone_file }}"
+            mode: "0644"
+
+        - name: Display new zone file creation
           ansible.builtin.debug:
             msg:
-              - "Repository cloned/updated successfully"
-              - "Location: {{ dns_repo_local_path }}"
-              - "Remote URL: {{ dns_repo_url }}"
-              - "Zone file: {{ zone_file }}"
-              - "Record to add: {{ dns_record_hostname }}   {{ dns_record_ip }}"
+              - "New zone file created: {{ zone_file }}"
+              - "Domain: {{ dns_domain }}"
 
-        - name: Check if zone file exists
-          ansible.builtin.stat:
-            path: "{{ zone_file }}"
-          register: zone_file_stat
+    - name: Add A record to zone file
+      ansible.builtin.lineinfile:
+        path: "{{ zone_file }}"
+        line: "{{ dns_record_hostname }}    IN  A    {{ dns_record_ip }}"
+        regexp: "^{{ dns_record_hostname }}\\s+IN\\s+A\\s+"
+        insertafter: EOF
+        state: present
+        backup: true
+      register: zone_file_edit
 
+    - name: Display zone file edit results
+      ansible.builtin.debug:
+        msg:
+          - "Zone file edited: {{ zone_file_edit.changed }}"
+          - "A Record added: {{ dns_record_hostname }} IN A {{ dns_record_ip }}"
+          - "Zone file location: {{ zone_file }}"
 
-        - name: Create new zone file from template if it does not exist
-          when: not zone_file_stat.stat.exists
-          block:
-            - name: Create zone directory
-              ansible.builtin.file:
-                path: "{{ zone_file | dirname }}"
-                state: directory
-                mode: "0755"
+    - name: Get current SOA serial
+      ansible.builtin.shell:
+        cmd: "grep -oP '\\d{10}(?=\\s*;\\s*[Ss]erial)' {{ zone_file }}"
+      register: serial_grep
+      changed_when: false
 
-            - name: Create zone file
-              ansible.builtin.template:
-                src: db.zone.j2
-                dest: "{{ zone_file }}"
-                mode: "0644"
+    - name: Extract current SOA serial
+      ansible.builtin.set_fact:
+        current_serial: "{{ serial_grep.stdout }}"
 
-            - name: Display zone file
-              ansible.builtin.debug:
-                msg:
-                  - "New zone file created: {{ zone_file }}"
-                  - "Domain: {{ dns_domain }}"
+    - name: Calculate new serial number
+      ansible.builtin.set_fact:
+        today_date: "{{ ansible_date_time.date | replace('-', '') }}"
+        serial_date: "{{ current_serial[:8] }}"
+        serial_counter: "{{ current_serial[8:] }}"
 
+    - name: Determine new serial
+      ansible.builtin.set_fact:
+        new_serial: "{{ (today_date + '01') if today_date != serial_date else (serial_date + '%02d' | format((serial_counter | int) + 1)) }}"
 
-        - name: Add A record to zone file
-          ansible.builtin.lineinfile:
-            path: "{{ zone_file }}"
-            line: "{{ dns_record_hostname }}    IN  A    {{ dns_record_ip }}"
-            regexp: "^{{ dns_record_hostname }}\\s+IN\\s+A\\s+"
-            insertafter: EOF
-            state: present
-            backup: true
-          register: zone_file_edit
+    - name: Update SOA serial in zone file
+      ansible.builtin.replace:
+        path: "{{ zone_file }}"
+        regexp: '(\d{10})(\s*;\s*Serial)'
+        replace: '{{ new_serial }}\2'
+        backup: true
 
-        - name: Display zone file edit results
-          ansible.builtin.debug:
-            msg:
-              - "Zone file edited: {{ zone_file_edit.changed }}"
-              - "A Record added: {{ dns_record_hostname }} IN A {{ dns_record_ip }}"
-              - "Zone file location: {{ zone_file }}"
-
-    - name: Increment SOA serial number
-      block:
-        - name: Get current Serial
-          ansible.builtin.shell:
-            cmd: "grep -oP '\\d{10}(?=\\s*;\\s*[Ss]erial)' {{ zone_file }}"
-          register: serial_grep
-          changed_when: false
-
-        - name: Extract current SOA serial
-          ansible.builtin.set_fact:
-            current_serial: "{{ serial_grep.stdout }}"
-
-        - name: Calculate new serial number
-          ansible.builtin.set_fact:
-            today_date: "{{ ansible_date_time.date | replace('-', '') }}"
-            serial_date: "{{ current_serial[:8] }}"
-            serial_counter: "{{ current_serial[8:] }}"
-
-        - name: Determine new serial
-          ansible.builtin.set_fact:
-            new_serial: "{{ (today_date + '01') if today_date != serial_date else (serial_date + '%02d' | format((serial_counter | int) + 1)) }}"
-
-        - name: Update SOA serial in zone file
-          ansible.builtin.replace:
-            path: "{{ zone_file }}"
-            regexp: '(\d{10})(\s*;\s*Serial)'
-            replace: '{{ new_serial }}\2'
-            backup: true
-          register: serial_update
-
-        - name: Display serial update
-          ansible.builtin.debug:
-            msg:
-              - "SOA serial updated: {{ current_serial }} -> {{ new_serial }}"
-
+    - name: Display serial update
+      ansible.builtin.debug:
+        msg: "SOA serial updated: {{ current_serial }} -> {{ new_serial }}"
 
     - name: Commit and push zone file changes to GitLab
       block:
@@ -278,21 +269,19 @@
           ansible.builtin.fail:
             msg: "Failed to commit/push changes to GitLab"
 
-    - name: Deploy zone file to DNS server and reload
-      block:
-        - name: Copy zone file to bind zones directory
-          ansible.builtin.copy:
-            src: "{{ zone_file }}"
-            dest: "{{ ansible_user_dir }}/bind/zones/{{ zone_file | basename }}"
-            mode: "0644"
-            remote_src: true
+    - name: Copy zone file to bind zones directory
+      ansible.builtin.copy:
+        src: "{{ zone_file }}"
+        dest: "{{ ansible_user_dir }}/bind/zones/{{ zone_file | basename }}"
+        mode: "0644"
+        remote_src: true
 
-        - name: Restart bind-dns service
-          ansible.builtin.systemd:
-            name: bind-dns
-            state: restarted
-            scope: user
+    - name: Restart bind-dns service
+      ansible.builtin.systemd:
+        name: bind-dns
+        state: restarted
+        scope: user
 
-        - name: Display reload result
-          ansible.builtin.debug:
-            msg: "Zone file deployed and bind-dns service restarted"
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Zone file deployed and bind-dns service restarted"

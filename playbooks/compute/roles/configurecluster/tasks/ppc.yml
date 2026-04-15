@@ -1,0 +1,56 @@
+---
+- name: Ensure must gather directory is empty
+  ansible.builtin.file:
+    path: "/tmp/must-gather"
+    state: absent
+
+- name: Collect Must Gather
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir=/tmp/must-gather
+  register: must_gather
+  changed_when: must_gather.rc == 0
+
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+    ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+- name: Generate Performance Profile using PPC container
+  containers.podman.podman_container:
+    name: ppc_tool
+    image: "{{ ppc_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+    rm: true
+    entrypoint: performance-profile-creator
+    detach: false
+    authfile: /tmp/pull_secret
+    volumes:
+      - "/tmp/must-gather:/must-gather:Z"
+    command: >
+      --mcp-name=worker
+      --must-gather-dir-path=/must-gather
+      --rt-kernel=false
+      --reserved-cpu-count=4
+  register: ppc_output
+
+- name: Save generated profile to file
+  copy:
+    content: "{{ ppc_output.stdout }}"
+    dest: "/tmp/tmp_ppc.yaml"
+    mode: '0664'
+
+- name: Read PerformanceProfile file
+  ansible.builtin.slurp:
+    src: "/tmp/tmp_ppc.yaml"
+  register: profile_file
+
+- name: Extract CPU settings
+  set_fact:
+    cpu_isolated: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.isolated }}"
+    cpu_reserved: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.reserved }}"

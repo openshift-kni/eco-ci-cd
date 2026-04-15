@@ -8,8 +8,8 @@ metadata:
 {% endif %}
 spec:
     cpu:
-        isolated: "4-23"
-        reserved: "0-3"
+        isolated: {{ cpu_isolated | default("4-23") }}
+        reserved: {{ cpu_reserved | default("0-3") }}
 {% if hugepages is defined %}
     hugepages:
         defaultHugepagesSize: {{ hugepages['size'] | default('1G') }}

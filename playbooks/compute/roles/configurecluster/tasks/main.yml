@@ -20,6 +20,12 @@
 - name: Detect if deployment is SNO
   ansible.builtin.include_tasks: detect_sno.yml
 
+- name: Generate Performance Profile using PPC container
+  ansible.builtin.include_tasks: ppc.yml
+  when:
+    - not day0_installation | bool
+    - hostvars['worker0']['vendor'] | default('') | lower != 'kvm'
+
 - name: Render Manifests
   ansible.builtin.include_tasks: Render_manifests.yml
 

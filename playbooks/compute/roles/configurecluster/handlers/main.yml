@@ -1,17 +1,7 @@
 ---
-- name: Wait for machine config pool to be degraded
-  kubernetes.core.k8s_info:
-    api_version: machineconfiguration.openshift.io/v1
-    kind: MachineConfigPool
-  register: machine_config_pool
-  retries: 60
-  delay: 5
-  until: |
-    machine_config_pool.resources | length > 0
-    and
-    (machine_config_pool.resources
-      | community.general.json_query('[*].status.readyMachineCount') !=
-      (machine_config_pool.resources | community.general.json_query('[*].status.machineCount')))
+- name: Wait for MCP to change
+  ansible.builtin.pause:
+    minutes: 1
   listen: wait for mcp update
 
 - name: Wait for machine config pool to be updated
@@ -19,7 +9,7 @@
     api_version: machineconfiguration.openshift.io/v1
     kind: MachineConfigPool
   register: machine_config_pool_post
-  retries: 120
+  retries: 360
   delay: 10
   until: |
     not machine_config_pool_post.failed
@@ -28,7 +18,7 @@
     and
     (machine_config_pool_post.resources
       | community.general.json_query('[*].status.readyMachineCount') ==
-      (machine_config_pool.resources | community.general.json_query('[*].status.machineCount')))
+      (machine_config_pool_post.resources | community.general.json_query('[*].status.machineCount')))
   listen: wait for mcp update
 
 - name: Notify that Master MCP update is complete

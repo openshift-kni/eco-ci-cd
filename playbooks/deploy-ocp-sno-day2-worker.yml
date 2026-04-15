@@ -156,6 +156,7 @@
             kubeconfig: "{{ kubeconfig }}"
           register: app_status
           until: >-
+            app_status.resources is defined and
             app_status.resources | length > 0 and
             app_status.resources[0].status.sync.status | default('') == 'Synced'
           retries: 30
@@ -176,6 +177,7 @@
               - "!node-role.kubernetes.io/master"
           register: worker_nodes
           until: >-
+            worker_nodes.resources is defined and
             worker_nodes.resources | length > 0 and
             (worker_nodes.resources[0].status.conditions |
              selectattr('type', 'equalto', 'Ready') |
@@ -190,6 +192,7 @@
             kubeconfig: "{{ spoke_kubeconfig }}"
           register: all_csvs
           until: >-
+            all_csvs.resources is defined and
             all_csvs.resources | length > 0 and
             all_csvs.resources |
               rejectattr('status.phase', 'equalto', 'Succeeded') |

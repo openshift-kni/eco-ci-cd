@@ -1,0 +1,7 @@
+bastions:
+    hosts:
+        bastion:
+
+hypervisors:
+    hosts:
+        hypervisor:

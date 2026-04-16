@@ -1,0 +1,34 @@
+  logging {                                                                                                                                                                  
+      channel b_stdout {                                
+          stderr;                                                                                                                                                            
+          severity info;                                
+          print-category yes;
+          print-severity yes;
+          print-time yes;
+      };
+      category default { b_stdout; };
+      category config  { b_stdout; };                                                                                                                                        
+      category queries { b_stdout; };
+  };                                                                                                                                                                         
+                                                        
+  options {
+      directory "/var/cache/bind";
+      recursion yes;
+      allow-query { any; };
+      listen-on { any; };
+      listen-on-v6 { any; };                                                                                                                                                 
+   
+      forwarders {
+{% for forwarder in dns_forwarders %}
+          {{ forwarder }};
+{% endfor %}
+      };                                                                                                                                                                     
+   
+      forward first;                                                                                                                                                         
+  };                                                    
+
+  zone "{{ dns_domain }}.{{ dns_base_domain }}" {                                                                                                     
+      type master;
+      file "/etc/bind/zones/db.{{ dns_domain }}";                                                                                                       
+  };
+

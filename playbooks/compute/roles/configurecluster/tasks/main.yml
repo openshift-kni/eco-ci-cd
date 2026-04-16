@@ -20,6 +20,10 @@
 - name: Detect if deployment is SNO
   ansible.builtin.include_tasks: detect_sno.yml
 
+- name: Create MCP Pool
+  ansible.builtin.include_tasks: mcp_pool.yml
+  when: not is_sno | bool
+
 - name: Generate Performance Profile using PPC container
   ansible.builtin.include_tasks: ppc.yml
   when:

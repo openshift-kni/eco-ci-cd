@@ -33,7 +33,7 @@
     volumes:
       - "/tmp/must-gather:/must-gather:Z"
     command: >
-      --mcp-name=worker
+      --mcp-name=worker-cnf
       --must-gather-dir-path=/must-gather
       --rt-kernel=false
       --reserved-cpu-count=4

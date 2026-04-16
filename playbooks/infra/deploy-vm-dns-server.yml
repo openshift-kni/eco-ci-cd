@@ -99,6 +99,7 @@
 #   "vm_bridge_name": "br-external",
 #   "vm_name": "dns-primary-vm"
 # }
+#
 # Notes:
 # - This playbook assumes the hypervisor host is pre-installed and ready.
 # - Customize variables such as `vm_name`, `ansible_user`, and network settings to fit your environment.

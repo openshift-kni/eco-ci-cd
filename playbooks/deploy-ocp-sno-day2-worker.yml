@@ -92,6 +92,17 @@
             dest: "{{ spoke_kubeconfig }}"
             mode: '0600'
 
+        - name: Wait for the spoke cluster API to become reachable
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Namespace
+            name: default
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_api_check
+          until: spoke_api_check is success
+          retries: 30
+          delay: 30
+
         - name: Get the configs from spoke cluster for each operator
           kubernetes.core.k8s_info:
             api_version: "{{ item.api_version }}"

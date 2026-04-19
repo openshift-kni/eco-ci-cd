@@ -179,6 +179,7 @@
       junipernetworks.junos.junos_netconf:
         netconf_port: 830
         state: present
+      ignore_errors: true
 
     - name: Flush port configuration
       vars:

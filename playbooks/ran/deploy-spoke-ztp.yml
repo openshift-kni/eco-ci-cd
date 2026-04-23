@@ -469,6 +469,9 @@
       register: clusterinstallref
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
+      until: clusterinstallref.stdout | length > 0
+      retries: 20
+      delay: 30
       changed_when: false
 
     - name: Wait for agent cluster install to begin

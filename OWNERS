@@ -6,6 +6,8 @@ reviewers:
 - shaior
 - rdiscala
 - mkochanowski
+- rdiazcam
+- TimurMP
 approvers:
 - ccardenosa
 - cplacani
@@ -14,3 +16,5 @@ approvers:
 - shaior
 - rdiscala
 - mkochanowski
+- rdiazcam
+- TimurMP

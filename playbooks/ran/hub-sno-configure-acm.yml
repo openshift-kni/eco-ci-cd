@@ -249,13 +249,13 @@
           Please check the cache directory: {{ rhcos_cache_dir }}
           and ensure only one RHCOS ISO file is present.
 
-    - name: Set RHCOS version from ISO file name
+     - name: Set RHCOS version from ISO file name
       ansible.builtin.set_fact:
         rhcos_version: "{{ rhcos_iso_files.files 
         | map(attribute='path') 
         | first 
         | basename 
-        | regex_replace('^rhcos-(.*?)-live-iso.*$', '\\1') }}"
+        | regex_replace('^rhcos-(.*?)-live[.-].*$', '\\1') }}"
 
     - name: Set RHCOS ISO URL
       ansible.builtin.set_fact:

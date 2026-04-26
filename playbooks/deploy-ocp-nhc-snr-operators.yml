@@ -1,0 +1,416 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook deploys the Node Health Check Operator using Operator Lifecycle Manager (OLM).
+# The NHC operator also installs the Self Node Remediation Operator as its default remediation provider.
+# It supports both connected and disconnected flows. In disconnected mode, it mirrors operator
+# content to an internal registry and applies the generated CatalogSources/IDMS.
+
+## Prerequisites:
+# - Ansible 2.9+ installed on the control node.
+# - SSH Access to bastion hosts.
+# - Installed OpenShift cluster (4.22+)
+# - KUBECONFIG file
+# - Internal registry URL/credentials for disconnected mode (if disconnected=true)
+# - skopeo installed on the control node (used to check if images exist in the mirror registry)
+# - redhatci.ocp Ansible collection installed (ansible-galaxy collection install redhatci.ocp)
+
+## Roles Used
+# - ocp_operator_mirror (disconnected mirroring)
+# - ocp_operator_deployment (installs operators)
+
+## Roles Requirements (from redhatci.ocp collection)
+# - redhatci.ocp.olm_operator
+# - redhatci.ocp.catalog_source
+
+## Variables
+# - teardown (bool): set true to remove the operators and their custom resources from the cluster, default is false
+# - disconnected (bool): set true to mirror & use internal registry, default is false
+# - mirror_only (bool): set true to only mirror operators without installing them, default is false
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - version (str): OCP major.minor used to pick catalog index images (e.g., 4.22)
+# - nhc_min_healthy (str): minimum healthy nodes threshold, default "90%"
+# - nhc_unhealthy_duration (str): duration before node is considered unhealthy, default "60s"
+# - nhc_worker_label (str): node selector label key, default "node-role.kubernetes.io/worker"
+# - snr_safe_reboot_seconds (int): seconds to assume node has rebooted, default 180
+# - snr_api_server_timeout (str): API server timeout, default "15s"
+# - snr_api_check_interval (str): API check interval, default "5s"
+# - snr_max_api_error_threshold (int): max API errors before action, default 3
+# - snr_peer_api_server_timeout (str): peer API server timeout, default "5s"
+# - snr_peer_dial_timeout (str): peer dial timeout, default "5s"
+# - snr_peer_request_timeout (str): peer request timeout, default "5s"
+# - snr_peer_update_interval (str): peer update interval, default "15m"
+# - skip_registry_cleanup (bool): skip stopping/cleaning internal registry storage before mirroring, default true
+# - mirror_registry_url (str): internal registry URL for disconnected mirroring (e.g., registry.example.com:5000), required when disconnected=true
+# - mirror_registry_user (str): username for internal mirror registry, required when disconnected=true
+# - mirror_registry_password (str): password for internal mirror registry, required when disconnected=true
+# - pull_secret_file (str): path to pull secret JSON file for registry.redhat.io, required when disconnected=true
+# - pull_secret_string (str): base64-encoded pull secret (alternative to pull_secret_file)
+
+## Usage:
+
+# Example 1: Install NHC operator (connected environment)
+# ansible-playbook ./playbooks/deploy-node-health-check.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22"'
+
+# Example 2: Mirror AND install (disconnected environment)
+# ansible-playbook ./playbooks/deploy-node-health-check.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 3: Custom thresholds
+# ansible-playbook ./playbooks/deploy-node-health-check.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22" nhc_min_healthy="75%" nhc_unhealthy_duration="120s"'
+
+# Example 4: Remove operators
+# ansible-playbook ./playbooks/deploy-node-health-check.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" teardown=true'
+---
+- name: Deploy Node Health Check and Self Node Remediation Operators
+  hosts: bastion
+  gather_facts: true
+  vars:
+    teardown: false
+    disconnected: false
+    mirror_only: false
+    nhc_min_healthy: "90%"
+    nhc_unhealthy_duration: "60s"
+    nhc_worker_label: "node-role.kubernetes.io/worker"
+    snr_safe_reboot_seconds: 180
+    snr_api_server_timeout: "15s"
+    snr_api_check_interval: "5s"
+    snr_max_api_error_threshold: 3
+    snr_peer_api_server_timeout: "5s"
+    snr_peer_dial_timeout: "5s"
+    snr_peer_request_timeout: "5s"
+    snr_peer_update_interval: "15m"
+    _nhc_ns: openshift-workload-availability
+    operators:
+      - name: self-node-remediation
+        catalog: redhat-operators
+        nsname: "{{ _nhc_ns }}"
+        channel: stable
+        deploy_default_config: false
+        og_name: node-healthcheck-operator
+        og_spec: {}
+      - name: node-healthcheck-operator
+        catalog: redhat-operators
+        nsname: "{{ _nhc_ns }}"
+        channel: stable
+        deploy_default_config: true
+        og_spec: {}
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes==33.1.0
+          - openshift
+        state: present
+
+    - name: Remove operators
+      when: teardown | bool
+      block:
+        - name: Pause NodeHealthCheck to prevent new remediations
+          kubernetes.core.k8s:
+            api_version: remediation.medik8s.io/v1alpha1
+            kind: NodeHealthCheck
+            name: nhc-worker-self
+            state: present
+            definition:
+              spec:
+                pauseRequests:
+                  - "teardown"
+          failed_when: false
+
+        - name: Get active SelfNodeRemediation resources
+          kubernetes.core.k8s_info:
+            api_version: self-node-remediation.medik8s.io/v1alpha1
+            kind: SelfNodeRemediation
+            namespace: "{{ _nhc_ns }}"
+          register: _active_remediations
+
+        - name: Remove finalizers and delete active SelfNodeRemediation resources
+          ansible.builtin.command:
+            cmd: >-
+              oc patch selfnoderemediation {{ item.metadata.name }}
+              -n {{ _nhc_ns }}
+              --type merge -p '{"metadata":{"finalizers":null}}'
+          loop: "{{ _active_remediations.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: _active_remediations.resources | length > 0
+          changed_when: true
+
+        - name: Delete active SelfNodeRemediation resources
+          kubernetes.core.k8s:
+            api_version: self-node-remediation.medik8s.io/v1alpha1
+            kind: SelfNodeRemediation
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+          loop: "{{ _active_remediations.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: _active_remediations.resources | length > 0
+
+        - name: Delete NodeHealthCheck custom resource
+          kubernetes.core.k8s:
+            api_version: remediation.medik8s.io/v1alpha1
+            kind: NodeHealthCheck
+            name: nhc-worker-self
+            state: absent
+
+        - name: Delete SelfNodeRemediationConfig custom resource
+          kubernetes.core.k8s:
+            api_version: self-node-remediation.medik8s.io/v1alpha1
+            kind: SelfNodeRemediationConfig
+            name: self-node-remediation-config
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+
+        - name: Delete SelfNodeRemediationTemplate custom resource
+          kubernetes.core.k8s:
+            api_version: self-node-remediation.medik8s.io/v1alpha1
+            kind: SelfNodeRemediationTemplate
+            name: self-node-remediation-outofservicetaint-strategy-template
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+
+        - name: Get ClusterServiceVersions in operator namespace
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _nhc_ns }}"
+          register: _nhc_csvs
+
+        - name: Delete operator ClusterServiceVersions
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+          loop: >-
+            {{ _nhc_csvs.resources
+               | selectattr('metadata.name', 'match', '(node-healthcheck|self-node-remediation)')
+               | list }}
+          loop_control:
+            label: "{{ item.metadata.name }}"
+
+        - name: Delete operator Subscriptions
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: "{{ item }}"
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+          loop:
+            - node-healthcheck-operator
+            - self-node-remediation
+
+        - name: Delete OperatorGroup
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: node-healthcheck-operator
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+
+    - name: Resolve pull secret
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Fail if no pull secret is provided
+          ansible.builtin.fail:
+            msg: >-
+              A pull secret is required for disconnected mirroring.
+              Provide either pull_secret_file (path to JSON file)
+              or pull_secret_string (base64-encoded JSON).
+          when:
+            - pull_secret_file is not defined
+            - pull_secret_string is not defined
+
+        - name: Read pull secret from file
+          when: pull_secret_file is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ lookup('file', pull_secret_file) | from_json }}"
+
+        - name: Decode pull secret from string
+          when: pull_secret_file is not defined and pull_secret_string is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+
+    - name: Ensure skopeo is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if skopeo is installed
+          ansible.builtin.command: which skopeo
+          register: skopeo_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if skopeo is not installed
+          when: skopeo_check.rc != 0
+          ansible.builtin.fail:
+            msg: >-
+              skopeo is required for disconnected mirroring but was not found.
+              Install it with: sudo dnf install -y skopeo
+
+    - name: Ensure oc-mirror is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if oc-mirror is installed
+          ansible.builtin.command: which oc-mirror
+          register: oc_mirror_check
+          changed_when: false
+          failed_when: false
+
+        - name: Download oc-mirror archive
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.get_url:
+            url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/oc-mirror.tar.gz"
+            dest: "/tmp/oc-mirror.tar.gz"
+            mode: '0644'
+
+        - name: Extract oc-mirror archive
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.unarchive:
+            src: "/tmp/oc-mirror.tar.gz"
+            dest: /tmp
+            remote_src: true
+
+        - name: Install oc-mirror binary
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.copy:
+            remote_src: true
+            src: /tmp/oc-mirror
+            dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+            mode: '0755'
+
+    - name: Mirror Operators to internal registry for disconnected installation
+      when: not (teardown | bool) and (disconnected | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: "{{ mirror_registry_url }}"
+        ocp_operator_mirror_registry_user: "{{ mirror_registry_user }}"
+        ocp_operator_mirror_registry_password: "{{ mirror_registry_password }}"
+        ocp_operator_mirror_pull_secret: "{{ _pull_secret }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_skip_internal_registry_cleanup: "{{ skip_registry_cleanup | default(true) }}"
+        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default('') }}"
+        ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base | default(omit) }}"
+        ocp_operator_mirror_art_images_share: "{{ art_share_image | default(omit) }}"
+
+    - name: Select operators source
+      when: not (teardown | bool)
+      ansible.builtin.set_fact:
+        operator_input: >-
+          {{
+            ocp_operators_mirror_disconnected_config
+            if (((ocp_operators_mirror_disconnected_config | default([])) | length) > 0)
+            else (operators | from_json if (operators is string) else operators)
+          }}
+
+    - name: Display mirror-only mode message
+      ansible.builtin.debug:
+        msg: "Mirror-only mode enabled. Skipping operator installation."
+      when: not (teardown | bool) and (mirror_only | bool)
+
+    - name: Clean up failed NHC subscription if present
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Check for existing NHC subscription
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: node-healthcheck-operator
+            namespace: "{{ _nhc_ns }}"
+          register: existing_sub
+
+        - name: Remove stale subscription with failed bundle unpack
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: node-healthcheck-operator
+            namespace: "{{ _nhc_ns }}"
+            state: absent
+          when:
+            - existing_sub.resources | length > 0
+            - existing_sub.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'BundleUnpackFailed')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0
+
+    - name: Install Operators
+      when: not (teardown | bool) and not (mirror_only | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_deployment
+      vars:
+        ocp_operator_deployment_version: "{{ version }}"
+        ocp_operator_deployment_operators: "{{ operator_input }}"
+        ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
+        ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"
+
+    - name: Configure operator custom resources
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Create SelfNodeRemediationTemplate
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: self-node-remediation.medik8s.io/v1alpha1
+              kind: SelfNodeRemediationTemplate
+              metadata:
+                name: self-node-remediation-outofservicetaint-strategy-template
+                namespace: "{{ _nhc_ns }}"
+              spec:
+                template:
+                  spec:
+                    remediationStrategy: OutOfServiceTaint
+
+        - name: Configure SelfNodeRemediationConfig
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: self-node-remediation.medik8s.io/v1alpha1
+              kind: SelfNodeRemediationConfig
+              metadata:
+                name: self-node-remediation-config
+                namespace: "{{ _nhc_ns }}"
+              spec:
+                safeTimeToAssumeNodeRebootedSeconds: "{{ snr_safe_reboot_seconds }}"
+                watchdogFilePath: /dev/watchdog
+                isSoftwareRebootEnabled: true
+                apiServerTimeout: "{{ snr_api_server_timeout }}"
+                apiCheckInterval: "{{ snr_api_check_interval }}"
+                maxApiErrorThreshold: "{{ snr_max_api_error_threshold }}"
+                peerApiServerTimeout: "{{ snr_peer_api_server_timeout }}"
+                peerDialTimeout: "{{ snr_peer_dial_timeout }}"
+                peerRequestTimeout: "{{ snr_peer_request_timeout }}"
+                peerUpdateInterval: "{{ snr_peer_update_interval }}"
+                hostPort: 30001
+
+        - name: Create NodeHealthCheck
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('template', 'templates/nodehealthcheck.yml.j2') | from_yaml }}"
+
+        - name: Display NHC configuration
+          ansible.builtin.debug:
+            msg: >-
+              NodeHealthCheck configured:
+              minHealthy={{ nhc_min_healthy }},
+              selector={{ nhc_worker_label }},
+              unhealthyDuration={{ nhc_unhealthy_duration }}

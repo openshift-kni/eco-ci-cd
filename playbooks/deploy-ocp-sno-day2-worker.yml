@@ -48,6 +48,12 @@
   vars:
     day2_branch: "day2-worker"
     openshift_gitops_namespace: "openshift-gitops"
+    day2_cgu_name: "day2-worker-cgu"
+    day2_managed_policies:
+      - common-config-policy
+      - common-subscriptions-policy
+      - group-du-standard-config-policy
+      - group-du-standard-site-config-policy
     operator_configs:
       - name: PTP Operator
         api_version: ptp.openshift.io/v1
@@ -139,11 +145,12 @@
           loop_control:
             label: "{{ item.item.name }}"
 
-        - name: Patch the ArgoCD Applications to switch targetRevision to day2-worker branch
+        # ── Phase 1: Enforce day2 worker policies before provisioning ──
+        - name: Patch the ArgoCD policies application to switch to the day2-worker branch
           kubernetes.core.k8s:
             api_version: argoproj.io/v1alpha1
             kind: Application
-            name: "{{ item }}"
+            name: policies
             namespace: "{{ openshift_gitops_namespace }}"
             kubeconfig: "{{ kubeconfig }}"
             state: present
@@ -152,31 +159,113 @@
               spec:
                 source:
                   targetRevision: "{{ day2_branch }}"
-          loop:
-            - clusters
-            - policies
-          loop_control:
-            label: "{{ item }}"
 
-        - name: Wait for the ArgoCD applications to sync after branch switch
+        - name: Wait for the ArgoCD policies application to sync
           kubernetes.core.k8s_info:
             api_version: argoproj.io/v1alpha1
             kind: Application
-            name: "{{ item }}"
+            name: policies
             namespace: "{{ openshift_gitops_namespace }}"
             kubeconfig: "{{ kubeconfig }}"
-          register: app_status
+          register: policies_app_status
           until: >-
-            app_status.resources is defined and
-            app_status.resources | length > 0 and
-            app_status.resources[0].status.sync.status | default('') == 'Synced'
+            policies_app_status.resources is defined and
+            policies_app_status.resources | length > 0 and
+            policies_app_status.resources[0].status.sync.status | default('') == 'Synced'
           retries: 30
           delay: 20
-          loop:
-            - clusters
-            - policies
-          loop_control:
-            label: "{{ item }}"
+
+        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade
+          kubernetes.core.k8s:
+            api_version: ran.openshift.io/v1alpha1
+            kind: ClusterGroupUpgrade
+            name: "{{ day2_cgu_name }}"
+            namespace: default
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            wait: true
+            wait_timeout: 120
+          ignore_errors: true
+
+        - name: Create ClusterGroupUpgrade to enforce day2 worker policies via TALM
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: ran.openshift.io/v1alpha1
+              kind: ClusterGroupUpgrade
+              metadata:
+                name: "{{ day2_cgu_name }}"
+                namespace: default
+              spec:
+                backup: false
+                clusters:
+                  - "{{ spoke_cluster_name }}"
+                enable: true
+                managedPolicies: "{{ day2_managed_policies }}"
+                preCaching: false
+                remediationStrategy:
+                  maxConcurrency: 1
+                  timeout: 60
+
+        - name: Wait for the ClusterGroupUpgrade to complete
+          kubernetes.core.k8s_info:
+            api_version: ran.openshift.io/v1alpha1
+            kind: ClusterGroupUpgrade
+            name: "{{ day2_cgu_name }}"
+            namespace: default
+            kubeconfig: "{{ kubeconfig }}"
+          register: cgu_status
+          until: >-
+            cgu_status.resources is defined and
+            cgu_status.resources | length > 0 and
+            cgu_status.resources[0].status.conditions | default([]) |
+              selectattr('type', 'equalto', 'Succeeded') |
+              list | length > 0
+          retries: 130
+          delay: 30
+
+        - name: Assert the ClusterGroupUpgrade succeeded
+          ansible.builtin.assert:
+            that:
+              - >-
+                cgu_status.resources[0].status.conditions |
+                  selectattr('type', 'equalto', 'Succeeded') |
+                  selectattr('status', 'equalto', 'True') |
+                  list | length > 0
+            fail_msg: >-
+              ClusterGroupUpgrade '{{ day2_cgu_name }}' failed to enforce
+              day2 worker policies on cluster '{{ spoke_cluster_name }}'
+
+        # ── Phase 2: Provision the worker node ──
+        - name: Patch the ArgoCD clusters application to switch to the day2-worker branch
+          kubernetes.core.k8s:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: clusters
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            merge_type: merge
+            definition:
+              spec:
+                source:
+                  targetRevision: "{{ day2_branch }}"
+
+        - name: Wait for the ArgoCD clusters application to sync
+          kubernetes.core.k8s_info:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: clusters
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: clusters_app_status
+          until: >-
+            clusters_app_status.resources is defined and
+            clusters_app_status.resources | length > 0 and
+            clusters_app_status.resources[0].status.sync.status | default('') == 'Synced'
+          retries: 30
+          delay: 20
 
         - name: Wait for the worker node to become Ready on the spoke cluster
           kubernetes.core.k8s_info:
@@ -211,6 +300,16 @@
           retries: 30
           delay: 30
       always:
+        - name: Delete the day2 worker ClusterGroupUpgrade
+          kubernetes.core.k8s:
+            api_version: ran.openshift.io/v1alpha1
+            kind: ClusterGroupUpgrade
+            name: "{{ day2_cgu_name }}"
+            namespace: default
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+          ignore_errors: true
+
         - name: Clean up the temporary files
           ansible.builtin.file:
             path: "{{ spoke_kubeconfig }}"

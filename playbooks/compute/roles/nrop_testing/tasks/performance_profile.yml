@@ -29,7 +29,7 @@
   register: ppc_output
 
 - name: Save generated profile to file
-  copy:
+  ansible.builtin.copy:
     content: "{{ ppc_output.stdout }}"
     dest: "{{ manifest_dir }}/{{ topology_manager_scope }}_{{ performance_profile }}"
     mode: '0664'
@@ -40,7 +40,7 @@
   register: profile_file
 
 - name: Extract CPU settings
-  set_fact:
+  ansible.builtin.set_fact:
     cpu_isolated: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.isolated }}"
     cpu_reserved: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.reserved }}"
 

@@ -7,7 +7,7 @@
   register: nrop_pods
 
 - name: Set pod and namespace facts
-  set_fact:
+  ansible.builtin.set_fact:
     pod_name: "{{ (nrop_pods.resources | selectattr('metadata.name', 'search', 'numaresources-controller-manager-') | first).metadata.name }}"
     operator_namespace: "{{ (nrop_pods.resources | selectattr('metadata.name', 'search', 'numaresources-controller-manager-') | first).metadata.namespace }}"
   when: nrop_pods.resources | length > 0
@@ -20,7 +20,7 @@
   register: features_from_manager
 
 - name: Set active features
-  set_fact:
+  ansible.builtin.set_fact:
     active_features: "{{ (features_from_manager.stdout | from_json).active }}"
 
 - name: Save active feature list
@@ -30,14 +30,14 @@
     mode: '0664'
 
 - name: Get latest features list from tests image
-  shell: |
+  ansible.builtin.shell: |
     podman run {{ nrop_test_image_tag }} cat /usr/local/share/topics.json
   changed_when: latest_list.rc == 0
   register: latest_list
 
 - name: Set latest features
-  set_fact:
-    latest_features: "{{ (latest_list.stdout | from_json).active  }}"
+  ansible.builtin.set_fact:
+    latest_features: "{{ (latest_list.stdout | from_json).active }}"
 
 - name: Save active features from test image
   ansible.builtin.copy:
@@ -46,11 +46,11 @@
     mode: '0664'
 
 - name: Features to skip
-  set_fact:
+  ansible.builtin.set_fact:
     feature_to_skip: "{{ (latest_features | difference(active_features)) | join(' ') }}"
 
 - name: Build the skip list (In latest but not in active, plus known bugs)
-  set_fact:
+  ansible.builtin.set_fact:
     skip_filter: "!(feature: containsAny { {{ feature_to_skip }} })"
   when: feature_to_skip | length > 0
 
@@ -77,6 +77,13 @@
     mode: '0776'
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
+
+- name: Set ginkgo label
+  ansible.builtin.set_fact:
+    ginkgo_label: "{{ _ginkgo_label }}"
+  when:
+    - ginkgo_label is undefined or ginkgo_label | length == 0
+    - test_env == "prod"
 
 - name: Save test script
   ansible.builtin.template:

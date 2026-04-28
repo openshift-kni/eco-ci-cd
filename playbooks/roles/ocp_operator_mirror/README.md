@@ -54,10 +54,10 @@ Key variables (see `defaults/main.yaml` for full list and defaults):
 - `ocp_operator_mirror_fbc_extract_dir`: Local directory used to extract FBC (IIB) catalog files (e.g., catalog.yaml) from index images during Konflux/IIB workflows. Default: `/tmp/fbc/`
 - `ocp_operator_mirror_fbc_image_base`: Base repository for FBC (IIB) index images.
 - `ocp_operator_mirror_art_images_share`: Registry/repo prefix used to pull ART images by digest when mapping source digests to a shared location.
-- `ocp_operator_mirror_bundle_version`: Optional bundle version substring used to filter channel entries when selecting a bundle from FBC catalogs (e.g., `4.19.3`). Leave empty to select the latest entry.
 
 **FBC operator item (optional):**
 - `multifile_catalog`: Set `true` on an FBC operator to read `bundles.yaml` under the package dir and resolve the package from the first `olm.bundle`’s `package` field; omit or `false` uses `catalog.yaml` and resolves from the first `olm.package`’s `name` (default). This only affects catalog parsing, not `skopeo` source URLs.
+- `bundle_version`: Optional regex used to filter channel entry names before selecting a bundle from FBC catalogs (for example, `4\.19\.[0-9]+`). If omitted or empty, the role selects the latest entry in the channel.
 - FBC **image pair `src` remaps** (org path → `/acm-d/`, `registry.stage.redhat.io` → `quay.io:443`) apply when `catalog` contains the substring `acm` or `mce` (case-insensitive). Other FBC operators use `image_list` as-is for `src` when mirroring from FBC.
 
 **Operator item (production catalogs):**
@@ -137,6 +137,7 @@ IIB (FBC) example with ART mirroring:
             nsname: openshift-sriov-network-operator
             deploy_default_config: true
             channel: stable
+            bundle_version: '4.19.0'
           - name: ptp-operator
             catalog: redhat-operators-ptp-art
             nsname: openshift-ptp

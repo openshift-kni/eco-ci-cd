@@ -10,7 +10,7 @@
 - name: Generate sample device manifests
   ansible.builtin.template:
     src: "{{ item }}.yaml.j2"
-    dest: "{{ tmp_workdir }}/artifacts/{{ item}}_{{ topology_manager_scope }}.yaml"
+    dest: "{{ tmp_workdir }}/artifacts/{{ item }}_{{ topology_manager_scope }}.yaml"
     mode: '0644'
   loop:
     - "setup-sample-device"

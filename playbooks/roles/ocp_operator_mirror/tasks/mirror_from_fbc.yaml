@@ -180,14 +180,14 @@
   ansible.builtin.set_fact:
     filtered_names: >-
       {{
-        (entry_names | select('search', ocp_operator_mirror_bundle_version) | list)
-        if (ocp_operator_mirror_bundle_version is defined and (ocp_operator_mirror_bundle_version | length) > 0)
+        (entry_names | select('search', operator.bundle_version) | list)
+        if (operator.bundle_version is defined and (operator.bundle_version | length) > 0)
         else entry_names
       }}
 
 - name: Ensure version filter matches at least one entry
   ansible.builtin.fail:
-    msg: "No bundle entry matched version filter '{{ ocp_operator_mirror_bundle_version }}' in channel '{{ operator.channel }}'"
+    msg: "No bundle entry matched version filter '{{ operator.bundle_version }}' in channel '{{ operator.channel }}'"
   when: filtered_names | length == 0
 
 - name: Select bundle (latest or filtered)

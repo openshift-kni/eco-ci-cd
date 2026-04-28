@@ -133,6 +133,19 @@
     path: "{{ ocp_operator_mirror_workspace_path }}"
     state: absent
 
+- name: Get oc-mirror version
+  ansible.builtin.command: oc-mirror version
+  register: oc_mirror_version_output
+  changed_when: false
+
+- name: Parse oc-mirror version
+  ansible.builtin.set_fact:
+    oc_mirror_version: "{{ oc_mirror_version_output.stdout | regex_search('([0-9]+\\.[0-9]+)', '\\1') | first }}"
+
+- name: Set signature flag based on oc-mirror version
+  ansible.builtin.set_fact:
+    oc_mirror_signature_flag: "{{ '--remove-signatures' if (oc_mirror_version is version('4.20', '>')) else '' }}"
+
 - name: Run oc-mirror to push operators to internal registry # noqa: command-instead-of-shell
   args:
     chdir: /tmp
@@ -147,7 +160,7 @@
     -c "{{ ocp_operator_mirror_image_set_configuration_path }}"
     --workspace file:///{{ ocp_operator_mirror_workspace_path }}
     docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
-    --ignore-release-signature --v2
+    --ignore-release-signature {{ oc_mirror_signature_flag }} --v2
 
 - name: Show oc-mirror result
   ansible.builtin.debug:

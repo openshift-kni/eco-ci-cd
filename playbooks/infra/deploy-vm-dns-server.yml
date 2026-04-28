@@ -1,0 +1,207 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for DNS Server Deployment and Configuration
+
+## Overview:
+# This playbook automates the deployment and configuration of a DNS server by:
+# 1. Checking if the VM already exists
+# 2. Deploying the VM if needed using the existing bastion deployment playbook
+# 3. Installing and configuring DNS server on the bastion
+# 4. Setting up DNS zones and records
+# 5. Implementing zone backup mechanisms
+
+## Playbook Workflow
+# 1. VM Deployment :
+#    - Imports the `deploy-vm-bastion-libvirt.yml` playbook..
+#    - Deploys the bastion VM on the hypervisor using libvirt.
+#    - Waits for the VM to become accessible via SSH.
+#
+# 2. System Configuration:
+#    - Verifies bastion VM accessibility.
+#    - Configures unprivileged port access for DNS (port 53).
+#    - Configures firewall rules to allow DNS traffic.
+#
+# 3. BIND Directory Structure:
+#    - Creates the bind directory structure (config, zones, cache).
+#    - Sets appropriate permissions for container access.
+#
+# 4. DNS Configuration Deployment:
+#    - Deploys BIND named.conf configuration from template. (bind_named.conf.j2)
+#    - Deploys DNS zone files with configured records. (db.zone.j2)
+#    - Ensures proper SELinux contexts for container volume mounts.
+#
+# 5. Container Service Setup:
+#    - Creates Podman Quadlet systemd configuration.
+#    - Enables user linger to keep services running after logout.
+#    - Starts and enables the BIND DNS container as a systemd service.
+#
+# 6. Service Verification:
+#    - Verifies the DNS container is running.
+#    - Displays service status and connection information.
+
+## Prerequisites:
+# - Ansible 2.10+ installed on the control node
+# - SSH Access to hypervisor host
+# - VM qcow2 disk images accessible via HTTP
+# - community.libvirt collection installed
+# - Playbook deploy-vm-bastion-libvirt.yml
+
+## Running the Playbook
+# Ensure that host_vars and group_vars are properly installed.
+# Execute the playbook with the following command:
+# ansible-playbook playbooks/infra/deploy-vm-dns-server.yml -i ./inventories/infra/deploy-vm-dns-server.yml
+# After playpook is completed, use systemctl --user status bind-dns.service" commat to check the status of the service
+# Use "create-bind-dns-record.yml" playbook to create records on bind DNS server.
+
+## Variables Used by Playbook
+# all:
+#   ansible_user: user                          # SSH username for remote access
+#   ansible_ssh_private_key: 'ssh-key'          # Path to the private SSH key for authentication
+#   ansible_password: "pa$$word"                # SSH password for Ansible user (if not using key)
+#
+# bastion:
+#   ansible_host: 10.10.10.10"                  # IP address or hostname of the bastion VM
+#   hostname: ns2.example.com  # FQDN of the bastion (used as DNS server FQDN)
+#   dns_server_name: ns2                        # Hostname for the DNS nameserver (used in zone records)
+#   dns: 10.10.10.20                           # DNS forwarder IP (used in named.conf forwarders section)
+#   gateway: 10.10.10.254                       # Default gateway for the bastion
+#   net_prefix: "24"                            # Network prefix (CIDR notation)
+#   vm_bridge_name: br-hlxcl94                  # Hypervisor bridge name (used by deploy-vm-bastion-libvirt.yml)
+#   vm_name: ns2-server                    # VM name on the hypervisor (used by deploy-vm-bastion-libvirt.yml)
+#
+# Playbook Variables (defined in vars section):
+#   bind_root: "{{ ansible_user_dir }}/bind"    # Root directory for BIND configuration and data
+#   dns_domain: example                       # DNS domain name (without base domain)
+#   dns_base_domain: example.com    # Base domain for the zone
+#   dns_ttl: 60                                 # Default TTL for DNS records (in seconds)
+#   dns_forwarders: []                          # List of DNS forwarder IPs (used in named.conf)
+#                                               # Format: ['10.47.242.10', '8.8.8.8']
+#                                               # Default: uses bastion's dns variable
+#   dns_records: []                             # Optional list of additional DNS A records
+#                                               # Format: [{ name: 'host1', ip: '10.0.0.1' }, ...]
+# JSON Data
+# {
+#   "ansible_host": "192.168.1.10",
+#   "dns": "8.8.8.8",
+#   "dns2": "8.8.4.4",
+#   "dns_base_domain": "example.com",
+#   "dns_domain": "lab-env",
+#   "dns_server_name": "ns1",
+#   "gateway": "192.168.1.1",
+#   "gitlab_project_token": "glpat-PLACEHOLDER_TOKEN_VALUE_FOR_EXAMPLE",
+#   "gitlab_repo": "infrastructure",
+#   "gitlab_url": "gitlab.example.com/automation-team/",
+#   "hostname": "ns1.lab-env.example.com",
+#   "net_prefix": "24",
+#   "vm_bridge_name": "br-external",
+#   "vm_name": "dns-primary-vm"
+# }
+#
+# Notes:
+# - This playbook assumes the hypervisor host is pre-installed and ready.
+# - Customize variables such as `vm_name`, `ansible_user`, and network settings to fit your environment.
+# - Test in a non-production environment before deploying.
+
+---
+- name: Deploy DNS VM
+  ansible.builtin.import_playbook: deploy-vm-bastion-libvirt.yml
+
+- name: Configure DNS server on bastion
+  hosts: bastion
+  gather_facts: true
+  vars:
+    bind_root: "{{ ansible_user_dir }}/.config/bind"
+    dns_server_ip: "{{ hostvars['bastion']['ansible_host'] }}"
+    dns_server_fqdn: "{{ hostvars['bastion'].hostname }}"
+    dns_server_hostname: "{{ hostvars['bastion'].dns_server_name }}"
+    dns_ttl: 60
+    dns_forwarders:
+      - "{{ hostvars['bastion']['dns'] }}"
+      - "{{ hostvars['bastion']['dns2'] }}"
+    bind:
+      config: "{{ bind_root }}/config"
+      zones: "{{ bind_root }}/zones"
+      cache: "{{ bind_root }}/cache"
+      named_conf: "{{ bind_root }}/config/named.conf"
+      zone: "{{ bind_root }}/zones/db.telcov10n"
+
+  tasks:
+
+    - name: Display bastion information
+      ansible.builtin.debug:
+        msg: "Configuring DNS on {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Configure unprivileged port access
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_unprivileged_port_start
+        value: '53'
+        sysctl_file: /etc/sysctl.d/99-bind.conf
+        state: present
+        reload: true
+      become: true
+
+    - name: Allow DNS service through firewall
+      become: true
+      ansible.posix.firewalld:
+        service: dns
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Create bind directory structure
+      loop:
+        - "{{ bind.config }}"
+        - "{{ bind.zones }}"
+        - "{{ bind.cache }}"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+
+    - name: Deploy named.conf configuration
+      ansible.builtin.template:
+        src: bind_named.conf.j2
+        dest: "{{ bind.named_conf }}"
+        mode: '0644'
+
+    - name: Deploy DNS zone file
+      ansible.builtin.template:
+        src: db.zone.j2
+        dest: "{{ bind.zone }}"
+        mode: '0644'
+
+    - name: Create systemd user directory for Quadlet
+      ansible.builtin.file:
+        path: "{{ ansible_user_dir }}/.config/containers/systemd"
+        state: directory
+        mode: '0755'
+
+    - name: Deploy BIND DNS Quadlet container configuration
+      ansible.builtin.template:
+        src: bind-dns.container.j2
+        dest: "{{ ansible_user_dir }}/.config/containers/systemd/bind-dns.container"
+        mode: '0644'
+      notify: Reload systemd user daemon
+
+    - name: Enable linger for user (keep services running after logout)
+      ansible.builtin.command:
+        cmd: "loginctl enable-linger {{ ansible_user }}"
+      changed_when: false
+      become: true
+
+    - name: Enable and start BIND DNS service
+      ansible.builtin.systemd:
+        name: bind-dns
+        enabled: true
+        state: started
+        scope: user
+        daemon_reload: true
+
+  handlers:
+    - name: Reload systemd user daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+        scope: user

@@ -95,7 +95,7 @@
     cloud_init_iso_path: "/tmp/cloud-init.iso"
   tasks:
 
-    - name: Ensure VM does not already exists
+    - name: Ensure VM does not already exist
       become: true
       ansible.builtin.import_role:
         name: redhatci.ocp.destroy_vms
@@ -277,7 +277,7 @@
         password: "{{ hostvars[inventory_hostname].ansible_password | password_hash('sha512') }}"
         state: present
 
-    - name: Set paswordless sudo
+    - name: Set passwordless sudo
       ansible.builtin.lineinfile:
         path: /etc/sudoers.d/{{ hostvars[inventory_hostname].ansible_user }}
         line: "{{ hostvars[inventory_hostname].ansible_user }} ALL=(ALL) NOPASSWD: ALL"
@@ -438,7 +438,7 @@
         mode: "0755"
 
     # TODO: Uncomment once rehdatci bump completed
-    - name: Add auth credentials for container registres
+    - name: Add auth credentials for container registries
       ansible.builtin.set_fact:
         pull_secret:
           auths: "{{ podman_registry_credentials | from_json }}"

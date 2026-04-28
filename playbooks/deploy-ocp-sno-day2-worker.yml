@@ -1,0 +1,217 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Test thoroughly in your environment before production use.
+#
+# This Ansible playbook automates the expansion of a Single Node OpenShift
+# (SNO) Spoke cluster by adding a worker node as a Day 2 operation.
+# It follows the documentation at:
+#   https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/edge_computing/ztp-sno-additional-worker-node
+
+## Prerequisites:
+# - Ansible 2.10+
+# - A bastion server (if required)
+# - An inventory with required host_vars/group_vars populated
+# - A functional SNO Spoke cluster deployed by a Hub cluster
+#
+# Notes:
+# - Tested on a SNO Spoke cluster with no additional workers
+#
+# Required variables (examples):
+# - kubeconfig: a valid kubeconfig for hub cluster authentication [str],
+#               e.g. "/path/to/kubeconfig"
+# - spoke_cluster_name: the name of the spoke cluster to target [str],
+#                       e.g. "kni-qe-42"
+# - day2_branch: the name of the branch that contains the Day 2 ZTP cluster config [str].
+#                This is the branch that contains the amended siteconfig and
+#                any additional manifest for the new worker node, e.g.
+#                day2_worker.
+---
+- name: Pre-flight validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate that the required variables are defined
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster_name is defined
+          - spoke_cluster_name | length > 0
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - day2_branch is defined
+          - day2_branch | length > 0
+        fail_msg: "the required extra vars must be provided and non-empty"
+
+- name: Expand a SNO cluster by adding a worker as a Day 2 operation
+  hosts: bastion
+  gather_facts: false
+  vars:
+    day2_branch: "day2-worker"
+    openshift_gitops_namespace: "openshift-gitops"
+    operator_configs:
+      - name: PTP Operator
+        api_version: ptp.openshift.io/v1
+        kind: PtpOperatorConfig
+        resource_name: default
+        namespace: openshift-ptp
+        selector_field: daemonNodeSelector
+      - name: SR-IOV Operator
+        api_version: sriovnetwork.openshift.io/v1
+        kind: SriovOperatorConfig
+        resource_name: default
+        namespace: openshift-sriov-network-operator
+        selector_field: configDaemonNodeSelector
+  tasks:
+    - name: Define a unique id for this playbook session
+      ansible.builtin.set_fact:
+        playbook_run_id: "deploy-day2-{{ now(fmt='%Y%m%d%H%M%S') }}"
+
+    - name: Define the name of the spoke kubeconfig file
+      ansible.builtin.set_fact:
+        spoke_kubeconfig: "/tmp/{{ playbook_run_id }}-spoke-kubeconfig"
+
+    - name: Set up a group of tasks with a cleanup handler
+      block:
+        - name: Read the Spoke cluster's kubeconfig directly from the Hub cluster
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ spoke_cluster_name }}-admin-kubeconfig"
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: spoke_secret
+
+        - name: Fail if secret not found
+          ansible.builtin.fail:
+            msg: Kubeconfig secret not found for cluster {{ spoke_cluster_name }}
+          when: spoke_secret.resources | length == 0
+
+        - name: "Write spoke kubeconfig at: {{ spoke_kubeconfig }}"
+          ansible.builtin.copy:
+            content: "{{ spoke_secret.resources[0].data.kubeconfig | b64decode }}"
+            dest: "{{ spoke_kubeconfig }}"
+            mode: '0600'
+
+        - name: Wait for the spoke cluster API to become reachable
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Namespace
+            name: default
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_api_check
+          until: spoke_api_check is success
+          retries: 30
+          delay: 30
+
+        - name: Get the configs from spoke cluster for each operator
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api_version }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.resource_name }}"
+            namespace: "{{ item.namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          loop: "{{ operator_configs }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: operator_config_results
+
+        - name: Assert that the operator configs were found
+          ansible.builtin.assert:
+            that:
+              - item.resources | length > 0
+            fail_msg: "{{ item.item.kind }}/{{ item.item.resource_name }} not found in namespace {{ item.item.namespace }}"
+            success_msg: "{{ item.item.name }} config found"
+          loop: "{{ operator_config_results.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+
+        - name: Assert that the daemon node selector is not set to master
+          ansible.builtin.assert:
+            that:
+              - "'node-role.kubernetes.io/master' not in (item.resources[0].spec[item.item.selector_field] | default({}))"
+            fail_msg: >-
+              {{ item.item.name }} {{ item.item.selector_field }} is set to 'master'.
+              The spoke was deployed with an older GitOps ZTP plugin version
+              that requires node selector changes before proceeding with the
+              worker DU profile configuration.
+            success_msg: "{{ item.item.name }} {{ item.item.selector_field }} is not set to 'master'"
+          loop: "{{ operator_config_results.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+
+        - name: Patch the ArgoCD Applications to switch targetRevision to day2-worker branch
+          kubernetes.core.k8s:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: "{{ item }}"
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            merge_type: merge
+            definition:
+              spec:
+                source:
+                  targetRevision: "{{ day2_branch }}"
+          loop:
+            - clusters
+            - policies
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Wait for the ArgoCD applications to sync after branch switch
+          kubernetes.core.k8s_info:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: "{{ item }}"
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: app_status
+          until: >-
+            app_status.resources is defined and
+            app_status.resources | length > 0 and
+            app_status.resources[0].status.sync.status | default('') == 'Synced'
+          retries: 30
+          delay: 20
+          loop:
+            - clusters
+            - policies
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Wait for the worker node to become Ready on the spoke cluster
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+            kubeconfig: "{{ spoke_kubeconfig }}"
+            label_selectors:
+              - "node-role.kubernetes.io/worker"
+              - "!node-role.kubernetes.io/master"
+          register: worker_nodes
+          until: >-
+            worker_nodes.resources is defined and
+            worker_nodes.resources | length > 0 and
+            (worker_nodes.resources[0].status.conditions |
+             selectattr('type', 'equalto', 'Ready') |
+             first).status == 'True'
+          retries: 90
+          delay: 60
+
+        - name: Wait for all ClusterServiceVersions to succeed on the spoke cluster
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: all_csvs
+          until: >-
+            all_csvs.resources is defined and
+            all_csvs.resources | length > 0 and
+            all_csvs.resources |
+              rejectattr('status.phase', 'equalto', 'Succeeded') |
+              list | length == 0
+          retries: 30
+          delay: 30
+      always:
+        - name: Clean up the temporary files
+          ansible.builtin.file:
+            path: "{{ spoke_kubeconfig }}"
+            state: absent

@@ -33,7 +33,7 @@
     kubeconfig: "{{ hub_kubeconfig }}"
   register: agent_info
 
-- name: Print agents names found
+- name: Print agent names found
   ansible.builtin.debug:
     msg: "Agents found: {{ agent_info.resources | map(attribute='metadata.name') | list }}"
 

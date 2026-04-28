@@ -1,0 +1,18 @@
+[Unit]
+Description=BIND DNS Server
+
+[Container]
+Image=docker.io/internetsystemsconsortium/bind9:9.18
+ContainerName=bind-dns
+PublishPort=53:53/udp
+PublishPort=53:53/tcp
+
+Volume={{ bind.named_conf }}:/etc/bind/named.conf:Z
+Volume={{ bind.zones }}:/etc/bind/zones:Z
+Volume={{ bind.cache }}:/var/cache/bind:Z
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

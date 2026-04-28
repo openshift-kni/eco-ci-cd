@@ -80,7 +80,7 @@
         path: "{{ ztp_workdir_path }}"
         state: absent
 
-    - name: Ensure ztp-wordir directory exists
+    - name: Ensure ztp-workdir directory exists
       ansible.builtin.file:
         path: "{{ ztp_workdir_out_path }}"
         state: directory

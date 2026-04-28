@@ -374,7 +374,7 @@
       ansible.builtin.set_fact:
         app_project_data: "{{ app_project_content.content | b64decode | from_yaml }}"
 
-    - name: Check if ClusterInstance already in whitelist
+    - name: Check if ClusterInstance is already in the whitelist
       ansible.builtin.set_fact:
         clusterinstance_exists: >-
           {{ app_project_data.spec.namespaceResourceWhitelist | default([])
@@ -469,6 +469,9 @@
       register: clusterinstallref
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
+      until: clusterinstallref.stdout | length > 0
+      retries: 20
+      delay: 30
       changed_when: false
 
     - name: Wait for agent cluster install to begin

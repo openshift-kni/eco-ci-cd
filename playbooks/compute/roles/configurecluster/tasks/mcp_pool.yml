@@ -1,0 +1,27 @@
+---
+- name: Label worker0 as worker-cnf
+  kubernetes.core.k8s:
+    kind: Node
+    name: worker0
+    state: patched
+    definition:
+      metadata:
+        labels:
+          node-role.kubernetes.io/worker-cnf: ''
+
+- name: Render Machine Config Pool
+  ansible.builtin.copy:
+    dest: "{{ manifests_folder }}/machineConfigPool.yml"
+    content: "{{ lookup('template', 'machineConfigPool.yml.j2') }}"
+    mode: '775'
+
+- name: Deploy Machine Config Pool
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ manifests_folder }}/machineConfigPool.yml"
+  when: not day0_installation | bool
+  notify:
+    - wait for mcp update
+
+- name: Force handlers to run immediately
+  ansible.builtin.meta: flush_handlers

@@ -37,4 +37,4 @@ device_t3: tty3
 ginkgo_skip: 84312
 
 # Test Conigurations
-ginkgo_label: "tier0"  # run only this labled tests
+_ginkgo_label: 'tier0 && tier1'  # run only this labled tests

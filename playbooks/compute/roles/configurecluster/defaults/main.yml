@@ -12,3 +12,4 @@ day0_installation: false
 
 mcp_wait_retries: 180
 mcp_wait_delay: 30
+ppc_image: "registry.redhat.io/openshift4/ose-cluster-node-tuning-rhel9-operator"

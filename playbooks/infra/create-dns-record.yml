@@ -126,7 +126,6 @@
         fail_msg: "Missing required GitLab variables (gitlab_url, gitlab_repo, gitlab_project_token)"
         quiet: true
 
-
     - name: Clone GitLab repository
       ansible.builtin.git:
         repo: "https://oauth2:{{ gitlab_project_token }}@{{ gitlab_url }}{{ gitlab_repo }}.git"
@@ -134,8 +133,6 @@
         version: main
         force: true
         update: true
-      environment:
-        GIT_SSL_NO_VERIFY: "true"
 
     - name: Display repository information
       ansible.builtin.debug:

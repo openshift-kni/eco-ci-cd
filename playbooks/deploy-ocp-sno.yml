@@ -36,7 +36,7 @@
 # - disconnected_registry_url, disconnected_registry_port
 # - share_http_iso_port, dest_iso_dir, repo_root_path
 # - extra_manifests_folder: folder containing extra manifests for Day0 installation
-# - disable_insights (boolean; default is false): disables the Insights operator via extra manifest
+# - disable_insights (boolean; default is false): removes cloud.openshift.com from pull secret to opt out of remote health reporting
 
 ## Roles Requirements
 # - ocp_version_facts
@@ -521,6 +521,16 @@
         path: "{{ repo_root_path }}/generated/{{ cluster_name }}"
         state: absent
 
+    - name: Remove cloud.openshift.com from pull secret to disable Insights
+      when: disable_insights | bool
+      ansible.builtin.set_fact:
+        pull_secret: >-
+          {{ pull_secret | combine({
+               'auths': pull_secret.auths | dict2items
+                 | rejectattr('key', 'equalto', 'cloud.openshift.com')
+                 | items2dict
+             }, recursive=True) }}
+
     - name: Generate deployment manifests for OpenShift installation
       when: (disconnected | bool) is false
       vars:
@@ -570,30 +580,6 @@
             ocp_registry_image: openshift
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
-
-    - name: Create extra manifest to disable Insights operator
-      when: disable_insights | bool
-      block:
-        - name: Ensure extra manifests directory exists
-          ansible.builtin.file:
-            path: "{{ extra_manifest_dir }}"
-            state: directory
-            mode: "0775"
-
-        - name: Write Insights operator disable manifest
-          ansible.builtin.copy:
-            content: |
-              apiVersion: v1
-              kind: ConfigMap
-              metadata:
-                name: insights-config
-                namespace: openshift-insights
-              data:
-                config.yaml: |
-                  dataReporting:
-                    enabled: false
-            dest: "{{ extra_manifest_dir }}/disable-insights-operator.yml"
-            mode: "0644"
 
     - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
       when:

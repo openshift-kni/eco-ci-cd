@@ -62,7 +62,7 @@
       ignore_errors: true
 
     - name: Cleanup spoke cluster resources
-      include_tasks: tasks/site_cleanup.yml
+      include_tasks: tasks/site-cleanup.yml
       vars:
         hub_kubeconfig: "{{ hub_kubeconfig }}"
         spoke_cluster: "{{ spoke_cluster }}"

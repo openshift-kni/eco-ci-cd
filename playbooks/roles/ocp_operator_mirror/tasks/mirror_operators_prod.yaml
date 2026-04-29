@@ -35,9 +35,33 @@
   changed_when: false
   ansible.builtin.set_fact:
     catalog_index_map:
-      redhat-operators: "registry.redhat.io/redhat/redhat-operator-index:v{{ production_catalog_version | default(catalog_version) }}"
+      redhat-operators: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
       certified-operators: "registry.redhat.io/redhat/certified-operator-index:v{{ certified_catalog_version | default(catalog_version) }}"
       community-operators: "registry.redhat.io/redhat/community-operator-index:v{{ community_catalog_version | default(catalog_version) }}"
+
+- name: Remove production catalog JSON file
+  ansible.builtin.file:
+    path: "{{ ocp_operator_mirror_prod_catalog_json_path }}"
+    state: absent
+
+- name: Ensure production catalog image is removed
+  containers.podman.podman_image:
+    name: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
+    state: absent
+
+- name: Render production catalog index straight to file
+  ansible.builtin.shell: >-
+    podman run --authfile=/tmp/auth.json --rm
+    "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
+    render /configs > "{{ ocp_operator_mirror_prod_catalog_json_path }}"
+
+- name: Set default channel for production operators
+  include_tasks: set_default_channel.yaml
+  loop: "{{ ocp_operator_mirror_operators_prod }}"
+  loop_control:
+    loop_var: operator
+  vars:
+    mirror_catalog_json_path: "{{ ocp_operator_mirror_prod_catalog_json_path }}"
 
 - name: Build Red Hat packages
   changed_when: false

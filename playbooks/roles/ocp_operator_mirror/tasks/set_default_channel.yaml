@@ -1,0 +1,31 @@
+---
+- name: Verify if default channel is different from operator channel
+  when: operator.catalog == ocp_operator_mirror_prod_redhat_catalog_name
+  block:
+    - name: Gather default channels for each operator from production catalog
+      ansible.builtin.shell:
+        cmd: >-
+          jq -r --arg n "{{ operator.name }}"
+          'select(.schema=="olm.package" and .name==$n) | .defaultChannel'
+          "{{ mirror_catalog_json_path }}"
+      register: default_channel
+      changed_when: false
+
+    - name: Set default channel for operator
+      ansible.builtin.set_fact:
+        _operator_enriched: >-
+          {{
+            operator | combine({'default_channel': _ch})
+            if (_ch | length > 0) and (_ch != (operator.channel | default('') | trim))
+            else operator
+          }}
+      vars:
+        _ch: "{{ default_channel.stdout | default('') | trim }}"
+
+    - name: Replace this operator in production operators list
+      ansible.builtin.set_fact:
+        ocp_operator_mirror_operators_prod: >-
+          {{
+            (ocp_operator_mirror_operators_prod | rejectattr('name', 'equalto', operator.name) | list)
+            + [_operator_enriched]
+          }}

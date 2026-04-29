@@ -22,3 +22,5 @@ ocp_operator_mirror_pull_secret_path: /tmp/auth.json
 ocp_operator_mirror_image_set_configuration_path: /tmp/ImageSetConfiguration.yaml
 ocp_operator_mirror_workspace_path: /tmp/oc-mirror-workspace
 ocp_operator_mirror_fbc_extract_dir: /tmp/fbc/
+ocp_operator_mirror_prod_catalog_json_path: /tmp/prod_catalog.json
+ocp_operator_mirror_prod_catalog_image_name: registry.redhat.io/redhat/redhat-operator-index

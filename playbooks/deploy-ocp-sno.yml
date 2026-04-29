@@ -599,7 +599,7 @@
       when:
         - ocp_version_facts_release_type in ['nightly', 'engineering-candidate', 'release-candidate']
         - (ocp_version_facts_minor | int) >= 21
-      set_fact:
+      ansible.builtin.set_fact:
         disable_image_policy: true
 
     - name: Generate boot ISO for agent-based installer

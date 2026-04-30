@@ -67,6 +67,12 @@
           - metallb_vlans is defined
           - switch_interfaces is defined
 
+    - name: Install required packages
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - nmap-ncat
+
     - name: Gather cluster network information
       register: cluster_info
       environment:

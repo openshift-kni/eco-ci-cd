@@ -26,7 +26,7 @@ reserved_cpu_count: 4
 rt_kernel: "true"
 must_gather_path: "/tmp/must-gather-data"
 performance_profile: "performance-profile.yaml"
-ppc_image: "registry.redhat.io/openshift4/ose-cluster-node-tuning-rhel9-operator"
+ppc_image: "registry.redhat.io/openshift4/ose-cluster-node-tuning-rhel9-operator:v4.21"
 
 # devices
 device_t1: tty1

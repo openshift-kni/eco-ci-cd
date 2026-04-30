@@ -13,7 +13,7 @@
 - name: Generate Performance Profile using PPC container
   containers.podman.podman_container:
     name: ppc_tool
-    image: "{{ ppc_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+    image: "{{ ppc_image }}"
     rm: true
     entrypoint: performance-profile-creator
     detach: false

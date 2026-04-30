@@ -143,7 +143,7 @@
           | length
         ) > 0
       retries: 30
-      delay: 10
+      delay: 5
       ignore_errors: true
       when: network_update_status.changed is true
       tags:
@@ -168,12 +168,39 @@
       delay: 20
       ignore_errors: true
 
+    - name: Require Network Progressing=False status for ~60s if update_progress is failed
+      when:
+        - update_progress is defined
+        - update_progress.failed | bool
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: network_progressing_stable_check
+      failed_when: >
+        (network_progressing_stable_check.resources | length == 0) or
+        (
+          (network_progressing_stable_check.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Progressing')
+          | selectattr('status', 'equalto', 'False')
+          | list
+          | length == 0
+        )
+      loop: "{{ range(0, 30) | list }}"
+      loop_control:
+        extended: true
+        extended_allitems: true
+      vars:
+        ansible_loop_pause: 1
+
     - name: Fail if network operator did not start updating
       ansible.builtin.fail:
         msg: "Cluster network operator failed to enter updating state."
       when:
         - update_progress is defined
-        - update_progress.failed is true
+        - update_progress.failed | bool
+        # Skip when the stability loop (171) ran and succeeded — only fail if it did not run or did not succeed.
+        - (not network_progressing_stable_check is defined) or (not network_progressing_stable_check is succeeded)
 
     - name: Fail if network operator update is stuck
       ansible.builtin.fail:

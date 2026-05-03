@@ -360,6 +360,7 @@
     pull_secret_file: /tmp/pullsecret
     api_vips: "{{ api_vips_string | from_yaml }}"
     ingress_vips: "{{ ingress_vips_string | from_yaml }}"
+    http_directory: /opt/http_store
 
   tasks:
     - name: Populate pull secret
@@ -373,6 +374,12 @@
         cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml }}"
         extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
         extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
+
+    - name: Remove all Podman images
+      containers.podman.podman_prune:
+        image: true
+        image_filters:
+          dangling_only: false
 
     - name: Prepare disconnected infrastructure
       become: true
@@ -504,11 +511,18 @@
         ocp_version_facts_release: "{{ release }}"
         ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
 
+    - name: Clean HTTP storage directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ http_directory }}"
+        state: absent
+
     - name: Setup HTTP storage
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
       vars:
         http_port: "{{ share_http_iso_port }}"
+        http_dir: "{{ http_directory }}"
 
     - name: Deploy/Redeploy OCP client
       ansible.builtin.import_role:

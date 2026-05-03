@@ -206,7 +206,14 @@
     ipv6_only: false
     disconnected: false
     pull_secret_file: /tmp/pullsecret
+    http_directory: /opt/http_store
   tasks:
+
+    - name: Remove all Podman images
+      containers.podman.podman_prune:
+        image: true
+        image_filters:
+          dangling_only: false
 
     - name: Render bastion variables from inventory strings
       delegate_to: bastion
@@ -273,9 +280,16 @@
       ansible.builtin.import_role:
         name: ocp_version_facts
 
+    - name: Clean HTTP storage directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ http_directory }}"
+        state: absent
+
     - name: Set up HTTP storage
       vars:
         http_port: "{{ share_http_iso_port }}"
+        http_dir: "{{ http_directory }}"
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
 

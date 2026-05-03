@@ -14,7 +14,7 @@
         password: "{{ hostvars[item].bmc_password }}"
       when: hostvars[item].vendor | default('') | lower != 'kvm'
       loop: "{{ groups['nodes'] | default([]) }}"
-      
+
     - name: Get all Running VMs
       community.libvirt.virt:
         command: list_vms

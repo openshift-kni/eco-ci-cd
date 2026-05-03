@@ -22,10 +22,20 @@
     ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
     ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+- name: Set performance profile creator
+  ansible.builtin.set_fact:
+    nto_ppc_image: "{{ ppc_image }}"
+
+- name: Set performance profile creator for older OCP
+  ansible.builtin.set_fact:
+    nto_ppc_image: "{{ ppc_image_rhel8 }}"
+  when:
+    - (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.19', '<')
+
 - name: Generate Performance Profile using PPC container
   containers.podman.podman_container:
     name: ppc_tool
-    image: "{{ ppc_image }}"
+    image: "{{ nto_ppc_image }}"
     rm: true
     entrypoint: performance-profile-creator
     detach: false
@@ -40,7 +50,7 @@
   register: ppc_output
 
 - name: Save generated profile to file
-  copy:
+  ansible.builtin.copy:
     content: "{{ ppc_output.stdout }}"
     dest: "/tmp/tmp_ppc.yaml"
     mode: '0664'
@@ -51,6 +61,6 @@
   register: profile_file
 
 - name: Extract CPU settings
-  set_fact:
+  ansible.builtin.set_fact:
     cpu_isolated: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.isolated }}"
     cpu_reserved: "{{ (profile_file.content | b64decode | from_yaml).spec.cpu.reserved }}"

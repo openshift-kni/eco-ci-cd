@@ -43,6 +43,11 @@
   ansible.builtin.include_tasks: reset_registry_storage.yaml
   when: not (ocp_operator_mirror_skip_internal_registry_cleanup | default(false) | bool)
 
+- name: Reset oc-mirror cache
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.oc-mirror/.cache"
+    state: absent
+
 - name: Configure registry authentication
   ansible.builtin.include_tasks: set_auth.yaml
 

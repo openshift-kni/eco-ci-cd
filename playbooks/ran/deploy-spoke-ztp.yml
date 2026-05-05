@@ -522,7 +522,7 @@
         - policies.resources | length > 0
         - (policies.resources | selectattr('status', 'defined') | selectattr('status.compliant', 'defined') | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
         - (policies.resources | rejectattr('status', 'defined') | list | length) == 0
-      retries: 60
+      retries: 90
       delay: 60
 
     - name: Get spoke cluster admin kubeconfig secret

@@ -1,0 +1,9 @@
+---
+# playbooks/telco-kpis/roles/lockdown_hub_config/defaults/main.yml
+
+# URL to hub lockdown JSON file
+# Example: https://raw.githubusercontent.com/telcov10n-ci/telco-kpis-operator-lockdown/main/hub/lockdown-hub-x86_64.json
+hub_lockdown_uri: ""
+
+# Whether to use hub lockdown (set automatically based on hub_lockdown_uri)
+use_hub_lockdown: false

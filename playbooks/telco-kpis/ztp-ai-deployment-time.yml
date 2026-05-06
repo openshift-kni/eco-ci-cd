@@ -22,7 +22,7 @@
   tasks:
     - name: Load telco-kpis default configuration
       ansible.builtin.include_role:
-        name: telco-kpis-defaults
+        name: telco_kpis_defaults
 
     - name: Validate required parameters
       ansible.builtin.assert:

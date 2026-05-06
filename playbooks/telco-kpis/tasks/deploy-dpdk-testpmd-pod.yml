@@ -1,0 +1,174 @@
+---
+# Deploy dpdk-testpmd Pod for RFC2544 Testing
+# Purpose: Deploy packet forwarding pod required for Spirent RFC2544 throughput tests
+# The pod forwards packets between Spirent ports, enabling throughput measurement
+
+- name: Set pod configuration variables
+  ansible.builtin.set_fact:
+    namespace: "openshift-sriov-network-operator"
+    pod_name: "dpdk-testpmd-{{ spoke_cluster }}"
+
+- name: Get PerformanceProfile (try default name first)
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+    name: openshift-node-performance-profile
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: pp_default
+  failed_when: false
+
+- name: Get PerformanceProfile (fallback to first available)
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: pp_list
+  when: pp_default.resources | length == 0
+
+- name: Set PerformanceProfile facts
+  ansible.builtin.set_fact:
+    pp_resource: "{{ pp_default.resources[0] if pp_default.resources | length > 0 else pp_list.resources[0] }}"
+
+- name: Extract PerformanceProfile configuration
+  ansible.builtin.set_fact:
+    pp_name: "{{ pp_resource.metadata.name }}"
+    runtime_class: "{{ pp_resource.status.runtimeClass }}"
+    node_selector_full: "{{ pp_resource.spec.nodeSelector | dict2items | first }}"
+
+- name: Set node selector tag
+  ansible.builtin.set_fact:
+    cnf_node_selector_tag: "{{ node_selector_full.key.split('/')[1] }}"
+
+- name: Check for disconnected registry
+  kubernetes.core.k8s_info:
+    api_version: operator.openshift.io/v1alpha1
+    kind: ImageContentSourcePolicy
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: icsp_result
+  failed_when: false
+
+- name: Set test image
+  ansible.builtin.set_fact:
+    test_image: >-
+      {% if icsp_result.resources | length > 0 -%}
+      {{ icsp_result.resources[0].spec.repositoryDigestMirrors[0].mirrors[0] }}/container-perf-tools/dpdk-testpmd
+      {%- else -%}
+      quay.io/container-perf-tools/dpdk-testpmd
+      {%- endif %}
+
+- name: Get cluster architecture
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: nodes_info
+
+- name: Set ARM mode flag
+  ansible.builtin.set_fact:
+    is_arm: "{{ nodes_info.resources[0].status.nodeInfo.architecture == 'arm64' }}"
+
+- name: Display pod deployment configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "dpdk-testpmd Pod Configuration"
+      - "=========================================="
+      - "Pod Name:           {{ pod_name }}"
+      - "Namespace:          {{ namespace }}"
+      - "PerformanceProfile: {{ pp_name }}"
+      - "RuntimeClass:       {{ runtime_class }}"
+      - "Node Selector:      {{ cnf_node_selector_tag }}"
+      - "Image:              {{ test_image }}"
+      - "Architecture:       {{ nodes_info.resources[0].status.nodeInfo.architecture }}"
+      - "ARM Mode:           {{ is_arm }}"
+      - "=========================================="
+
+- name: Create temporary directory for pod manifest
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .dpdk-pod-{{ spoke_cluster }}
+  register: pod_temp_dir
+
+- name: Render pod manifest from ran-integration template
+  ansible.builtin.shell: |
+    podman run --rm \
+      -v {{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z \
+      -v {{ pod_temp_dir.path }}:/workspace/output:rw,Z \
+      telco-kpis-test-runner:latest \
+      bash -c '
+        set -e
+        export GIT_SSL_NO_VERIFY=true
+
+        echo "Cloning ran-integration repository..."
+        git clone --depth 1 {{ ran_integration_repo | default("https://gitlab.cee.redhat.com/ran/ran-integration.git") }} /workspace/ran-integration
+        cd /workspace/ran-integration/scripts/test_rfc2544
+
+        echo "Rendering pod manifest from template..."
+        jinja render \
+          -e name="{{ pod_name }}" \
+          -e runtime_class="{{ runtime_class }}" \
+          -e cnf_node_selector="{{ cnf_node_selector_tag }}" \
+          -e image="{{ test_image }}" \
+          -e is_arm="{{ is_arm | lower }}" \
+          -e powersave_mode="false" \
+          -t ./dpdk-testpmd-pod.j2 -o /workspace/output/pod.yaml
+      '
+  register: render_result
+  failed_when: render_result.rc != 0
+
+- name: Read rendered pod manifest
+  ansible.builtin.slurp:
+    src: "{{ pod_temp_dir.path }}/pod.yaml"
+  register: pod_manifest_b64
+
+- name: Parse pod manifest
+  ansible.builtin.set_fact:
+    pod_manifest: "{{ pod_manifest_b64.content | b64decode | from_yaml }}"
+
+- name: Delete existing dpdk-testpmd pod if present
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: "{{ pod_name }}"
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+
+- name: Deploy dpdk-testpmd pod
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ pod_manifest }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+
+- name: Wait for pod to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: "{{ pod_name }}"
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: pod_status
+  until:
+    - pod_status.resources | length > 0
+    - pod_status.resources[0].status.phase == "Running"
+    - pod_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 60
+  delay: 5
+
+- name: Display pod status
+  ansible.builtin.debug:
+    msg:
+      - "Pod {{ pod_name }} is ready"
+      - "Phase: {{ pod_status.resources[0].status.phase }}"
+      - "Node: {{ pod_status.resources[0].spec.nodeName }}"
+      - "IP: {{ pod_status.resources[0].status.podIP }}"
+
+- name: Cleanup temporary pod directory
+  ansible.builtin.file:
+    path: "{{ pod_temp_dir.path }}"
+    state: absent
+
+- name: Wait 30 seconds before starting test
+  ansible.builtin.pause:
+    seconds: 30
+    prompt: "Waiting for dpdk-testpmd pod to stabilize before test execution"

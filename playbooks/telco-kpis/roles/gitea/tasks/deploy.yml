@@ -1,0 +1,142 @@
+---
+# Deploy Gitea container on bastion if not already running
+
+- name: Check if Gitea is accessible via localhost
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/"
+    method: GET
+    status_code: 200
+    validate_certs: false
+  register: gitea_accessible
+  failed_when: false
+  changed_when: false
+
+- name: Check if firewalld is running
+  ansible.builtin.systemd:
+    name: firewalld
+  register: firewalld_check
+  failed_when: false
+  become: true
+
+- name: Check if Gitea HTTP port is open in firewall
+  ansible.builtin.shell: firewall-cmd --list-ports | grep -q "{{ gitea_http_port }}/tcp"
+  register: http_port_open
+  failed_when: false
+  changed_when: false
+  become: true
+  when:
+    - firewalld_check.status is defined
+    - firewalld_check.status.ActiveState == "active"
+
+- name: Check if Gitea SSH port is open in firewall
+  ansible.builtin.shell: firewall-cmd --list-ports | grep -q "{{ gitea_ssh_port }}/tcp"
+  register: ssh_port_open
+  failed_when: false
+  changed_when: false
+  become: true
+  when:
+    - firewalld_check.status is defined
+    - firewalld_check.status.ActiveState == "active"
+
+- name: Set Gitea deployment needed flag
+  ansible.builtin.set_fact:
+    gitea_deployment_needed: "{{ (gitea_accessible.status is not defined or gitea_accessible.status != 200) or (firewalld_check.status is defined and firewalld_check.status.ActiveState == 'active' and (http_port_open.rc != 0 or ssh_port_open.rc != 0)) }}"
+
+- name: Display Gitea status
+  ansible.builtin.debug:
+    msg: "{{ 'Gitea is running and firewall configured - skipping deployment' if not gitea_deployment_needed else 'Gitea deployment or firewall configuration needed' }}"
+
+- name: Deploy Gitea
+  when: gitea_deployment_needed
+  block:
+    - name: Configure firewall rules
+      when:
+        - firewalld_check.status is defined
+        - firewalld_check.status.ActiveState == "active"
+        - http_port_open.rc != 0 or ssh_port_open.rc != 0
+      block:
+        - name: Open Gitea HTTP port in firewall
+          ansible.posix.firewalld:
+            port: "{{ gitea_http_port }}/tcp"
+            permanent: true
+            state: enabled
+            immediate: true
+          become: true
+
+        - name: Open Gitea SSH port in firewall
+          ansible.posix.firewalld:
+            port: "{{ gitea_ssh_port }}/tcp"
+            permanent: true
+            state: enabled
+            immediate: true
+          become: true
+
+        - name: Display firewall configuration status
+          ansible.builtin.debug:
+            msg: "Firewall configured: ports 3000/tcp and 2222/tcp opened"
+
+    - name: Deploy or redeploy Gitea container
+      when: gitea_accessible.status is not defined or gitea_accessible.status != 200
+      block:
+        - name: Check if Gitea container exists
+          ansible.builtin.command: podman ps -a --format json
+          register: podman_containers
+          changed_when: false
+
+        - name: Parse container list
+          ansible.builtin.set_fact:
+            gitea_container_exists: "{{ (podman_containers.stdout | from_json) | selectattr('Names', 'contains', gitea_container_name) | list | length > 0 }}"
+
+        - name: Remove existing broken Gitea container
+          ansible.builtin.command: podman rm -f {{ gitea_container_name }}
+          when: gitea_container_exists
+          register: remove_result
+          changed_when: remove_result.rc == 0
+
+        - name: Create Gitea data directory
+          ansible.builtin.file:
+            path: "{{ gitea_data_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: Pull Gitea container image
+          ansible.builtin.command: podman pull {{ gitea_image }}
+          register: pull_result
+          changed_when: "'Downloaded newer image' in pull_result.stdout or 'Copying blob' in pull_result.stderr"
+
+        - name: Deploy Gitea container
+          ansible.builtin.command: >
+            podman run -d
+            --name {{ gitea_container_name }}
+            -p {{ gitea_http_port }}:3000
+            -p {{ gitea_ssh_port }}:22
+            -v {{ gitea_data_dir }}:/data:Z
+            -e USER_UID={{ ansible_user_uid }}
+            -e USER_GID={{ ansible_user_gid }}
+            -e GITEA__database__DB_TYPE=sqlite3
+            -e GITEA__database__PATH=/data/gitea/gitea.db
+            -e GITEA__server__DOMAIN={{ gitea_domain }}
+            -e GITEA__server__ROOT_URL={{ gitea_root_url }}
+            -e GITEA__server__SSH_DOMAIN={{ gitea_domain }}
+            -e GITEA__server__SSH_PORT={{ gitea_ssh_port }}
+            -e GITEA__service__DISABLE_REGISTRATION=true
+            -e GITEA__repository__DEFAULT_BRANCH=main
+            --restart=always
+            {{ gitea_image }}
+          register: deploy_result
+          changed_when: deploy_result.rc == 0
+
+        - name: Wait for Gitea to start
+          ansible.builtin.uri:
+            url: "http://localhost:{{ gitea_http_port }}/"
+            method: GET
+            status_code: 200
+            validate_certs: false
+          register: gitea_health
+          until: gitea_health.status == 200
+          retries: 30
+          delay: 2
+
+- name: Display Gitea deployment status
+  ansible.builtin.debug:
+    msg: "Gitea is accessible at {{ gitea_root_url }}"

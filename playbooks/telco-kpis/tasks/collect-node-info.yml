@@ -1,0 +1,335 @@
+---
+# Collect Node Info task for Telco-KPIs
+# Purpose: Collect comprehensive node information (BIOS, microcode, kernel, etc.)
+# Output: JSON file with all collected data
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .collect-node-info-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display collection configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Node Info Collection Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+
+- name: Ensure kubeconfig is readable
+  ansible.builtin.file:
+    path: "{{ spoke_kubeconfig }}"
+    mode: '0644'
+
+- name: Get cluster nodes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: nodes_info
+  failed_when: nodes_info.resources | length == 0
+
+- name: Extract node facts
+  ansible.builtin.set_fact:
+    node_name: "{{ nodes_info.resources[0].metadata.name }}"
+    kernel_version: "{{ nodes_info.resources[0].status.nodeInfo.kernelVersion }}"
+
+- name: Get machine-config-daemon pod on target node
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: openshift-machine-config-operator
+    label_selectors:
+      - k8s-app=machine-config-daemon
+    field_selectors:
+      - "spec.nodeName={{ node_name }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: mcd_pods
+  failed_when: mcd_pods.resources | length == 0
+
+- name: Extract MCD pod name
+  ansible.builtin.set_fact:
+    mcd_pod: "{{ mcd_pods.resources[0].metadata.name }}"
+
+- name: Get BIOS version via dmidecode
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs dmidecode -t 0
+  register: dmidecode_result
+  failed_when: false
+  changed_when: false
+
+- name: Parse BIOS version from dmidecode output
+  ansible.builtin.set_fact:
+    bios_version: "{{ (dmidecode_result.stdout | default('')) | regex_search('Version:\\s+(\\S+)', '\\1') | first | default('unknown', true) }}"
+  when: dmidecode_result.stdout is defined
+
+- name: Set BIOS version to unknown if dmidecode failed
+  ansible.builtin.set_fact:
+    bios_version: "unknown"
+  when: dmidecode_result.stdout is not defined
+
+- name: Get microcode version from cpuinfo
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs cat /proc/cpuinfo
+  register: cpuinfo_result
+  failed_when: false
+  changed_when: false
+
+- name: Parse microcode version from cpuinfo
+  ansible.builtin.set_fact:
+    microcode_version: "{{ (cpuinfo_result.stdout | default('')) | regex_search('microcode\\s+:\\s+(\\S+)', '\\1') | first | default('unknown', true) }}"
+  when: cpuinfo_result.stdout is defined
+
+- name: Set microcode version to unknown if cpuinfo failed
+  ansible.builtin.set_fact:
+    microcode_version: "unknown"
+  when: cpuinfo_result.stdout is not defined
+
+- name: Get CPU information via lscpu
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs lscpu
+  register: lscpu_result
+  failed_when: false
+  changed_when: false
+
+- name: Parse CPU model from lscpu output
+  ansible.builtin.set_fact:
+    cpu_type: "{{ (lscpu_result.stdout | default('')) | regex_search('Model name:\\s+(.+)', '\\1') | first | default('unknown', true) }}"
+  when: lscpu_result.stdout is defined
+
+- name: Set CPU type to unknown if lscpu failed
+  ansible.builtin.set_fact:
+    cpu_type: "unknown"
+  when: lscpu_result.stdout is not defined
+
+- name: Get PerformanceProfiles
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: performance_profiles
+  failed_when: false
+
+- name: Check if master0 vault file exists
+  ansible.builtin.stat:
+    path: /eco-ci-cd/inventories/ocp-deployment/host_vars/master0
+  register: master0_vault_stat
+  delegate_to: localhost
+
+- name: Read BMC credentials from master0 vault file
+  ansible.builtin.include_vars:
+    file: /eco-ci-cd/inventories/ocp-deployment/host_vars/master0
+    name: master0_vault
+  when: master0_vault_stat.stat.exists
+  delegate_to: localhost
+  no_log: true
+
+- name: Set BMC credentials from vault (NEVER logged)
+  ansible.builtin.set_fact:
+    bmc_address: "{{ master0_vault.bmc_address | default('') }}"
+    bmc_user: "{{ master0_vault.bmc_user | default('') }}"
+    bmc_pass: "{{ master0_vault.bmc_password | default('') }}"
+  when: master0_vault_stat.stat.exists and master0_vault is defined
+  no_log: true
+
+- name: Set empty BMC credentials if vault not found
+  ansible.builtin.set_fact:
+    bmc_address: ""
+    bmc_user: ""
+    bmc_pass: ""
+  when: not master0_vault_stat.stat.exists
+
+- name: Extract BMC IP from bmc_address URL
+  ansible.builtin.set_fact:
+    bmc_ip: "{{ (bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] if bmc_address and (bmc_address | regex_search('https?://([^/]+)', '\\1')) else '' }}"
+  no_log: true
+
+- name: Query BIOS settings via Redfish (if BMC configured)
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: yes
+    validate_certs: no
+    timeout: 30
+  register: redfish_systems
+  when: bmc_ip != '' and bmc_user != '' and bmc_pass != ''
+  no_log: true
+  failed_when: false
+
+- name: Get BIOS attributes from Redfish
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}{{ redfish_systems.json.Members[0]['@odata.id'] }}/Bios"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: yes
+    validate_certs: no
+    timeout: 30
+  register: redfish_bios
+  when:
+    - bmc_ip != ''
+    - redfish_systems is defined
+    - redfish_systems.json is defined
+    - redfish_systems.json.Members is defined
+  no_log: true
+  failed_when: false
+
+- name: Set architecture fact from node info
+  ansible.builtin.set_fact:
+    node_arch: "{{ nodes_info.resources[0].status.nodeInfo.architecture }}"
+
+- name: Normalize architecture name (amd64 -> x86_64 for BIOS validation)
+  ansible.builtin.set_fact:
+    node_arch: "{{ 'x86_64' if node_arch == 'amd64' else node_arch }}"
+
+- name: Define expected BIOS settings for x86_64
+  ansible.builtin.set_fact:
+    expected_bios_settings:
+      WorkloadProfile: "TelcoOptimizedProfile"
+      ProcPwrPerf: "SysDbpmTelco"
+      EnergyPerformanceBias: "MaxPower"
+      ProcTurboMode: "Enabled"
+      ProcCStates: "Enabled"
+      PackageCStates: "Disabled"
+      ProcC1E: "Disabled"
+      EnergyEfficientTurbo: "Disabled"
+      CpuInterconnectBusLinkPower: "Disabled"
+      LogicalProc: "Enabled"
+      ProcAvxP1: "Level2"
+      SubNumaCluster: "Disabled"
+      SriovGlobalEnable: "Enabled"
+      SecureBoot: "Enabled"
+      SecureBootMode: "DeployedMode"
+      SecureBootPolicy: "Standard"
+      BootMode: "Uefi"
+  when: node_arch == 'x86_64'
+
+- name: Define expected BIOS settings for arm64
+  ansible.builtin.set_fact:
+    expected_bios_settings:
+      SecureBoot: "Enabled"
+  when: node_arch == 'aarch64' or node_arch == 'arm64'
+
+- name: Build BIOS settings list with validation
+  ansible.builtin.set_fact:
+    bios_settings_list: "{{ bios_settings_list | default([]) + [{'name': item.key, 'expected': item.value | string, 'current': (redfish_bios.json.Attributes[item.key] | default('N/A')) | string, 'match': ((redfish_bios.json.Attributes[item.key] | default('N/A')) | string) == (item.value | string)}] }}"
+  loop: "{{ expected_bios_settings | dict2items }}"
+  when:
+    - redfish_bios is defined
+    - redfish_bios.json is defined
+    - redfish_bios.json.Attributes is defined
+    - expected_bios_settings is defined
+  no_log: false
+
+- name: Build uncore frequency data for x86_64
+  ansible.builtin.set_fact:
+    uncore_data:
+      UncoreFrequencyCompute: "{{ redfish_bios.json.Attributes.UncoreFrequencyCompute | default('N/A') }}"
+      UncoreFrequencyIO: "{{ redfish_bios.json.Attributes.UncoreFrequencyIO | default('N/A') }}"
+      UncoreFrequencyDomain: "{{ redfish_bios.json.Attributes.UncoreFrequencyDomain | default('N/A') }}"
+  when:
+    - node_arch == 'x86_64'
+    - redfish_bios is defined
+    - redfish_bios.json is defined
+    - redfish_bios.json.Attributes is defined
+
+- name: Build BIOS settings validation structure
+  ansible.builtin.set_fact:
+    bios_settings_struct:
+      arch: "{{ node_arch }}"
+      bmc_ip: "{{ bmc_ip }}"
+      settings: "{{ bios_settings_list }}"
+      uncore: "{{ uncore_data | default({}) }}"
+  when:
+    - bios_settings_list is defined
+
+- name: Build node info JSON
+  ansible.builtin.set_fact:
+    node_info_json:
+      spoke: "{{ spoke_cluster }}"
+      node_name: "{{ node_name }}"
+      kernel_version: "{{ kernel_version | default('') }}"
+      bios_version: "{{ bios_version | default('') }}"
+      microcode_version: "{{ microcode_version | default('') }}"
+      cpu_type: "{{ cpu_type | default('') }}"
+      collected_at: "{{ ansible_date_time.iso8601 }}"
+      performance_profiles_yaml: "{{ performance_profiles.resources | to_nice_yaml if (performance_profiles is defined and performance_profiles.resources is defined) else '' }}"
+      bios_settings: "{{ bios_settings_struct if bios_settings_struct is defined else None }}"
+
+- name: Save node info to JSON file on bastion
+  ansible.builtin.copy:
+    content: "{{ node_info_json | to_nice_json }}"
+    dest: "{{ artifacts_dir.path }}/node-info-{{ spoke_cluster }}.json"
+    mode: '0644'
+
+- name: List artifacts generated
+  ansible.builtin.find:
+    paths: "{{ artifacts_dir.path }}"
+    patterns: "*"
+    recurse: yes
+  register: artifact_files
+
+- name: Create local artifact directory
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/collect_node_info-{{ spoke_cluster }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Fetch artifacts from bastion to local
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/collect_node_info-{{ spoke_cluster }}/"
+    flat: yes
+  loop: "{{ artifact_files.files }}"
+  when: artifact_files.files | length > 0
+
+- name: Create shared artifact base directory
+  ansible.builtin.file:
+    path: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy node-info JSON to shared persistent location
+  ansible.builtin.copy:
+    src: "{{ artifacts_dir.path }}/node-info-{{ spoke_cluster }}.json"
+    dest: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/node-info-{{ spoke_cluster }}.json"
+    remote_src: true
+    mode: '0644'
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Display collection summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Node Info Collection Complete"
+      - "=========================================="
+      - "Node: {{ node_name }}"
+      - "BIOS: {{ bios_version | default('N/A') }}"
+      - "Microcode: {{ microcode_version | default('N/A') }}"
+      - "Kernel: {{ kernel_version | default('N/A') }}"
+      - "BMC queried: {{ 'Yes' if (bmc_ip != '') else 'No (not configured)' }}"
+      - "=========================================="

@@ -1,0 +1,25 @@
+---
+# Cleanup old test artifacts from shared location (keep only latest run)
+
+- name: Find old artifact directories for this test type
+  ansible.builtin.find:
+    paths: "{{ artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}"
+    patterns: "{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}-*"
+    file_type: directory
+  register: old_artifact_dirs
+
+- name: Sort artifact directories by timestamp (newest first)
+  ansible.builtin.set_fact:
+    sorted_artifacts: "{{ old_artifact_dirs.files | sort(attribute='path', reverse=True) }}"
+
+- name: Identify artifacts to delete (keep only latest)
+  ansible.builtin.set_fact:
+    artifacts_to_delete: "{{ sorted_artifacts[1:] }}"
+  when: sorted_artifacts | length > 1
+
+- name: Remove old artifact directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ artifacts_to_delete | default([]) }}"
+  when: artifacts_to_delete is defined and artifacts_to_delete | length > 0

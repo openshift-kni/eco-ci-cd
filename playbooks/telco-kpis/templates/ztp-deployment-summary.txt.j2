@@ -1,0 +1,24 @@
+======================================================================
+ZTP AI DEPLOYMENT TIME TEST SUMMARY
+======================================================================
+Spoke Cluster: {{ spoke_cluster }}
+Hub Cluster: {{ hub_cluster }}
+Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+
+DEPLOYMENT TIMELINE:
+  Start Time: {{ ztp_deployment_timeline_start_time }}
+  End Time: {{ ztp_deployment_timeline_end_time }}
+  Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }} seconds)
+
+TEST VALIDATION:
+  Threshold: {{ threshold_duration }} ({{ threshold_seconds }} seconds)
+  Result: {{ test_status }}
+  {{ 'PASS - Deployment completed within acceptable time' if test_passed else 'FAIL - Deployment exceeded time threshold' }}
+
+{% if not test_passed %}
+FAILURE DETAILS:
+  Actual deployment time ({{ ztp_deployment_timeline_duration_seconds }}s) exceeded threshold ({{ threshold_seconds }}s)
+  Difference: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds over limit
+{% endif %}
+
+{{ ztp_deployment_timeline_detailed_summary }}

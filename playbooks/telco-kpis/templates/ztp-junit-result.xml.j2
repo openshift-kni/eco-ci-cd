@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="ZTP AI Deployment Time" tests="1"
+             failures="{{ 0 if test_passed else 1 }}" errors="0"
+             time="{{ ztp_deployment_timeline_duration_seconds }}">
+    <testcase name="ZTP AI Deployment Time Validation"
+              classname="telco.kpis.ztp.ai.deployment.time"
+              time="{{ ztp_deployment_timeline_duration_seconds }}">
+      {% if not test_passed %}
+      <failure type="TimeThresholdExceeded"
+               message="Deployment {{ ztp_deployment_timeline_duration_formatted }} exceeded {{ threshold_duration }} threshold">
+Deployment Time Test Failed
+
+Spoke Cluster: {{ spoke_cluster }}
+Hub Cluster: {{ hub_cluster }}
+Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+
+Start Time: {{ ztp_deployment_timeline_start_time }}
+End Time: {{ ztp_deployment_timeline_end_time }}
+
+Actual Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }} seconds)
+Threshold: {{ threshold_duration }} ({{ threshold_seconds }} seconds)
+
+Exceeded By: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds
+
+The deployment took longer than the acceptable threshold for AI (Assisted Installer) deployments.
+Expected: ≤ {{ threshold_seconds }}s
+Actual: {{ ztp_deployment_timeline_duration_seconds }}s
+      </failure>
+      {% endif %}
+      <system-out>
+Spoke Cluster: {{ spoke_cluster }}
+Hub Cluster: {{ hub_cluster }}
+Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+Start Time: {{ ztp_deployment_timeline_start_time }}
+End Time: {{ ztp_deployment_timeline_end_time }}
+Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
+Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
+Result: {{ test_status }}
+Events Captured: {{ ztp_deployment_timeline_events | length }}
+      </system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,81 @@
+======================================================================
+ZTP Deployment Timeline Summary
+======================================================================
+Hub Cluster: {{ hub_cluster | default('Unknown') }}
+Bastion Host: {{ inventory_hostname }}
+Spoke Cluster: {{ spoke_cluster }}
+
+Deployment Features:
+  - ArgoCD Application Starting Point: {{ 'Present' if milestone_timestamps.argo_app != 'N/A' else 'Not Present' }}
+  - ClusterInstance Tracking: {{ 'Present' if milestone_timestamps.clusterinstance != 'N/A' else 'Not Present' }}
+  - TALM CGU Completion: {{ 'Present' if milestone_timestamps.talm_cgu_completed != 'N/A' else 'Not Present' }}
+  - ztp-done Label: {{ 'Present' if has_ztp_done_label | default(false) else 'Not Present' }}
+
+Total Events Captured: {{ ztp_deployment_timeline_events | length }}
+
+======================================================================
+KEY MILESTONES
+======================================================================
+{% for line in milestone_table_lines %}
+{{ line }}
+{% endfor %}
+
+======================================================================
+WORKLOAD READINESS STATUS
+======================================================================
+{% if milestone_timestamps.talm_cgu_completed != 'N/A' %}
+✅ Cluster ready for workloads since: {{ milestone_timestamps.talm_cgu_completed }} (since {{ time_ready_formatted }})
+{% else %}
+⚠️  Workload readiness not yet achieved
+{% endif %}
+
+======================================================================
+MILESTONE BREAKDOWN
+======================================================================
+{% for group in milestone_breakdown %}
+
+{{ group.milestone }} ({{ group.count }} events)
+  First: {{ group.first.timestamp }} - {{ group.first.event }}
+  Last:  {{ group.last.timestamp }} - {{ group.last.event }}
+{% endfor %}
+
+======================================================================
+FEATURE STATUS
+======================================================================
+1. ArgoCD Application Starting Point: {{ 'Present' if milestone_timestamps.argo_app != 'N/A' else 'Not Present' }}
+{% if milestone_timestamps.argo_app != 'N/A' %}
+   ✅ Captured GitOps deployment trigger (earliest possible start)
+   ✅ Using ArgoCD Application creation as deployment start
+{% else %}
+   ℹ️  ArgoCD Application not found (checked openshift-gitops and argocd namespaces)
+   ℹ️  Using ClusterInstance or ManagedCluster creation as starting point instead
+{% endif %}
+
+2. ClusterInstance Tracking: {{ 'Present' if milestone_timestamps.clusterinstance != 'N/A' else 'Not Present' }}
+{% if milestone_timestamps.clusterinstance != 'N/A' %}
+   ✅ Captured SiteConfig v2 operator reconciliation events
+   ℹ️  Available for SiteConfig v2 deployments
+{% else %}
+   ℹ️  ClusterInstance resource not found (requires SiteConfig v2 operator)
+   ℹ️  Not critical - SiteConfig v1 deployments don't have ClusterInstance
+{% endif %}
+
+3. TALM CGU Completion: {{ 'Present' if milestone_timestamps.talm_cgu_completed != 'N/A' else 'Not Present' }}
+{% if milestone_timestamps.talm_cgu_completed != 'N/A' %}
+   ✅ Captured accurate policy completion timestamp (ready for workloads)
+   ✅ Using TALM CGU completedAt as deployment success milestone
+{% else %}
+   ℹ️  TALM ClusterGroupUpgrade not found in ztp-install namespace
+   ℹ️  Using individual policy compliance events as fallback
+{% endif %}
+
+======================================================================
+DEPLOYMENT SUMMARY
+======================================================================
+{% if deployment_duration_formatted is defined %}
+🚀 The deployment took {{ deployment_duration_formatted }} from ClusterInstance CR creation to TALM CGU Completed (Ready for Workloads)
+{% else %}
+⚠️  Unable to calculate deployment duration (missing key milestones)
+{% endif %}
+
+======================================================================

@@ -1,0 +1,77 @@
+---
+# Cyclictest test task for Telco-KPIs
+# TODO: Implement actual cyclictest test logic
+# For now: validates connection and cluster access
+
+- name: Display bastion hostname information
+  ansible.builtin.command: hostnamectl
+  register: hostnamectl_output
+  changed_when: false
+
+- name: Show hostnamectl output
+  ansible.builtin.debug:
+    var: hostnamectl_output.stdout_lines
+
+- name: Verify hub kubeconfig file exists
+  ansible.builtin.stat:
+    path: "{{ hub_kubeconfig }}"
+  register: hub_kubeconfig_stat
+
+- name: Assert hub kubeconfig exists
+  ansible.builtin.assert:
+    that: hub_kubeconfig_stat.stat.exists
+    fail_msg: "Hub kubeconfig file not found: {{ hub_kubeconfig }}"
+    success_msg: "Hub kubeconfig exists: {{ hub_kubeconfig }}"
+
+- name: Verify spoke kubeconfig file exists
+  ansible.builtin.stat:
+    path: "{{ spoke_kubeconfig }}"
+  register: spoke_kubeconfig_stat
+
+- name: Assert spoke kubeconfig exists
+  ansible.builtin.assert:
+    that: spoke_kubeconfig_stat.stat.exists
+    fail_msg: "Spoke kubeconfig file not found: {{ spoke_kubeconfig }}"
+    success_msg: "Spoke kubeconfig exists: {{ spoke_kubeconfig }}"
+
+- name: Get hub cluster nodes
+  ansible.builtin.command: >
+    oc --kubeconfig {{ hub_kubeconfig }} get nodes -o wide
+  register: hub_nodes_output
+  changed_when: false
+
+- name: Get hub cluster version
+  ansible.builtin.command: >
+    oc --kubeconfig {{ hub_kubeconfig }} get clusterversion -o wide
+  register: hub_version_output
+  changed_when: false
+
+- name: Display hub cluster information
+  ansible.builtin.debug:
+    msg:
+      - "=== HUB CLUSTER NODES ==="
+      - "{{ hub_nodes_output.stdout }}"
+      - ""
+      - "=== HUB CLUSTER VERSION ==="
+      - "{{ hub_version_output.stdout }}"
+
+- name: Get spoke cluster nodes
+  ansible.builtin.command: >
+    oc --kubeconfig {{ spoke_kubeconfig }} get nodes -o wide
+  register: spoke_nodes_output
+  changed_when: false
+
+- name: Get spoke cluster version
+  ansible.builtin.command: >
+    oc --kubeconfig {{ spoke_kubeconfig }} get clusterversion -o wide
+  register: spoke_version_output
+  changed_when: false
+
+- name: Display spoke cluster information
+  ansible.builtin.debug:
+    msg:
+      - "=== SPOKE CLUSTER ({{ spoke_cluster }}) NODES ==="
+      - "{{ spoke_nodes_output.stdout }}"
+      - ""
+      - "=== SPOKE CLUSTER VERSION ==="
+      - "{{ spoke_version_output.stdout }}"

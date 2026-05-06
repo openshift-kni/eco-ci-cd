@@ -22,6 +22,7 @@ This repository contains a comprehensive collection of Ansible playbooks, roles,
 | `oc_client_install` | Installs and configures OpenShift CLI (oc) client | [Documentation](playbooks/roles/oc_client_install/) |
 | `ocp_operator_deployment` | Manages OpenShift operator lifecycle and deployment | [Documentation](playbooks/roles/ocp_operator_deployment/) |
 | `ocp_version_facts` | Retrieves and manages OpenShift version information | [Documentation](playbooks/roles/ocp_version_facts/) |
+| `container_image_mirror` | Mirrors and manages container images between registries | [Documentation](playbooks/roles/container_image_mirror/) |
 
 ### Infrastructure Deployment Roles
 

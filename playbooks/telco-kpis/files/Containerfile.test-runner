@@ -1,0 +1,65 @@
+# Containerfile for telco-kpis test runner
+# Used by --podman mode in run-local-test-*.sh scripts
+#
+# Build:  podman build -t telco-kpis-test-runner:latest -f Containerfile.test-runner .
+# Manual: podman run -it --rm -v /path/kubeconfig:/tmp/kubeconfig:ro telco-kpis-test-runner:latest bash
+
+FROM registry.access.redhat.com/ubi9-minimal:latest
+
+ARG GO_VERSION=1.22.10
+
+RUN microdnf install -y \
+      bash git tar gzip wget make \
+      findutils procps-ng which diffutils binutils \
+      jq python3 python3-pip skopeo \
+      openssl ca-certificates rsync \
+      nmap-ncat iputils \
+    && microdnf clean all
+
+# ipmitool and python3.11 (needed for reboot test and report generation) from CentOS Stream 9 AppStream
+RUN printf '[centos9-appstream]\nname=CentOS Stream 9 - AppStream\nbaseurl=https://mirror.stream.centos.org/9-stream/AppStream/$basearch/os/\ngpgcheck=0\nenabled=1\n' \
+      > /etc/yum.repos.d/centos9-appstream.repo \
+    && microdnf install -y ipmitool python3.11 \
+    && rm -f /etc/yum.repos.d/centos9-appstream.repo \
+    && microdnf clean all
+
+RUN echo | openssl s_client -showcerts -connect prometheus.ran-metrics.telco5g.corp.redhat.com:443 2>/dev/null \
+      | awk '/BEGIN CERT/,/END CERT/' > /etc/pki/ca-trust/source/anchors/ran-metrics.pem \
+    && update-ca-trust \
+    && echo "--insecure" > /root/.curlrc
+
+RUN pip3 install --no-cache-dir jinja2-tools stcrestclient
+
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64)   GOARCH=amd64; OCARCH="" ;; \
+      aarch64)  GOARCH=arm64; OCARCH="-arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+      | tar -C /usr/local -xzf - && \
+    curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux${OCARCH}.tar.gz" \
+      | tar -C /usr/local/bin -xzf - oc kubectl
+
+# Preinstall kube-compare plugin binary from official release artifacts.
+# This avoids runtime/compile dependency on newer Go toolchains.
+ARG KUBE_COMPARE_VERSION=v0.12.0
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64)   KC_ARCH=amd64 ;; \
+      aarch64)  KC_ARCH=arm64 ;; \
+      *) echo "Unsupported architecture for kube-compare: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/openshift/kube-compare/releases/download/${KUBE_COMPARE_VERSION}/kube-compare_linux_${KC_ARCH}.tar.gz" \
+      | tar -C /usr/local/bin -xzf - kubectl-cluster_compare && \
+    chmod 0755 /usr/local/bin/kubectl-cluster_compare
+
+# Install analyze-podman-test-results.py for report generation
+# Script is copied from cloned telco-kpis-test-local-scripts repo during build
+COPY analyze-podman-test-results.py /opt/analyze-podman-test-results.py
+RUN chmod 0755 /opt/analyze-podman-test-results.py
+
+ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.local/bin:${PATH}" \
+    GOPATH="/root/go"
+
+WORKDIR /workspace

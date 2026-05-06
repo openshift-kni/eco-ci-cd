@@ -203,6 +203,60 @@ Tests typically verify:
 - RT kernel configurations
 - Machine config pools for CNF workloads
 
+### Telco-KPIs Testing Framework
+
+The `playbooks/telco-kpis/` directory contains a comprehensive testing framework for validating Telco KPIs (Key Performance Indicators) on OpenShift Edge deployments. Tests generate JUnit XML reports and Markdown reports published to Gitea.
+
+**Available Tests:**
+- `collect-node-info.yml` - Collects hardware information (CPU, BIOS, firmware versions, NIC details)
+- `run-test.yml` - Executes performance tests (oslat, ptp, cyclictest, reboot, cpu_util)
+- `run-bios-validation.yml` - Validates BIOS settings across cluster nodes
+- `run-rds-compare.yml` - Compares RDS deployment metrics
+- `ztp-ai-deployment-time.yml` - **Validates ZTP AI deployment time against threshold**
+- `generate-report.yml` - Generates comprehensive Markdown reports from all test artifacts
+
+**ZTP AI Deployment Time Test** (`ztp-ai-deployment-time.yml`):
+- **Purpose**: Validates that ZTP (Zero Touch Provisioning) Assisted Installer deployments complete within acceptable time threshold (default: 2h0m = 120 minutes)
+- **Implementation**: Uses `ztp_deployment_timeline` Ansible role with `kubernetes.core.k8s_info` module (not bash scripts)
+- **Measurement Point**: ClusterInstance creation → TALM ClusterGroupUpgrade completion
+- **Test Result**: PASS if deployment duration ≤ threshold, FAIL otherwise
+- **Artifacts Generated**:
+  - `deployment-timeline-summary.txt` - Human-readable summary with milestone breakdown
+  - `deployment-timeline.json` - Raw timeline events in JSON format
+  - `junit_ztp-ai-deployment-time.xml` - JUnit XML test result for CI/CD integration
+- **Output**: Timestamped directory `ztp-ai-deployment-time-{spoke}-{YYYYMMDD-HHMMSS}` in shared artifacts location
+
+**ZTP Deployment Timeline Role** (`playbooks/roles/ztp_deployment_timeline/`):
+- Queries ACM (Advanced Cluster Management) resources on hub cluster
+- Tracks deployment milestones: ClusterInstance, ManagedCluster, AgentClusterInstall, TALM CGU
+- Supports both AI (Assisted Installer) and IBI (Image-based Install) deployment methods
+- Generates detailed milestone analysis with timestamps, durations, and deltas
+- Exports facts: `ztp_deployment_timeline_duration_seconds`, `ztp_deployment_timeline_deployment_method`
+
+**Report Generation** (`generate-report.yml`):
+- Aggregates all test artifacts from shared location (`/home/telcov10n/telco-kpis-artifacts/{spoke}/`)
+- Runs `analyze-podman-test-results.py` in `telco-kpis-test-runner` container
+- Filters tests based on node-info timestamp (excludes stale tests from old environment configs)
+- Integrates ZTP deployment timeline into report before "Report Metadata" section
+- Publishes Markdown report + compressed tarball to Gitea repository
+- Implements freshness check: skips generation if no new tests since last report
+
+**Artifact Directory Pattern:**
+```
+/home/telcov10n/telco-kpis-artifacts/{spoke}/
+├── node-info-{spoke}.json                                    # Hardware metadata (baseline)
+├── {test-name}-{spoke}-{YYYYMMDD-HHMMSS}/                   # Timestamped test directories
+│   ├── junit_{test-name}.xml                                # JUnit XML report
+│   └── {test-specific-artifacts}
+└── ztp-ai-deployment-time-{spoke}-{YYYYMMDD-HHMMSS}/
+    ├── deployment-timeline-summary.txt
+    ├── deployment-timeline.json
+    └── junit_ztp-ai-deployment-time.xml
+```
+
+**UTC Timestamp Consistency:**
+All telco-kpis tests use UTC timestamps (`date -u +%Y%m%d-%H%M%S`) to ensure correct chronological ordering and freshness comparison across different bastion timezones.
+
 ### Environment Setup Pattern
 The `setup-cluster-env.yml` playbook implements a **version-to-cluster mapping strategy**:
 - Maps OCP versions to specific cluster names (e.g., 4.20 → hlxcl7)
@@ -236,3 +290,70 @@ Major external role dependencies (from `requirements.yml`):
 - `community.libvirt` (v1.3.0) - KVM/libvirt VM management
 - `kubernetes.core` (v2.4.2) - Kubernetes API interaction
 - `junipernetworks.junos` (v9.1.0) - Juniper network device automation
+
+## Troubleshooting
+
+### Common Post-Deployment Issues
+
+#### Prometheus Pod Stuck (Reboot Test Blocker)
+**Symptom:** Reboot tests always skip execution, prometheus-k8s-0 pod stuck in Init:0/1 state
+
+**Impact:** CNF-gotests BeforeEach health check fails, preventing reboot tests from executing
+
+**Workaround:** See detailed fix at `playbooks/telco-kpis/docs/troubleshooting/prometheus-pod-stuck-reboot-test-blocker.md`
+
+**Quick Fix:**
+```bash
+# Fix ConfigMap and restart pod
+oc --kubeconfig /tmp/<spoke>-kubeconfig apply -f <(cat <<'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-main-generated
+  namespace: openshift-monitoring
+data:
+  alertmanager.yaml.gz: H4sIAAAAAAAA/0yOQQrCMBBF95wiSxeVQhcu3HoCwY1gF0k6bQOdSTOTUsRzdmgXrt7j///x5gkf4C8LDmYSaIBzWSnpoGjYo3xVdWAXQmWXCNnSPBg0SBxhzm0p2xrPo1qQVvd+hN9uRs4x8S+VQW9kF+LrO3U51OBaT02BVTwBUZs+8lAyxV3k88SYOr72yC1bX1G6t7neMu08nVmz/QMAAP//jkUArgAAAA==
+EOF
+)
+
+oc --kubeconfig /tmp/<spoke>-kubeconfig delete pod prometheus-k8s-0 -n openshift-monitoring
+```
+
+**Related Bugs:** OCPBUGS-65953, OCPBUGS-70352
+
+**Prevention:** Consider adding automated fix to post-deployment playbooks (see troubleshooting doc for implementation)
+
+#### kubernetes.core.k8s_exec IPv6 Fallback Issue
+
+**Symptom:** `kubernetes.core.k8s_exec` fails with `[Errno 113] No route to host` but `oc exec` works fine
+
+**Impact:** Blocks pod exec operations in Ansible playbooks (BIOS/microcode collection, hardware info gathering)
+
+**Root Cause:** Python `websocket-client` library does not fall back to IPv4 when IPv6 connection fails. In dual-stack DNS environments without IPv6 routing, the library tries IPv6 first and fails instead of falling back to IPv4.
+
+**Solution:** Use `oc exec` via `ansible.builtin.shell` instead of `kubernetes.core.k8s_exec`
+
+**Example:**
+```yaml
+# Instead of k8s_exec:
+- name: Get BIOS version
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n {{ namespace }} exec {{ pod_name }} \
+      -c {{ container }} -- chroot /rootfs dmidecode -t 0
+  register: result
+  failed_when: false
+  changed_when: false
+```
+
+**Detailed Analysis:** See `playbooks/telco-kpis/docs/troubleshooting/k8s-exec-ipv6-fallback-issue.md`
+
+**Commits:** bb5e97f (fix), 1e03b5f (related)
+
+**Last Verified:** 2026-04-30 (spree-02 cluster)
+
+### Troubleshooting Documentation
+
+Additional troubleshooting guides are available in:
+- `playbooks/telco-kpis/docs/troubleshooting/` - Telco-KPIs specific issues
+- `playbooks/telco-kpis/roles/gitea/README.md` - Gitea report publishing issues

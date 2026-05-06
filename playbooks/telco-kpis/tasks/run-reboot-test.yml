@@ -1,77 +1,119 @@
 ---
-# Reboot test task for Telco-KPIs
-# TODO: Implement actual reboot test logic
-# For now: validates connection and cluster access
+# Run Reboot test
+# Test: REBOOT
+# Purpose: Test cluster stability and recovery through multiple reboot cycles
+# Reboot Count: Configurable via reboot_count parameter (default: 6)
 
-- name: Display bastion hostname information
-  ansible.builtin.command: hostnamectl
-  register: hostnamectl_output
-  changed_when: false
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
 
-- name: Show hostnamectl output
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .reboot-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display test configuration
   ansible.builtin.debug:
-    var: hostnamectl_output.stdout_lines
+    msg:
+      - "=========================================="
+      - "Reboot Test Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Reboot Count: {{ reboot_count | default(telco_kpis_default_reboot_count) }}"
+      - "RAN Integration Repo: {{ ran_integration_repo | default(telco_kpis_ran_integration_repo) }}"
+      - "CNF GoTests Repo: {{ cnf_gotests_repo | default(telco_kpis_cnf_gotests_repo) }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
 
-- name: Verify hub kubeconfig file exists
-  ansible.builtin.stat:
-    path: "{{ hub_kubeconfig }}"
-  register: hub_kubeconfig_stat
-
-- name: Assert hub kubeconfig exists
-  ansible.builtin.assert:
-    that: hub_kubeconfig_stat.stat.exists
-    fail_msg: "Hub kubeconfig file not found: {{ hub_kubeconfig }}"
-    success_msg: "Hub kubeconfig exists: {{ hub_kubeconfig }}"
-
-- name: Verify spoke kubeconfig file exists
-  ansible.builtin.stat:
+- name: Ensure kubeconfig is readable by podman container
+  ansible.builtin.file:
     path: "{{ spoke_kubeconfig }}"
-  register: spoke_kubeconfig_stat
+    mode: '0644'
 
-- name: Assert spoke kubeconfig exists
-  ansible.builtin.assert:
-    that: spoke_kubeconfig_stat.stat.exists
-    fail_msg: "Spoke kubeconfig file not found: {{ spoke_kubeconfig }}"
-    success_msg: "Spoke kubeconfig exists: {{ spoke_kubeconfig }}"
-
-- name: Get hub cluster nodes
-  ansible.builtin.command: >
-    oc --kubeconfig {{ hub_kubeconfig }} get nodes -o wide
-  register: hub_nodes_output
-  changed_when: false
-
-- name: Get hub cluster version
-  ansible.builtin.command: >
-    oc --kubeconfig {{ hub_kubeconfig }} get clusterversion -o wide
-  register: hub_version_output
-  changed_when: false
-
-- name: Display hub cluster information
+- name: Display monitoring instructions for real-time log viewing
   ansible.builtin.debug:
     msg:
-      - "=== HUB CLUSTER NODES ==="
-      - "{{ hub_nodes_output.stdout }}"
+      - "=========================================="
+      - "To monitor test execution in real-time:"
+      - "=========================================="
+      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
+      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
       - ""
-      - "=== HUB CLUSTER VERSION ==="
-      - "{{ hub_version_output.stdout }}"
+      - "Or from local:"
+      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
+      - "=========================================="
+      - "Container name: telco-kpis-reboot-{{ spoke_cluster }}"
+      - "Podman logs:    podman logs -f telco-kpis-reboot-{{ spoke_cluster }}"
+      - "=========================================="
 
-- name: Get spoke cluster nodes
-  ansible.builtin.command: >
-    oc --kubeconfig {{ spoke_kubeconfig }} get nodes -o wide
-  register: spoke_nodes_output
-  changed_when: false
+- name: Run reboot test in podman container
+  ansible.builtin.shell: |
+    set -o pipefail
+    podman run --rm \
+      --name telco-kpis-reboot-{{ spoke_cluster }} \
+      -v {{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z \
+      -v {{ artifacts_dir.path }}:/workspace/artifacts:rw,Z \
+      telco-kpis-test-runner:latest \
+      bash -c '
+        set -e
+        cp /tmp/kubeconfig-ro /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+        export GIT_SSL_NO_VERIFY=true
+        export RAN_METRICS_URL=https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/
 
-- name: Get spoke cluster version
-  ansible.builtin.command: >
-    oc --kubeconfig {{ spoke_kubeconfig }} get clusterversion -o wide
-  register: spoke_version_output
-  changed_when: false
+        echo "Cloning ran-integration repository..."
+        git clone --depth 1 {{ ran_integration_repo | default(telco_kpis_ran_integration_repo) }} /workspace/ran-integration
+        cd /workspace/ran-integration
 
-- name: Display spoke cluster information
+        echo "Cloning cnf-gotests repository..."
+        git clone --depth 1 {{ cnf_gotests_repo | default(telco_kpis_cnf_gotests_repo) }} cnf-gotests
+
+        export WORKSPACE=/workspace/ran-integration
+        export SCRIPTS_DIR=/workspace/ran-integration/scripts
+
+        echo "Creating artifacts symlink..."
+        ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+        echo "Starting reboot test (reboot_count={{ reboot_count | default(telco_kpis_default_reboot_count) }})..."
+        set +e
+        bash scripts/test_reboot.sh reboot={{ reboot_count | default(telco_kpis_default_reboot_count) }}
+        exit_code=$?
+
+        echo "Reboot test completed with exit code: $exit_code"
+        exit $exit_code
+      ' 2>&1 | tee {{ artifacts_dir.path }}/podman-run.log
+  register: reboot_result
+  failed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Display test execution result
   ansible.builtin.debug:
     msg:
-      - "=== SPOKE CLUSTER ({{ spoke_cluster }}) NODES ==="
-      - "{{ spoke_nodes_output.stdout }}"
-      - ""
-      - "=== SPOKE CLUSTER VERSION ==="
-      - "{{ spoke_version_output.stdout }}"
+      - "Test exit code: {{ reboot_result.rc }}"
+      - "{{ 'Test PASSED' if reboot_result.rc == 0 else 'Test FAILED' }}"
+      - "Reboot count: {{ reboot_count | default(telco_kpis_default_reboot_count) }}"
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact-management
+  vars:
+    artifact_management_test_name: "reboot"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ reboot_result.rc }}"
+    artifact_management_test_duration: "600"  # Reboot test doesn't have duration_seconds, use default
+    artifact_management_junit_source_pattern: "*reboot*.xml,*report*.xml,*junit*.xml"
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Fail if test failed
+  ansible.builtin.fail:
+    msg: "Reboot test failed with exit code {{ reboot_result.rc }}"
+  when: reboot_result.rc != 0

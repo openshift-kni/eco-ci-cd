@@ -5,5 +5,4 @@
 inventory*
 *__pycache__*
 **/collections
-collections-bk/
 **/.ansible

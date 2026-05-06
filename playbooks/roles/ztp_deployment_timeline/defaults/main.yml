@@ -1,0 +1,6 @@
+---
+# No default variables - all required variables must be provided when including the role
+#
+# Required variables:
+#   - spoke_cluster: Name of the spoke cluster (ManagedCluster name)
+#   - hub_kubeconfig: Path to hub cluster kubeconfig file on the bastion

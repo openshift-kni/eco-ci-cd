@@ -1,0 +1,146 @@
+---
+# playbooks/telco-kpis/parse-lockdown.yml
+#
+# Purpose: Parse lockdown JSON files (hub or spoke) and extract deployment parameters
+#
+# This playbook auto-detects the lockdown type based on JSON structure and outputs
+# parameters in both env and JSON formats for consumption by downstream jobs.
+#
+# Usage:
+#   ansible-playbook playbooks/telco-kpis/parse-lockdown.yml \
+#     -e lockdown_uri=<url-to-lockdown-json>
+#
+# Outputs (in ARTIFACT_DIR or /tmp):
+#   - lockdown.json: Original downloaded lockdown JSON
+#   - lockdown-params.env: Shell environment variables
+#   - lockdown-params.json: Structured JSON parameters
+
+- name: Parse Lockdown JSON
+  hosts: localhost
+  gather_facts: true
+  vars:
+    artifact_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"
+    lockdown_filename: "{{ lockdown_uri | regex_replace('.*/', '') | regex_replace('.json$', '') }}"
+
+  tasks:
+    - name: Validate lockdown_uri is provided
+      ansible.builtin.assert:
+        that:
+          - lockdown_uri is defined
+          - lockdown_uri | length > 0
+        fail_msg: "lockdown_uri parameter is required"
+        success_msg: "Lockdown URI: {{ lockdown_uri }}"
+
+    - name: Extract lockdown filename
+      ansible.builtin.debug:
+        msg: "Lockdown filename: {{ lockdown_filename }}"
+
+    - name: Download lockdown JSON
+      ansible.builtin.get_url:
+        url: "{{ lockdown_uri }}"
+        dest: "{{ artifact_dir }}/{{ lockdown_filename }}.json"
+        mode: '0644'
+        force: true
+        validate_certs: false
+      register: lockdown_download
+      retries: 3
+      delay: 5
+
+    - name: Read lockdown JSON
+      ansible.builtin.slurp:
+        src: "{{ artifact_dir }}/{{ lockdown_filename }}.json"
+      register: lockdown_content
+
+    - name: Parse lockdown JSON
+      ansible.builtin.set_fact:
+        lockdown_data: "{{ lockdown_content['content'] | b64decode | from_json }}"
+
+    - name: Detect lockdown type (hub vs spoke)
+      ansible.builtin.set_fact:
+        lockdown_type: "{{ 'hub' if ('hub' in lockdown_data) else 'spoke' }}"
+
+    - name: Display lockdown type
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Lockdown Type Detected: {{ lockdown_type | upper }}"
+          - "=========================================="
+
+    # Hub lockdown parsing
+    - name: Parse hub lockdown
+      when: lockdown_type == 'hub'
+      block:
+        - name: Extract hub parameters
+          ansible.builtin.set_fact:
+            hub_ocp_pull_spec: "{{ lockdown_data.hub.ocp.pull_spec }}"
+            hub_ocp_version: "{{ lockdown_data.hub.ocp.major_version }}.{{ lockdown_data.hub.ocp.minor_version }}"
+            hub_acm_channel: "release-{{ lockdown_data.hub.acm.version_override }}"
+            hub_mce_channel: "{{ lockdown_data.hub.acm.mce_override | regex_replace('^v', 'stable-') | regex_replace('\\.\\d+$', '') }}"
+            hub_talm_catalog: "{{ lockdown_data.hub.talm.pull_spec | default('') }}"
+            hub_gitops_catalog: "{{ lockdown_data.hub.gitops.pull_spec | default('') }}"
+
+        - name: Build hub parameters dictionary
+          ansible.builtin.set_fact:
+            lockdown_params:
+              LOCKDOWN_TYPE: "hub"
+              OCP_RELEASE_IMAGE: "{{ hub_ocp_pull_spec }}"
+              OCP_VERSION: "{{ hub_ocp_version }}"
+              ACM_CHANNEL: "{{ hub_acm_channel }}"
+              MCE_CHANNEL: "{{ hub_mce_channel }}"
+              TALM_CATALOG: "{{ hub_talm_catalog }}"
+              GITOPS_CATALOG: "{{ hub_gitops_catalog }}"
+
+    # Spoke lockdown parsing
+    - name: Parse spoke lockdown
+      when: lockdown_type == 'spoke'
+      block:
+        - name: Extract spoke parameters
+          ansible.builtin.set_fact:
+            spoke_ocp_pull_spec: "{{ lockdown_data.deployment.ocp_pull_spec }}"
+            spoke_ocp_version: "{{ lockdown_data.deployment.ocp_version }}"
+            spoke_ztp_pull_spec: "{{ lockdown_data.deployment.ztp_pull_spec }}"
+            spoke_ztp_version: "{{ lockdown_data.deployment.ztp_version }}"
+            spoke_operator_source: "{{ lockdown_data.deployment.operator_source }}"
+
+        - name: Build spoke parameters dictionary
+          ansible.builtin.set_fact:
+            lockdown_params:
+              LOCKDOWN_TYPE: "spoke"
+              OCP_PULL_SPEC: "{{ spoke_ocp_pull_spec }}"
+              OCP_VERSION: "{{ spoke_ocp_version }}"
+              ZTP_PULL_SPEC: "{{ spoke_ztp_pull_spec }}"
+              ZTP_VERSION: "{{ spoke_ztp_version }}"
+              OPERATOR_SOURCE: "{{ spoke_operator_source }}"
+
+    # Output parameters
+    - name: Write parameters to env file
+      ansible.builtin.copy:
+        content: |
+          # Lockdown parameters parsed from: {{ lockdown_uri }}
+          # Lockdown type: {{ lockdown_type }}
+          # Generated: {{ ansible_date_time.iso8601 }}
+          {% for key, value in lockdown_params.items() %}
+          {{ key }}={{ value }}
+          {% endfor %}
+        dest: "{{ artifact_dir }}/{{ lockdown_filename }}-params.env"
+        mode: '0644'
+
+    - name: Write parameters to JSON file
+      ansible.builtin.copy:
+        content: "{{ lockdown_params | to_nice_json }}"
+        dest: "{{ artifact_dir }}/{{ lockdown_filename }}-params.json"
+        mode: '0644'
+
+    - name: Display parsed parameters
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Parsed Parameters ({{ lockdown_type | upper }})"
+          - "=========================================="
+          - "{{ lockdown_params | to_nice_yaml }}"
+          - "=========================================="
+          - "Output files:"
+          - "  - {{ artifact_dir }}/{{ lockdown_filename }}.json (original)"
+          - "  - {{ artifact_dir }}/{{ lockdown_filename }}-params.env"
+          - "  - {{ artifact_dir }}/{{ lockdown_filename }}-params.json"
+          - "=========================================="

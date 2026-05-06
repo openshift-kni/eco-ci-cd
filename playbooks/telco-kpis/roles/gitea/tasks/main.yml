@@ -1,0 +1,26 @@
+---
+# Main entry point for Gitea role
+# Handles deployment, initialization, and report publishing
+
+- name: Validate credentials from vault
+  ansible.builtin.include_tasks: validate-credentials.yml
+  when: development_mode | default(false) | bool
+
+- name: Include deployment tasks
+  ansible.builtin.include_tasks: deploy.yml
+  when: development_mode | default(false) | bool
+
+- name: Include initialization tasks
+  ansible.builtin.include_tasks: initialize.yml
+  when: development_mode | default(false) | bool
+
+- name: Include repository creation tasks
+  ansible.builtin.include_tasks: create-repository.yml
+  when: development_mode | default(false) | bool
+
+- name: Include report publishing tasks
+  ansible.builtin.include_tasks: publish-report.yml
+  when:
+    - development_mode | default(false) | bool
+    - report_file is defined
+    - report_tarball is defined

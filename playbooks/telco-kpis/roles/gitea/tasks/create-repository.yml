@@ -1,0 +1,57 @@
+---
+# Create telco-kpis-reports repository if it doesn't exist
+
+- name: Check if repository exists
+  ansible.builtin.uri:
+    url: "{{ gitea_api_base }}/repos/{{ gitea_admin_user }}/{{ gitea_repo_name }}"
+    method: GET
+    user: "{{ gitea_admin_user }}"
+    password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: repo_check
+
+- name: Display repository status
+  ansible.builtin.debug:
+    msg: "Repository exists: {{ repo_check.status == 200 }}"
+
+- name: Create repository
+  when: repo_check.status == 404
+  block:
+    - name: Create telco-kpis-reports repository via API
+      ansible.builtin.uri:
+        url: "{{ gitea_api_base }}/user/repos"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ gitea_repo_name }}"
+          description: "{{ gitea_repo_description }}"
+          private: false
+          auto_init: true
+          default_branch: main
+          readme: "Default"
+        status_code: [201, 422]  # 422 if already exists
+      register: repo_create
+
+    - name: Display repository creation result
+      ansible.builtin.debug:
+        msg: "Repository created: {{ repo_create.status == 201 }}"
+
+    - name: Wait for repository initialization
+      ansible.builtin.pause:
+        seconds: 5
+      when: repo_create.status == 201
+
+- name: Get repository clone URL
+  ansible.builtin.set_fact:
+    gitea_repo_http_url: "http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@{{ gitea_domain }}:{{ gitea_http_port }}/{{ gitea_admin_user }}/{{ gitea_repo_name }}.git"
+    gitea_repo_web_url: "{{ gitea_root_url }}{{ gitea_admin_user }}/{{ gitea_repo_name }}"
+
+- name: Display repository URLs
+  ansible.builtin.debug:
+    msg:
+      - "Repository Web URL: {{ gitea_repo_web_url }}"
+      - "Repository Clone URL: http://{{ gitea_domain }}:{{ gitea_http_port }}/{{ gitea_admin_user }}/{{ gitea_repo_name }}.git"

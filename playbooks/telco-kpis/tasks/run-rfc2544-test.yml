@@ -295,7 +295,7 @@
 
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
-    name: artifact-management
+    name: artifact_management
   vars:
     artifact_management_test_name: "rfc2544"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"

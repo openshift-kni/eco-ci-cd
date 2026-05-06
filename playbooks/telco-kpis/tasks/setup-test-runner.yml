@@ -1,0 +1,88 @@
+---
+# Setup test-runner container image on bastion
+# This task ensures the telco-kpis-test-runner:latest container image exists on the bastion
+
+- name: Check if podman is installed on bastion
+  ansible.builtin.command: podman --version
+  register: podman_version
+  changed_when: false
+  failed_when: false
+
+- name: Fail if podman is not installed
+  ansible.builtin.fail:
+    msg: "Podman is not installed on bastion. Install it first."
+  when: podman_version.rc != 0
+
+- name: Display podman version
+  ansible.builtin.debug:
+    msg: "Bastion has {{ podman_version.stdout }}"
+
+- name: Check if test-runner container image exists
+  ansible.builtin.command: podman image exists telco-kpis-test-runner:latest
+  register: image_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create temporary directory for Containerfile
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .telco-kpis-build
+  register: build_dir
+  when: image_exists.rc != 0
+
+- name: Copy Containerfile to bastion
+  ansible.builtin.copy:
+    src: ../files/Containerfile.test-runner
+    dest: "{{ build_dir.path }}/Containerfile.test-runner"
+    mode: '0644'
+  when: image_exists.rc != 0
+
+- name: Clone telco-kpis-test-local-scripts repo for report generation script
+  ansible.builtin.git:
+    repo: 'https://gitlab.cee.redhat.com/ccardeno/telco-kpis-test-local-scripts.git'
+    dest: "{{ build_dir.path }}/telco-kpis-test-local-scripts"
+    version: main
+    update: yes
+    force: yes
+  when: image_exists.rc != 0
+
+- name: Copy analyze-podman-test-results.py to build directory
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/telco-kpis-test-local-scripts/scripts/python/analyze-podman-test-results/analyze-podman-test-results.py"
+    dest: "{{ build_dir.path }}/analyze-podman-test-results.py"
+    mode: '0755'
+    remote_src: true
+  when: image_exists.rc != 0
+
+- name: Build test-runner container image
+  ansible.builtin.command:
+    cmd: >
+      podman build
+      -t telco-kpis-test-runner:latest
+      -f {{ build_dir.path }}/Containerfile.test-runner
+      {{ build_dir.path }}
+  register: build_result
+  when: image_exists.rc != 0
+  async: 600
+  poll: 10
+
+- name: Display build output
+  ansible.builtin.debug:
+    var: build_result.stdout_lines
+  when: image_exists.rc != 0
+
+- name: Cleanup build directory
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}"
+    state: absent
+  when: image_exists.rc != 0
+
+- name: Verify container image was built successfully
+  ansible.builtin.command: podman image exists telco-kpis-test-runner:latest
+  register: image_verify
+  changed_when: false
+  failed_when: image_verify.rc != 0
+
+- name: Display success message
+  ansible.builtin.debug:
+    msg: "Container image telco-kpis-test-runner:latest is ready"

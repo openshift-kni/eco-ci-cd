@@ -1,0 +1,66 @@
+---
+# BIOS validation test for Telco-KPIs spoke clusters
+# This is a helper playbook for validating BIOS settings, not a performance test
+#
+# Usage:
+#   ansible-playbook run-bios-validation.yml \
+#     -e spoke_cluster=spree-02 \
+#     -e spoke_kubeconfig=/path/to/spoke/kubeconfig \
+#     -e version=4.21 \
+#     -e bios_profile_url=https://... \
+#     -e apply_fixes=false \
+#     -e reboot_after_apply=false
+
+- name: Validate BIOS settings on spoke cluster
+  hosts: bastion
+  gather_facts: true
+
+  tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_role:
+        name: telco-kpis-defaults
+
+
+    - name: Validate spoke_cluster parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+        fail_msg: "spoke_cluster parameter is required"
+        success_msg: "Target spoke cluster: {{ spoke_cluster }}"
+
+    - name: Validate spoke_kubeconfig parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_kubeconfig is defined
+          - spoke_kubeconfig | length > 0
+        fail_msg: "spoke_kubeconfig parameter is required"
+        success_msg: "Spoke kubeconfig: {{ spoke_kubeconfig }}"
+
+    - name: Validate version parameter
+      ansible.builtin.assert:
+        that:
+          - version is defined
+          - version | length > 0
+        fail_msg: "version parameter is required"
+        success_msg: "OCP version: {{ version }}"
+
+    - name: Validate bios_profile_url parameter
+      ansible.builtin.assert:
+        that:
+          - bios_profile_url is defined
+          - bios_profile_url | length > 0
+        fail_msg: "bios_profile_url parameter is required"
+        success_msg: "BIOS profile URL: {{ bios_profile_url }}"
+
+    - name: Execute BIOS validation tasks
+      ansible.builtin.include_tasks: "tasks/run-bios-validation-test.yml"
+
+    - name: BIOS validation summary
+      ansible.builtin.debug:
+        msg:
+          - "BIOS validation completed successfully"
+          - "Spoke cluster: {{ spoke_cluster }}"
+          - "OCP version: {{ version }}"
+          - "Apply fixes: {{ apply_fixes | default(false) }}"
+          - "Reboot after apply: {{ reboot_after_apply | default(false) }}"

@@ -1,0 +1,43 @@
+---
+# Collect node information from spoke cluster
+# This is a helper playbook for Telco-KPIs, not a performance test
+#
+# Usage:
+#   ansible-playbook collect-node-info.yml \
+#     -e spoke_cluster=spree-02 \
+#     -e spoke_kubeconfig=/path/to/spoke/kubeconfig
+
+- name: Collect node information from spoke cluster
+  hosts: bastion
+  gather_facts: true
+
+  tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_role:
+        name: telco-kpis-defaults
+
+    - name: Validate spoke_cluster parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+        fail_msg: "spoke_cluster parameter is required"
+        success_msg: "Target spoke cluster: {{ spoke_cluster }}"
+
+    - name: Validate spoke_kubeconfig parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_kubeconfig is defined
+          - spoke_kubeconfig | length > 0
+        fail_msg: "spoke_kubeconfig parameter is required"
+        success_msg: "Spoke kubeconfig: {{ spoke_kubeconfig }}"
+
+    - name: Execute node info collection tasks
+      ansible.builtin.include_tasks: "tasks/collect-node-info.yml"
+
+    - name: Collection summary
+      ansible.builtin.debug:
+        msg:
+          - "Node information collection completed successfully"
+          - "Spoke cluster: {{ spoke_cluster }}"
+          - "Spoke kubeconfig: {{ spoke_kubeconfig }}"

@@ -1,0 +1,48 @@
+---
+# Telco-KPIs Default Configuration Values
+# These defaults can be overridden at playbook or task level
+
+# Git Repository URLs
+telco_kpis_ran_integration_repo: "https://gitlab.cee.redhat.com/ran/ran-integration.git"
+telco_kpis_ran_integration_branch: "master"
+telco_kpis_cnf_gotests_repo: "https://gitlab.cee.redhat.com/cnf/cnf-gotests.git"
+telco_kpis_cnf_gotests_branch: "master"
+telco_kpis_oslat_repo: "https://gitlab.cee.redhat.com/ran/oslat.git"
+telco_kpis_cyclictest_repo: "https://gitlab.cee.redhat.com/ran/cyclictest.git"
+telco_kpis_telco_reference_repo: "https://github.com/openshift-kni/telco-reference.git"
+telco_kpis_test_scripts_repo: "https://gitlab.cee.redhat.com/ccardeno/telco-kpis-test-local-scripts.git"
+
+# Container Images
+telco_kpis_test_runner_image: "telco-kpis-test-runner:latest"
+telco_kpis_dpdk_testpmd_image: "quay.io/container-perf-tools/dpdk-testpmd"
+
+# OpenShift Namespaces
+telco_kpis_sriov_namespace: "openshift-sriov-network-operator"
+telco_kpis_mco_namespace: "openshift-machine-config-operator"
+
+# Artifact Paths
+telco_kpis_shared_artifact_base: "/home/telcov10n/telco-kpis-artifacts"
+telco_kpis_local_artifact_base: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"
+
+# Default Test Durations
+telco_kpis_default_duration_cyclictest: "12h"
+telco_kpis_default_duration_oslat: "10m"
+telco_kpis_default_duration_ptp: "10m"
+telco_kpis_default_duration_cpu_util: "10m"
+telco_kpis_default_duration_rfc2544: "1h"
+
+# Default Test Parameters
+telco_kpis_default_reboot_count: 6
+telco_kpis_default_frame_size: "256"
+telco_kpis_default_lat_rate: "0.8"
+
+# Spirent RFC2544 Default Configuration
+telco_kpis_default_spirent_chassis: "spt-n4u-mgmt"
+telco_kpis_default_spirent_stcweb: "10.16.231.236:8888"
+telco_kpis_default_spirent_port1: "//spt-n4u-mgmt/2/6"
+telco_kpis_default_spirent_port2: "//spt-n4u-mgmt/2/7"
+telco_kpis_default_spirent_config: "spirent_testcfg.xml"
+
+# Environment Variables
+telco_kpis_git_ssl_no_verify: "true"
+telco_kpis_ran_metrics_url: "https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/"

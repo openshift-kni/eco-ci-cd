@@ -1,0 +1,31 @@
+#!/bin/bash
+################################################################################
+# Script: run-rds-compare-test.sh
+# Purpose: Execute RDS comparison test inside telco-kpis-test-runner container
+# Generated from: playbooks/telco-kpis/templates/run-rds-compare-test.sh.j2
+#
+# Description:
+#   This script runs kubectl-cluster_compare to validate spoke cluster state
+#   against RAN RDS metadata from telco-reference repository. It compares
+#   cluster resources against expected reference configuration.
+#
+# Environment Variables (set by container/playbook):
+#   KUBECONFIG           - Path to kubeconfig file
+#
+# Artifacts:
+#   Test results are written to /workspace/artifacts/ which is mounted
+#   from the bastion host's artifacts directory.
+#
+################################################################################
+
+set -euo pipefail
+
+cd /workspace/reference
+
+echo '[INFO] Running kubectl-cluster_compare'
+echo '[INFO] Metadata: {{ metadata_relpath }}'
+echo '[INFO] Extra args: {{ compare_extra_args | default('(none)') }}'
+
+set +e
+kubectl-cluster_compare -r '{{ metadata_relpath }}' {{ compare_extra_args | default('') }} 2>&1 | tee /workspace/artifacts/cluster-compare.log
+exit ${PIPESTATUS[0]}

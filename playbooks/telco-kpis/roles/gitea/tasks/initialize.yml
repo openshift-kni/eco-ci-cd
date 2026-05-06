@@ -1,0 +1,240 @@
+---
+# Initialize Gitea if not already configured
+
+- name: Check if Gitea is installed (INSTALL_LOCK status)
+  ansible.builtin.command: podman exec -u git {{ gitea_container_name}} cat /data/gitea/conf/app.ini
+  register: gitea_config
+  failed_when: false
+  changed_when: false
+
+- name: Parse installation status
+  ansible.builtin.set_fact:
+    gitea_installed: "{{ 'INSTALL_LOCK = true' in gitea_config.stdout }}"
+  when: gitea_config.rc == 0
+
+- name: Set gitea_installed to false if config doesn't exist
+  ansible.builtin.set_fact:
+    gitea_installed: false
+  when: gitea_config.rc != 0
+
+- name: Display installation status
+  ansible.builtin.debug:
+    msg: "Gitea installed: {{ gitea_installed }}"
+
+- name: Complete Gitea installation via API
+  when: not gitea_installed
+  block:
+    - name: Get installation page CSRF token
+      ansible.builtin.uri:
+        url: "{{ gitea_install_url }}"
+        method: GET
+        return_content: true
+      register: install_page
+
+    - name: Extract CSRF token
+      ansible.builtin.set_fact:
+        csrf_token: "{{ install_page.content | regex_search('name=\"_csrf\" value=\"([^\"]+)\"', '\\1') | default([None], true) | first }}"
+
+    - name: Check if installation form is available
+      ansible.builtin.set_fact:
+        installation_needed: "{{ csrf_token is not none }}"
+
+    - name: Display CSRF token status
+      ansible.builtin.debug:
+        msg: "{{ 'CSRF Token found - installation form available' if csrf_token is not none else 'No CSRF token - Gitea already configured from environment variables' }}"
+
+    - name: Submit installation form
+      ansible.builtin.uri:
+        url: "{{ gitea_install_url }}"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          _csrf: "{{ csrf_token }}"
+          db_type: SQLite3
+          db_path: /data/gitea/gitea.db
+          app_name: "Telco KPIs Test Reports"
+          repo_root_path: /data/git/repositories
+          lfs_root_path: /data/git/lfs
+          run_user: git
+          domain: "{{ gitea_domain }}"
+          ssh_port: "{{ gitea_ssh_port }}"
+          http_port: "3000"
+          app_url: "{{ gitea_root_url }}"
+          log_root_path: /data/gitea/log
+          admin_name: "{{ gitea_admin_user }}"
+          admin_passwd: "{{ gitea_admin_password }}"
+          admin_confirm_passwd: "{{ gitea_admin_password }}"
+          admin_email: "{{ gitea_admin_email }}"
+        follow_redirects: all
+        status_code: [200, 302, 303]
+      register: install_result
+      when: csrf_token is not none
+
+    - name: Wait for installation to complete
+      ansible.builtin.pause:
+        seconds: 10
+      when: csrf_token is not none
+
+    - name: Verify installation completed
+      ansible.builtin.command: podman exec -u git {{ gitea_container_name }} cat /data/gitea/conf/app.ini
+      register: verify_config
+      changed_when: false
+      when: csrf_token is not none
+
+    - name: Confirm INSTALL_LOCK is set
+      ansible.builtin.assert:
+        that:
+          - "'INSTALL_LOCK' in verify_config.stdout"
+        fail_msg: "Gitea installation did not complete successfully"
+        success_msg: "Gitea installation completed successfully"
+      when: csrf_token is not none
+
+    - name: Fallback - Complete installation manually
+      when: csrf_token is none
+      block:
+        - name: Set INSTALL_LOCK to true in app.ini
+          ansible.builtin.command: >
+            podman exec -u git {{ gitea_container_name }}
+            sed -i 's/INSTALL_LOCK = false/INSTALL_LOCK = true/' /data/gitea/conf/app.ini
+          register: set_lock
+          changed_when: set_lock.rc == 0
+
+        - name: Run database migration
+          ansible.builtin.command: >
+            podman exec -u git {{ gitea_container_name }}
+            gitea migrate --config /data/gitea/conf/app.ini
+          register: migrate_result
+          changed_when: migrate_result.rc == 0
+
+        - name: Create admin user using Gitea CLI
+          ansible.builtin.command: >
+            podman exec -u git {{ gitea_container_name }}
+            gitea admin user create
+            --config /data/gitea/conf/app.ini
+            --username {{ gitea_admin_user }}
+            --password {{ gitea_admin_password }}
+            --email {{ gitea_admin_email }}
+            --admin
+            --must-change-password=false
+          register: create_admin_result
+          failed_when: false
+          changed_when: "'successfully created' in create_admin_result.stdout"
+
+        - name: Restart Gitea container to apply changes
+          ansible.builtin.command: podman restart {{ gitea_container_name }}
+          register: restart_result
+          changed_when: restart_result.rc == 0
+
+        - name: Wait for Gitea to restart
+          ansible.builtin.uri:
+            url: "http://localhost:{{ gitea_http_port }}/"
+            method: GET
+            status_code: 200
+          register: gitea_health
+          until: gitea_health.status == 200
+          retries: 30
+          delay: 2
+
+        - name: Display admin user creation result
+          ansible.builtin.debug:
+            msg: "{{ 'Admin user created and Gitea restarted' if create_admin_result.rc == 0 else 'Admin user may already exist (non-fatal)' }}"
+
+- name: Ensure admin user exists
+  block:
+    - name: Check if admin user exists via API
+      ansible.builtin.uri:
+        url: "{{ gitea_api_base }}/users/{{ gitea_admin_user }}"
+        method: GET
+        status_code: [200, 404]
+      register: user_check
+      failed_when: false
+
+    - name: Create admin user if not exists
+      when: user_check.status == 404
+      block:
+        - name: Check INSTALL_LOCK status
+          ansible.builtin.command: >
+            podman exec -u git {{ gitea_container_name }}
+            grep INSTALL_LOCK /data/gitea/conf/app.ini
+          register: install_lock_check
+          changed_when: false
+
+        - name: Complete installation if needed
+          when: "'INSTALL_LOCK = false' in install_lock_check.stdout"
+          block:
+            - name: Set INSTALL_LOCK to true
+              ansible.builtin.command: >
+                podman exec -u git {{ gitea_container_name }}
+                sed -i 's/INSTALL_LOCK = false/INSTALL_LOCK = true/' /data/gitea/conf/app.ini
+              changed_when: true
+
+            - name: Run database migration
+              ansible.builtin.command: >
+                podman exec -u git {{ gitea_container_name }}
+                gitea migrate --config /data/gitea/conf/app.ini
+              changed_when: true
+
+        - name: Create admin user via CLI
+          ansible.builtin.command: >
+            podman exec -u git {{ gitea_container_name }}
+            gitea admin user create
+            --config /data/gitea/conf/app.ini
+            --username {{ gitea_admin_user }}
+            --password {{ gitea_admin_password }}
+            --email {{ gitea_admin_email }}
+            --admin
+            --must-change-password=false
+          register: create_admin_cli
+          failed_when: false
+          changed_when: "'successfully created' in create_admin_cli.stdout"
+
+        - name: Restart Gitea if user was created
+          ansible.builtin.command: podman restart {{ gitea_container_name }}
+          when: create_admin_cli.changed
+          changed_when: true
+
+        - name: Wait for Gitea to restart
+          ansible.builtin.uri:
+            url: "http://localhost:{{ gitea_http_port }}/"
+            method: GET
+            status_code: 200
+          register: gitea_health
+          until: gitea_health.status == 200
+          retries: 30
+          delay: 2
+          when: create_admin_cli.changed
+
+    - name: Display admin user status
+      ansible.builtin.debug:
+        msg: "{{ 'Admin user exists' if user_check.status == 200 else 'Admin user created via CLI' }}"
+
+- name: Create API token for automation
+  when: gitea_api_token is not defined or gitea_api_token == ""
+  block:
+    - name: Generate API token via HTTP Basic Auth
+      ansible.builtin.uri:
+        url: "{{ gitea_api_base }}/users/{{ gitea_admin_user }}/tokens"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "ansible-automation-{{ ansible_date_time.epoch }}"
+          scopes:
+            - write:repository
+            - write:user
+            - write:organization
+        status_code: [201, 422]  # 422 if token with same name exists
+      register: token_result
+
+    - name: Extract API token
+      ansible.builtin.set_fact:
+        gitea_api_token: "{{ token_result.json.sha1 }}"
+      when:
+        - token_result.status == 201
+        - token_result.json.sha1 is defined
+
+    - name: Display API token status
+      ansible.builtin.debug:
+        msg: "API Token: {{ 'Created' if token_result.status == 201 else 'Already exists or failed' }}"

@@ -1,0 +1,68 @@
+---
+# Generic test runner for Telco-KPIs spoke clusters
+# Accepts test_name parameter and delegates to specific test task
+#
+# Usage:
+#   ansible-playbook run-test.yml \
+#     -e test_name=oslat \
+#     -e spoke_cluster=spree-02 \
+#     -e hub_kubeconfig=/path/to/hub/kubeconfig \
+#     -e spoke_kubeconfig=/path/to/spoke/kubeconfig
+
+- name: Run test on spoke cluster
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    valid_tests:
+      - cpu_util
+      - cyclictest
+      - oslat
+      - ptp
+      - reboot
+      - rfc2544
+
+  tasks:
+    - name: Validate test_name parameter
+      ansible.builtin.assert:
+        that:
+          - test_name is defined
+          - test_name in valid_tests
+        fail_msg: "test_name must be one of: {{ valid_tests | join(', ') }}"
+        success_msg: "Running test: {{ test_name }}"
+
+    - name: Validate spoke_cluster parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+        fail_msg: "spoke_cluster parameter is required"
+        success_msg: "Target spoke cluster: {{ spoke_cluster }}"
+
+    - name: Validate hub_kubeconfig parameter
+      ansible.builtin.assert:
+        that:
+          - hub_kubeconfig is defined
+          - hub_kubeconfig | length > 0
+        fail_msg: "hub_kubeconfig parameter is required"
+        success_msg: "Hub kubeconfig: {{ hub_kubeconfig }}"
+
+    - name: Validate spoke_kubeconfig parameter
+      ansible.builtin.assert:
+        that:
+          - spoke_kubeconfig is defined
+          - spoke_kubeconfig | length > 0
+        fail_msg: "spoke_kubeconfig parameter is required"
+        success_msg: "Spoke kubeconfig: {{ spoke_kubeconfig }}"
+
+    - name: Execute test-specific tasks
+      ansible.builtin.include_tasks: "tasks/run-{{ test_name }}-test.yml"
+
+    - name: Test execution summary
+      ansible.builtin.debug:
+        msg:
+          - "Test execution completed successfully"
+          - "Test: {{ test_name }}"
+          - "Spoke cluster: {{ spoke_cluster }}"
+          - "Hub kubeconfig: {{ hub_kubeconfig }}"
+          - "Spoke kubeconfig: {{ spoke_kubeconfig }}"

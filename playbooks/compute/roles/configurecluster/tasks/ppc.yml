@@ -32,6 +32,12 @@
   when:
     - (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.19', '<')
 
+- name: Save pull secret
+  ansible.builtin.copy:
+    content: "{{ pull_secret_string | b64decode }}"
+    dest: /tmp/pull_secret
+    mode: '0660'
+
 - name: Generate Performance Profile using PPC container
   containers.podman.podman_container:
     name: ppc_tool

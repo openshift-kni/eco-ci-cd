@@ -1,0 +1,26 @@
+---
+# Artifact Management Role - Main Entry Point
+# Purpose: Centralized artifact collection, storage, and JUnit XML generation
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - artifact_management_test_name is defined
+      - artifact_management_spoke_cluster is defined
+      - artifact_management_temp_dir is defined
+      - artifact_management_test_rc is defined
+    fail_msg: |
+      Missing required parameters for artifact-management role.
+      Required: test_name, spoke_cluster, temp_dir, test_rc
+
+- name: Collect artifacts from bastion temp directory
+  ansible.builtin.include_tasks: collect-from-bastion.yml
+
+- name: Push artifacts to shared persistent location
+  ansible.builtin.include_tasks: push-to-shared.yml
+
+- name: Generate JUnit XML report
+  ansible.builtin.include_tasks: generate-junit-xml.yml
+
+- name: Cleanup old artifacts (keep only latest run)
+  ansible.builtin.include_tasks: cleanup-old-artifacts.yml

@@ -1,0 +1,20 @@
+---
+# Default values for artifact-management role
+# These can be overridden when calling the role
+
+# Required parameters (no defaults - must be provided by caller):
+# - artifact_management_test_name
+# - artifact_management_spoke_cluster
+# - artifact_management_temp_dir
+# - artifact_management_test_rc
+
+# Optional parameters with defaults (inherit from telco-kpis-defaults if loaded):
+artifact_management_namespace: "{{ telco_kpis_sriov_namespace | default('openshift-sriov-network-operator') }}"
+artifact_management_shared_base: "{{ telco_kpis_shared_artifact_base | default('/home/telcov10n/telco-kpis-artifacts') }}"
+artifact_management_local_base: "{{ telco_kpis_local_artifact_base | default(lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true)) }}"
+artifact_management_test_duration: "{{ duration_seconds | default('600') }}"
+
+# JUnit XML generation options:
+# - If artifact_management_junit_source_pattern is defined: Search for existing XML and rename it
+# - If not defined: Generate JUnit XML from template
+artifact_management_junit_source_pattern: ""

@@ -1,0 +1,295 @@
+---
+# BIOS Validation Test task for Telco-KPIs
+# Purpose: Validate BIOS settings against expected profile from GitLab
+# Output: Validation report with pass/fail status for each setting
+# Optional: Apply fixes and reboot if enabled
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .bios-validation-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display BIOS validation configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "BIOS Validation Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "OCP Version: {{ version }}"
+      - "BIOS Profile URL: {{ bios_profile_url }}"
+      - "Apply Fixes: {{ apply_fixes }}"
+      - "Reboot After Apply: {{ reboot_after_apply }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+
+- name: Download BIOS profile from GitLab
+  ansible.builtin.get_url:
+    url: "{{ bios_profile_url }}"
+    dest: "{{ artifacts_dir.path }}/bios-profile.txt"
+    mode: '0644'
+    validate_certs: yes
+  register: profile_download
+  failed_when: profile_download.failed
+
+- name: Read BIOS profile content
+  ansible.builtin.slurp:
+    src: "{{ artifacts_dir.path }}/bios-profile.txt"
+  register: profile_content_raw
+
+- name: "Parse BIOS profile (Key: Value format, skip # comment lines)"
+  ansible.builtin.set_fact:
+    expected_bios_settings: >-
+      {% set result = {} -%}
+      {% for line in (profile_content_raw.content | b64decode).split('\n') -%}
+        {% set trimmed = line | trim -%}
+        {% if trimmed and not trimmed.startswith('#') and ':' in trimmed -%}
+          {% set parts = trimmed.split(':', 1) -%}
+          {% set key = parts[0] | trim -%}
+          {% set value = parts[1].split('#')[0] | trim -%}
+          {% set _ = result.update({key: value}) -%}
+        {% endif -%}
+      {% endfor -%}
+      {{ result }}
+
+- name: Display parsed expected BIOS settings count
+  ansible.builtin.debug:
+    msg: "Parsed {{ expected_bios_settings | length }} BIOS settings from profile"
+
+- name: Get master node from inventory
+  ansible.builtin.set_fact:
+    master_node: "{{ groups['masters'][0] if 'masters' in groups and groups['masters'] | length > 0 else 'master0' }}"
+
+- name: Get BMC credentials from master node hostvars (NEVER logged)
+  ansible.builtin.set_fact:
+    bmc_address: "{{ hostvars[master_node].bmc_address | default('') }}"
+    bmc_user: "{{ hostvars[master_node].bmc_user | default('') }}"
+    bmc_pass: "{{ hostvars[master_node].bmc_password | default('') }}"
+  no_log: true
+
+- name: Extract BMC IP from bmc_address URL
+  ansible.builtin.set_fact:
+    bmc_ip: "{{ (bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] if bmc_address and (bmc_address | regex_search('https?://([^/]+)', '\\1')) else '' }}"
+  no_log: true
+
+- name: Verify BMC credentials are configured
+  ansible.builtin.fail:
+    msg: "BMC credentials not found in vault for {{ spoke_cluster }}. Check master node ({{ master_node }}) has bmc_address, bmc_user, bmc_password in hostvars"
+  when: bmc_ip == '' or bmc_user == '' or bmc_pass == ''
+
+- name: Query Redfish Systems endpoint
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: yes
+    validate_certs: no
+    timeout: 30
+    status_code: 200
+  register: redfish_systems
+  no_log: true
+
+- name: Extract system ID from Redfish response
+  ansible.builtin.set_fact:
+    system_id: "{{ redfish_systems.json.Members[0]['@odata.id'] | basename }}"
+
+- name: Query current BIOS settings via Redfish
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems/{{ system_id }}/Bios"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: yes
+    validate_certs: no
+    timeout: 30
+    status_code: 200
+  register: redfish_bios
+  no_log: true
+
+- name: Extract current BIOS attributes
+  ansible.builtin.set_fact:
+    current_bios_settings: "{{ redfish_bios.json.Attributes }}"
+
+- name: Compare BIOS settings and build validation report
+  ansible.builtin.set_fact:
+    validation_results: >-
+      {% set results = [] -%}
+      {% for key, value in expected_bios_settings.items() -%}
+        {% set current_value = current_bios_settings.get(key, 'NOT_FOUND') -%}
+        {% set status = 'PASS' if (current_value | string) == (value | string) else 'FAIL' -%}
+        {% set _ = results.append({'key': key, 'value': value, 'current_value': current_value, 'status': status}) -%}
+      {% endfor -%}
+      {{ results }}
+
+- name: Count validation statistics
+  ansible.builtin.set_fact:
+    total_settings: "{{ validation_results | length }}"
+    passed_settings: "{{ validation_results | selectattr('status', 'equalto', 'PASS') | list | length }}"
+    failed_settings: "{{ validation_results | selectattr('status', 'equalto', 'FAIL') | list | length }}"
+
+- name: Display validation summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "BIOS Validation Summary"
+      - "=========================================="
+      - "Total Settings Checked: {{ total_settings }}"
+      - "Passed: {{ passed_settings }}"
+      - "Failed: {{ failed_settings }}"
+      - "=========================================="
+
+- name: Display failed settings details
+  ansible.builtin.debug:
+    msg:
+      - "FAILED: {{ item.key }}"
+      - "  Expected: {{ item.value }}"
+      - "  Current:  {{ item.current_value }}"
+  loop: "{{ validation_results | selectattr('status', 'equalto', 'FAIL') | list }}"
+  when: failed_settings | int > 0
+
+- name: Build validation report JSON
+  ansible.builtin.set_fact:
+    validation_report:
+      spoke_cluster: "{{ spoke_cluster }}"
+      version: "{{ version }}"
+      bios_profile_url: "{{ bios_profile_url }}"
+      validated_at: "{{ ansible_date_time.iso8601 }}"
+      summary:
+        total: "{{ total_settings | int }}"
+        passed: "{{ passed_settings | int }}"
+        failed: "{{ failed_settings | int }}"
+      results: "{{ validation_results }}"
+      apply_fixes_enabled: "{{ apply_fixes }}"
+      reboot_after_apply_enabled: "{{ reboot_after_apply }}"
+
+- name: Save validation report to JSON file
+  ansible.builtin.copy:
+    content: "{{ validation_report | to_nice_json }}"
+    dest: "{{ artifacts_dir.path }}/bios-validation-report.json"
+    mode: '0644'
+
+- name: Apply BIOS setting fixes via Redfish (if enabled)
+  block:
+    - name: Build BIOS settings patch payload
+      ansible.builtin.set_fact:
+        bios_patch_payload:
+          Attributes: >-
+            {{
+              validation_results
+              | selectattr('status', 'equalto', 'FAIL')
+              | map('combine', {'key': item.key, 'value': item.value})
+              | items2dict(key_name='key', value_name='value')
+            }}
+      vars:
+        item: {}
+
+    - name: Display settings to be applied
+      ansible.builtin.debug:
+        msg: "Applying {{ failed_settings }} BIOS setting fixes via Redfish..."
+
+    - name: Apply BIOS settings via Redfish PATCH
+      ansible.builtin.uri:
+        url: "https://{{ bmc_ip }}/redfish/v1/Systems/{{ system_id }}/Bios/Settings"
+        method: PATCH
+        user: "{{ bmc_user }}"
+        password: "{{ bmc_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        body_format: json
+        body: "{{ bios_patch_payload }}"
+        timeout: 30
+        status_code: [200, 202, 204]
+      register: bios_patch_result
+      no_log: true
+
+    - name: Record fix application in report
+      ansible.builtin.set_fact:
+        validation_report: >-
+          {{
+            validation_report | combine({
+              'fixes_applied': true,
+              'fixes_applied_at': ansible_date_time.iso8601,
+              'patch_status_code': bios_patch_result.status
+            })
+          }}
+
+  when: apply_fixes | bool and failed_settings | int > 0
+
+- name: Trigger graceful reboot after applying fixes (if enabled)
+  block:
+    - name: Display reboot trigger message
+      ansible.builtin.debug:
+        msg: "Triggering graceful reboot to apply BIOS changes..."
+
+    - name: Trigger graceful reboot via Redfish
+      ansible.builtin.uri:
+        url: "https://{{ bmc_ip }}/redfish/v1/Systems/{{ system_id }}/Actions/ComputerSystem.Reset"
+        method: POST
+        user: "{{ bmc_user }}"
+        password: "{{ bmc_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        body_format: json
+        body:
+          ResetType: "GracefulRestart"
+        timeout: 30
+        status_code: [200, 202, 204]
+      register: reboot_result
+      no_log: true
+
+    - name: Record reboot trigger in report
+      ansible.builtin.set_fact:
+        validation_report: >-
+          {{
+            validation_report | combine({
+              'reboot_triggered': true,
+              'reboot_triggered_at': ansible_date_time.iso8601,
+              'reboot_status_code': reboot_result.status
+            })
+          }}
+
+  when: apply_fixes | bool and reboot_after_apply | bool and failed_settings | int > 0
+
+- name: Save final validation report with fix/reboot status
+  ansible.builtin.copy:
+    content: "{{ validation_report | to_nice_json }}"
+    dest: "{{ artifacts_dir.path }}/bios-validation-report.json"
+    mode: '0644'
+
+- name: Set test result code (0 if passed, 1 if failed and not fixed)
+  ansible.builtin.set_fact:
+    bios_validation_rc: "{{ 0 if (failed_settings | int == 0 or (apply_fixes | bool)) else 1 }}"
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact-management
+  vars:
+    artifact_management_test_name: "bios-validation"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ bios_validation_rc }}"
+    artifact_management_test_duration: "600"  # BIOS validation doesn't have duration, use default
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Fail if validation found mismatches (unless fixes were applied)
+  ansible.builtin.fail:
+    msg: "BIOS validation failed: {{ failed_settings }} setting(s) do not match expected values. Review validation report for details."
+  when: failed_settings | int > 0 and not (apply_fixes | bool)
+
+- name: Display validation complete message
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "BIOS Validation Complete"
+      - "=========================================="
+      - "Result: {{ 'PASSED' if failed_settings | int == 0 else ('FIXES APPLIED' if apply_fixes | bool else 'FAILED') }}"
+      - "Validation report saved to artifacts"
+      - "=========================================="

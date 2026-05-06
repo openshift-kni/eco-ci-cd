@@ -1,0 +1,304 @@
+---
+# Run RFC2544 test
+# Test: RFC2544
+# Purpose: Network throughput and latency measurement using Spirent traffic generator
+# Duration: Configurable via duration parameter (default: 1h)
+
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .rfc2544-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Convert duration to seconds
+  ansible.builtin.set_fact:
+    duration_seconds: >-
+      {%- if duration is match('^\\d+h$') -%}
+        {{ (duration | regex_replace('h$', '') | int) * 3600 }}
+      {%- elif duration is match('^\\d+m$') -%}
+        {{ (duration | regex_replace('m$', '') | int) * 60 }}
+      {%- elif duration is match('^\\d+s$') -%}
+        {{ duration | regex_replace('s$', '') }}
+      {%- elif duration is match('^\\d+$') -%}
+        {{ duration }}
+      {%- else -%}
+        3600
+      {%- endif -%}
+
+- name: Get cluster FQDN from master0 hostname (from vault)
+  ansible.builtin.set_fact:
+    cluster_fqdn: "{{ hostvars[groups['masters'][0]]['hostname'] }}"
+  when: groups['masters'] is defined and groups['masters'] | length > 0
+
+- name: Validate cluster_fqdn was retrieved from vault
+  ansible.builtin.assert:
+    that:
+      - cluster_fqdn is defined
+      - cluster_fqdn | length > 0
+    fail_msg: |
+      cluster_fqdn could not be retrieved from vault.
+
+      Expected: hostvars[groups['masters'][0]]['hostname'] from master0 vault
+      Vault path: selfservice/telcov10n-ci/teams/telco-kpis/clusters/{{ spoke_cluster }}/master0
+      Vault field: hostname
+
+      Example vault content:
+        {
+          "hostname": "spree-02.kpi.telcoqe.eng.rdu2.dc.redhat.com",
+          ...
+        }
+
+      Current value: {{ cluster_fqdn | default('NOT SET') }}
+
+- name: Display cluster FQDN from vault
+  ansible.builtin.debug:
+    msg: "Using cluster FQDN from master0 vault: {{ cluster_fqdn }}"
+
+- name: Clone ran-integration repository to read Spirent configuration
+  ansible.builtin.git:
+    repo: "{{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
+    dest: /tmp/ran-integration-{{ spoke_cluster }}
+    depth: 1
+    version: "{{ ran_integration_branch | default('master') }}"
+  environment:
+    GIT_SSL_NO_VERIFY: "true"
+
+- name: Set inventory file path
+  ansible.builtin.set_fact:
+    ran_inventory_file: "/tmp/ran-integration-{{ spoke_cluster }}/inventory/hosts.{{ cluster_fqdn }}"
+
+- name: Check if ran-integration inventory file exists
+  ansible.builtin.stat:
+    path: "{{ ran_inventory_file }}"
+  register: ran_inventory_stat
+
+- name: Read Spirent configuration from ran-integration inventory
+  when: ran_inventory_stat.stat.exists
+  block:
+    - name: Read ran-integration inventory file
+      ansible.builtin.slurp:
+        src: "{{ ran_inventory_file }}"
+      register: inventory_content
+
+    - name: Parse Spirent configuration variables
+      ansible.builtin.set_fact:
+        inventory_vars: "{{ dict(inventory_content.content | b64decode | regex_findall('^([A-Z_]+)=(.+)$', multiline=True)) }}"
+
+    - name: Extract port parameters
+      ansible.builtin.set_fact:
+        chassis_from_inventory: "{{ inventory_vars.CHASSIS | default('') }}"
+        stcweb_from_inventory: "{{ inventory_vars.STCWEB | default('') }}"
+        port_params: "{{ inventory_vars.PORT_PARAMS | default('') }}"
+
+    - name: Parse PORT1 and PORT2 from PORT_PARAMS
+      ansible.builtin.set_fact:
+        port1_from_inventory: "{{ port_params | regex_search('PORT1=([^;]+)', '\\1') | first | default('') }}"
+        port2_from_inventory: "{{ port_params | regex_search('PORT2=([^;]+)', '\\1') | first | default('') }}"
+      when: port_params | length > 0
+
+- name: Set RFC2544 Spirent configuration from inventory (with fallbacks)
+  ansible.builtin.set_fact:
+    chassis: >-
+      {{ chassis | default(chassis_from_inventory | default('', true)) | default(telco_kpis_default_spirent_chassis, true) }}
+    stcweb: >-
+      {{ stcweb | default(stcweb_from_inventory | default('', true)) | default(telco_kpis_default_spirent_stcweb, true) }}
+    port1: >-
+      {{ port1 | default(port1_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port1, true) }}
+    port2: >-
+      {{ port2 | default(port2_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port2, true) }}
+    spirent_config: "{{ telco_kpis_default_spirent_config | default('spirent_testcfg.xml') }}"
+
+- name: Display Spirent configuration source
+  ansible.builtin.debug:
+    msg:
+      - "Spirent config loaded from: {{ ran_inventory_file if ran_inventory_stat.stat.exists else 'defaults (inventory not found)' }}"
+
+- name: Build RFC2544_PARAMS string
+  ansible.builtin.set_fact:
+    rfc2544_params: "PORT1={{ port1 }};PORT2={{ port2 }};STCWEB={{ stcweb }};CHASSIS={{ chassis }};LAT_DURATION={{ duration_seconds }};TESTCFG={{ spirent_config }};CLUSTER={{ spoke_cluster }};FRAME_SIZE={{ frame_size | default(telco_kpis_default_frame_size) }};LAT_RATE={{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "RFC2544 Test Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Duration: {{ duration | default(telco_kpis_default_duration_rfc2544) }} ({{ duration_seconds }}s)"
+      - "Frame Size: {{ frame_size | default(telco_kpis_default_frame_size) }}"
+      - "LAT Rate: {{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+      - "RAN Integration Repo: {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+      - "Spirent Configuration (from ran-integration inventory):"
+      - "  Source: {{ ran_inventory_file if ran_inventory_stat.stat.exists else 'defaults (inventory not found)' }}"
+      - "  CHASSIS: {{ chassis }}"
+      - "  STCWEB: {{ stcweb }}"
+      - "  PORT1: {{ port1 }}"
+      - "  PORT2: {{ port2 }}"
+      - "  TESTCFG: {{ spirent_config }}"
+      - "=========================================="
+      - "RFC2544_PARAMS: {{ rfc2544_params }}"
+      - "=========================================="
+
+- name: Deploy dpdk-testpmd pod
+  ansible.builtin.import_tasks: deploy-dpdk-testpmd-pod.yml
+
+- name: Ensure kubeconfig is readable by podman container
+  ansible.builtin.file:
+    path: "{{ spoke_kubeconfig }}"
+    mode: '0644'
+
+- name: Display monitoring instructions for real-time log viewing
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "To monitor test execution in real-time:"
+      - "=========================================="
+      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
+      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
+      - ""
+      - "Or from local:"
+      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
+      - "=========================================="
+      - "Container name: telco-kpis-rfc2544-{{ spoke_cluster }}"
+      - "Podman logs:    podman logs -f telco-kpis-rfc2544-{{ spoke_cluster }}"
+      - "=========================================="
+
+- name: Run RFC2544 test in podman container
+  ansible.builtin.shell: |
+    set -o pipefail
+    podman run --rm \
+      --name telco-kpis-rfc2544-{{ spoke_cluster }} \
+      -v {{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z \
+      -v {{ artifacts_dir.path }}:/workspace/artifacts:rw,Z \
+      telco-kpis-test-runner:latest \
+      bash -c '
+        set -e
+        cp /tmp/kubeconfig-ro /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+        export GIT_SSL_NO_VERIFY=true
+
+        echo "Cloning ran-integration repository..."
+        git clone --depth 1 {{ ran_integration_repo | default("https://gitlab.cee.redhat.com/ran/ran-integration.git") }} /workspace/ran-integration
+        cd /workspace/ran-integration/scripts/test_rfc2544
+
+        export WORKSPACE=/workspace/ran-integration
+
+        echo "Installing stcrestclient Python package..."
+        pip3 install --user stcrestclient || true
+
+        echo "Creating artifacts symlink..."
+        ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+        echo "Starting RFC2544 test..."
+        echo "RFC2544_PARAMS: {{ rfc2544_params }}"
+
+        # WORKAROUND: Spirent XML has ErrorHandler=PAUSE_ON_ERROR which stalls automated runs
+        # Patch to STOP_ON_ERROR for automated execution
+        sed -i "s/    subscribe_results(stc)/    subscribe_results(stc)\\n    stc.config(\"sequencer1\", ErrorHandler=\"STOP_ON_ERROR\"); stc.apply(); print(\"WARNING: patched ErrorHandler to STOP_ON_ERROR (workaround)\", file=sys.stderr)/" main.py
+
+        set +e
+        python3 main.py "{{ rfc2544_params }}" 2>&1 | tee /workspace/artifacts/rfc2544-output.log
+        exit_code=$?
+
+        echo "RFC2544 test completed with exit code: $exit_code"
+        exit $exit_code
+      ' 2>&1 | tee {{ artifacts_dir.path }}/podman-run.log
+  register: rfc2544_result
+  failed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Display test execution result
+  ansible.builtin.debug:
+    msg:
+      - "Test exit code: {{ rfc2544_result.rc }}"
+      - "{{ 'Test PASSED' if rfc2544_result.rc == 0 else 'Test FAILED' }}"
+
+- name: Terminate dpdk-testpmd pod
+  kubernetes.core.k8s_exec:
+    namespace: "{{ namespace }}"
+    pod: "{{ pod_name }}"
+    command: terminate
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: terminate_result
+  failed_when: false
+
+- name: Wait for pod termination
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Collect dpdk-testpmd pod logs
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} logs -n {{ namespace }} pod/{{ pod_name }} > {{ artifacts_dir.path }}/dpdk-testpmd.log 2>&1 || echo "No logs available" > {{ artifacts_dir.path }}/dpdk-testpmd.log
+  register: pod_logs_result
+  changed_when: false
+  failed_when: false
+
+- name: Display pod logs (last 30 lines)
+  ansible.builtin.shell: |
+    tail -30 {{ artifacts_dir.path }}/dpdk-testpmd.log
+  register: pod_logs_tail
+  changed_when: false
+  failed_when: false
+
+- name: Show pod logs
+  ansible.builtin.debug:
+    var: pod_logs_tail.stdout_lines
+
+- name: Delete dpdk-testpmd pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: "{{ pod_name }}"
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+
+- name: Wait for pod to be fully deleted
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: "{{ pod_name }}"
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: pod_check
+  until: pod_check.resources | length == 0
+  retries: 30
+  delay: 2
+  failed_when: false
+
+- name: Confirm pod deletion
+  ansible.builtin.debug:
+    msg: "dpdk-testpmd pod {{ pod_name }} deleted ({{ 'successfully' if pod_check.resources | length == 0 else 'cleanup may be incomplete' }})"
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact-management
+  vars:
+    artifact_management_test_name: "rfc2544"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ rfc2544_result.rc }}"
+    artifact_management_test_duration: "{{ duration_seconds }}"
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Cleanup ran-integration temporary clone
+  ansible.builtin.file:
+    path: "/tmp/ran-integration-{{ spoke_cluster }}"
+    state: absent
+
+- name: Fail if test failed
+  ansible.builtin.fail:
+    msg: "RFC2544 test failed with exit code {{ rfc2544_result.rc }}"
+  when: rfc2544_result.rc != 0

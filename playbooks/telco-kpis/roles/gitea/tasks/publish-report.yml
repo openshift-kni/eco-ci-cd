@@ -1,0 +1,261 @@
+---
+# Publish test report and artifacts to Gitea repository
+
+- name: Set report publication variables
+  ansible.builtin.set_fact:
+    report_date: "{{ ansible_date_time.date }}"
+    report_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    git_work_dir: "/tmp/gitea-publish-{{ ansible_date_time.epoch }}"
+    report_dir_name: "{{ ansible_date_time.date }}"
+
+- name: Display publication info
+  ansible.builtin.debug:
+    msg:
+      - "Publishing report: {{ report_file }}"
+      - "Artifacts tarball: {{ report_tarball }}"
+      - "Spoke cluster: {{ spoke_cluster }}"
+      - "Report date: {{ report_date }}"
+      - "Report action: {{ report_action | default('update') | upper }}"
+      - "{{ 'Creating NEW report (environment changed)' if report_action == 'new' else 'Updating EXISTING report (environment stable)' }}"
+
+- name: Create temporary work directory
+  ansible.builtin.file:
+    path: "{{ git_work_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Clone repository
+  ansible.builtin.git:
+    repo: "{{ gitea_repo_http_url }}"
+    dest: "{{ git_work_dir }}"
+    version: main
+    force: true
+  environment:
+    GIT_TERMINAL_PROMPT: "0"
+
+- name: Handle report update (remove existing report for today)
+  when: report_action | default('update') == 'update'
+  block:
+    - name: Check if today's report directory exists
+      ansible.builtin.stat:
+        path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+      register: today_report_dir
+
+    - name: Find existing reports for today
+      ansible.builtin.find:
+        paths: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+        patterns: "telco-kpis-report-{{ spoke_cluster }}-*.md"
+      register: existing_reports
+      when: today_report_dir.stat.exists and today_report_dir.stat.isdir
+
+    - name: Remove existing report files (update mode)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ existing_reports.files }}"
+      when:
+        - existing_reports is defined
+        - existing_reports.files is defined
+        - existing_reports.files | length > 0
+
+    - name: Display update action message
+      ansible.builtin.debug:
+        msg: "{{ 'Removed ' + (existing_reports.files | length | string) + ' existing report(s) for update' if (existing_reports is defined and existing_reports.files is defined and existing_reports.files | length > 0) else 'No existing reports to remove' }}"
+      when: existing_reports is defined
+
+- name: Display new report action message
+  ansible.builtin.debug:
+    msg: "Creating new report (environment configuration changed - keeping all historical reports)"
+  when: report_action | default('update') == 'new'
+
+- name: Apply retention policy to Gitea repository
+  when: gitea_report_retention_days is defined and gitea_report_retention_days | int > 0
+  block:
+    - name: Find all date directories in reports
+      ansible.builtin.find:
+        paths: "{{ git_work_dir }}/reports"
+        file_type: directory
+        recurse: no
+        patterns: "????-??-??"
+      register: date_directories
+
+    - name: Sort date directories and identify old ones for deletion
+      ansible.builtin.set_fact:
+        sorted_dates: "{{ date_directories.files | map(attribute='path') | map('basename') | sort | reverse | list }}"
+
+    - name: Determine directories to delete (keep only last N days)
+      ansible.builtin.set_fact:
+        dirs_to_delete: "{{ sorted_dates[gitea_report_retention_days | int:] }}"
+
+    - name: Display retention policy info
+      ansible.builtin.debug:
+        msg:
+          - "Retention policy: Keep last {{ gitea_report_retention_days }} days"
+          - "Total date directories: {{ sorted_dates | length }}"
+          - "Directories to keep: {{ sorted_dates[:gitea_report_retention_days | int] | join(', ') }}"
+          - "Directories to delete: {{ dirs_to_delete | join(', ') if dirs_to_delete | length > 0 else 'None' }}"
+
+    - name: Remove old report directories beyond retention period
+      ansible.builtin.file:
+        path: "{{ git_work_dir }}/reports/{{ item }}"
+        state: absent
+      loop: "{{ dirs_to_delete }}"
+      when: dirs_to_delete | length > 0
+
+- name: Create report directory structure
+  ansible.builtin.file:
+    path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy report markdown file
+  ansible.builtin.copy:
+    src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_file }}"
+    dest: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
+    mode: '0644'
+
+- name: Extract artifacts tarball
+  ansible.builtin.unarchive:
+    src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_tarball }}"
+    dest: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/"
+    remote_src: false
+
+- name: Find extracted artifact directories
+  ansible.builtin.find:
+    paths: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+    file_type: directory
+    patterns: "*-{{ spoke_cluster }}-*"
+  register: artifact_dirs
+
+- name: Keep only latest test run and rename to remove timestamps
+  ansible.builtin.shell:
+    cmd: |
+      cd "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+
+      # Pattern: {test_name}-{spoke_cluster}-{YYYYMMDD}-{HHMMSS}
+      # Goal: Keep only the latest run per test_name, rename it to just {test_name}
+
+      # First, collect all directories and group by test name
+      declare -A latest_dirs
+      declare -A latest_timestamps
+
+      for dir in *-{{ spoke_cluster }}-*; do
+        if [ ! -d "$dir" ]; then
+          continue
+        fi
+
+        # Extract test name and timestamp
+        test_name=$(echo "$dir" | sed -E 's/-{{ spoke_cluster }}-[0-9]{8}-[0-9]{6}$//')
+        timestamp=$(echo "$dir" | grep -oE '[0-9]{8}-[0-9]{6}$')
+
+        # Track latest run for each test name
+        if [ -z "${latest_timestamps[$test_name]}" ] || [ "$timestamp" \> "${latest_timestamps[$test_name]}" ]; then
+          # If we already had a latest, mark it for deletion
+          if [ -n "${latest_dirs[$test_name]}" ]; then
+            echo "Deleting older run: ${latest_dirs[$test_name]}"
+            rm -rf "${latest_dirs[$test_name]}"
+          fi
+          latest_dirs[$test_name]="$dir"
+          latest_timestamps[$test_name]="$timestamp"
+        else
+          # This is an older run, delete it
+          echo "Deleting older run: $dir"
+          rm -rf "$dir"
+        fi
+      done
+
+      # Now rename the latest runs to remove timestamps
+      for test_name in "${!latest_dirs[@]}"; do
+        dir="${latest_dirs[$test_name]}"
+        if [ "$dir" != "$test_name" ]; then
+          # Remove target directory if it exists (from previous tarball extraction)
+          if [ -d "$test_name" ]; then
+            echo "Removing existing directory: $test_name"
+            rm -rf "$test_name"
+          fi
+          echo "Renaming latest run: $dir -> $test_name"
+          mv "$dir" "$test_name"
+        fi
+      done
+    executable: /bin/bash
+  when: artifact_dirs.files | length > 0
+  changed_when: true
+
+- name: Fix markdown links to point to extracted artifacts
+  ansible.builtin.replace:
+    path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
+    regexp: '{{ report_file }}\.artifacts/'
+    replace: ''
+
+- name: Find all report markdown files
+  ansible.builtin.find:
+    paths: "{{ git_work_dir }}/reports"
+    patterns: "*.md"
+    recurse: true
+  register: found_reports
+
+- name: Build report list for README
+  ansible.builtin.set_fact:
+    report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', git_work_dir + '/reports/', '') | list }}"
+
+- name: Update top-level README.md
+  ansible.builtin.template:
+    src: README.md.j2
+    dest: "{{ git_work_dir }}/README.md"
+    mode: '0644'
+
+- name: Configure git user
+  ansible.builtin.command: "{{ item }}"
+  args:
+    chdir: "{{ git_work_dir }}"
+  loop:
+    - git config user.email "{{ gitea_admin_email }}"
+    - git config user.name "Telco KPIs Automation"
+  changed_when: false
+
+- name: Add all files to git
+  ansible.builtin.command: git add -A
+  args:
+    chdir: "{{ git_work_dir }}"
+  changed_when: false
+
+- name: Check if there are changes to commit
+  ansible.builtin.command: git diff --cached --exit-code
+  args:
+    chdir: "{{ git_work_dir }}"
+  register: git_diff
+  failed_when: false
+  changed_when: git_diff.rc != 0
+
+- name: Commit changes
+  ansible.builtin.command: >
+    git commit -m "Add test report for {{ spoke_cluster }} - {{ report_date }}"
+  args:
+    chdir: "{{ git_work_dir }}"
+  when: git_diff.rc != 0
+  changed_when: true
+
+- name: Push to Gitea
+  ansible.builtin.command: git push origin main
+  args:
+    chdir: "{{ git_work_dir }}"
+  when: git_diff.rc != 0
+  environment:
+    GIT_TERMINAL_PROMPT: "0"
+  changed_when: true
+
+- name: Cleanup temporary work directory
+  ansible.builtin.file:
+    path: "{{ git_work_dir }}"
+    state: absent
+
+- name: Display publication success
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Report Published Successfully"
+      - "=========================================="
+      - "Spoke: {{ spoke_cluster }}"
+      - "Report: {{ report_file }}"
+      - "Web URL: {{ gitea_repo_web_url }}/src/branch/main/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+      - "=========================================="

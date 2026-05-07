@@ -1,0 +1,38 @@
+---
+# Remove container images from internal registry
+#
+# This playbook uses the container_image_mirror role to remove images from
+# an internal registry's storage.
+#
+# Prerequisites:
+#   - sudo access to registry storage path on bastion
+#   - Target registry reachable
+#
+# Usage:
+#   ansible-playbook playbooks/remove-images.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "images='[{\"dest\":\"namespace/image:tag\"}]'"
+#
+#   # Remove multiple images
+#   ansible-playbook playbooks/remove-images.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'images=[{"dest":"ran-test/old-image:v1"},{"dest":"ran-test/deprecated:latest"}]'
+#
+# Required variables:
+#   images: List of image mappings with 'dest' key
+#     Example: [{"dest": "namespace/image:tag"}]
+#
+# Optional variables:
+#   registry_namespace: Namespace prefix for all dest images (default: none)
+#   registry_data_path: Registry storage path (default: /home/kni/registry/data/docker/registry/v2/repositories)
+#
+- name: Remove container images from internal registry
+  hosts: bastion
+  gather_facts: true
+  roles:
+    - role: container_image_mirror
+      vars:
+        container_image_mirror_operation: remove
+        container_image_mirror_images: "{{ images }}"
+        container_image_mirror_registry_namespace: "{{ registry_namespace | default('') }}"
+        container_image_mirror_registry_data_path: "{{ registry_data_path | default('/home/kni/registry/data/docker/registry/v2/repositories') }}"

@@ -1,0 +1,84 @@
+---
+# playbooks/telco-kpis/roles/lockdown_hub_config/tasks/main.yml
+#
+# Purpose: Parse hub lockdown JSON and set hub deployment configuration
+#
+# This role downloads and parses hub lockdown JSON to extract:
+# - hub.ocp.pull_spec: Exact OCP release image for hub deployment
+# - hub.ocp.major_version, hub.ocp.minor_version: Hub OCP version
+# - hub.acm.*: ACM/MCE configuration for operator deployment
+# - hub.talm.pull_spec, hub.gitops.pull_spec: Operator catalog indexes
+#
+# Usage:
+#   - name: Parse hub lockdown if provided
+#     ansible.builtin.include_role:
+#       name: lockdown_hub_config
+#     vars:
+#       hub_lockdown_uri: "{{ hub_lockdown_uri | default('', true) }}"
+#     when: hub_lockdown_uri is defined and hub_lockdown_uri | length > 0
+
+- name: Check if hub lockdown URI is provided
+  ansible.builtin.set_fact:
+    use_hub_lockdown: "{{ hub_lockdown_uri is defined and hub_lockdown_uri | length > 0 }}"
+
+- name: Display hub lockdown status
+  ansible.builtin.debug:
+    msg: "Hub lockdown enforcement: {{ 'ENABLED' if use_hub_lockdown else 'DISABLED' }}"
+
+- name: Process hub lockdown
+  when: use_hub_lockdown | bool
+  block:
+    - name: Download hub lockdown JSON
+      ansible.builtin.get_url:
+        url: "{{ hub_lockdown_uri }}"
+        dest: /tmp/lockdown-hub.json
+        mode: '0644'
+        force: true
+      register: hub_lockdown_download
+      retries: 3
+      delay: 5
+      failed_when: false
+
+    - name: Fail if hub lockdown download failed
+      ansible.builtin.fail:
+        msg: "Failed to download hub lockdown JSON from {{ hub_lockdown_uri }}"
+      when: hub_lockdown_download.failed | default(false)
+
+    - name: Validate hub lockdown JSON structure
+      ansible.builtin.command:
+        cmd: jq -e '.hub.ocp' /tmp/lockdown-hub.json
+      changed_when: false
+      register: hub_lockdown_validate
+      failed_when: hub_lockdown_validate.rc != 0
+
+    - name: Read hub lockdown JSON from bastion
+      ansible.builtin.slurp:
+        src: /tmp/lockdown-hub.json
+      register: hub_lockdown_content
+
+    - name: Parse hub lockdown JSON
+      ansible.builtin.set_fact:
+        hub_lockdown_data: "{{ hub_lockdown_content['content'] | b64decode | from_json }}"
+
+    - name: Set hub deployment configuration from lockdown
+      ansible.builtin.set_fact:
+        hub_ocp_pull_spec: "{{ hub_lockdown_data.hub.ocp.pull_spec }}"
+        hub_ocp_major_version: "{{ hub_lockdown_data.hub.ocp.major_version }}"
+        hub_ocp_minor_version: "{{ hub_lockdown_data.hub.ocp.minor_version }}"
+        hub_acm_config: "{{ hub_lockdown_data.hub.acm | default({}) }}"
+        hub_talm_pull_spec: "{{ hub_lockdown_data.hub.talm.pull_spec | default('') }}"
+        hub_gitops_pull_spec: "{{ hub_lockdown_data.hub.gitops.pull_spec | default('') }}"
+
+    - name: Display hub lockdown configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Hub Lockdown Enforcement: ENABLED"
+          - "=========================================="
+          - "Hub Lockdown URI: {{ hub_lockdown_uri }}"
+          - "Hub OCP Pull Spec: {{ hub_ocp_pull_spec }}"
+          - "Hub OCP Version: {{ hub_ocp_major_version }}.{{ hub_ocp_minor_version }}"
+          - "Hub ACM Config: {{ hub_acm_config }}"
+          - "Hub TALM Pull Spec: {{ hub_talm_pull_spec | default('(not set)') }}"
+          - "Hub GitOps Pull Spec: {{ hub_gitops_pull_spec | default('(not set)') }}"
+          - "=========================================="

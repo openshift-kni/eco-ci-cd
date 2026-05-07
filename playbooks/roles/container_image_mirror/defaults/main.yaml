@@ -1,0 +1,26 @@
+---
+# Default variables for container_image_mirror role
+
+# Operation mode: 'mirror' or 'remove'
+container_image_mirror_operation: mirror
+
+# Target registry configuration
+container_image_mirror_registry_host: "{{ ansible_fqdn }}"
+container_image_mirror_registry_port: 5000
+container_image_mirror_registry_namespace: ""
+
+# TLS verification for destination registry
+container_image_mirror_dest_tls_verify: false
+
+# Pull secret configuration
+container_image_mirror_use_pull_secret: false
+container_image_mirror_pull_secret_path: /tmp/.pull-secret-mirror.json
+container_image_mirror_pull_secret_string: ""
+
+# Registry storage path (for removal operations)
+container_image_mirror_registry_data_path: /home/kni/registry/data/docker/registry/v2/repositories
+
+# List of images to mirror or remove
+# Format: [{"source": "quay.io/org/image:tag", "dest": "namespace/image:tag"}]
+# For removal, only "dest" is required
+container_image_mirror_images: []

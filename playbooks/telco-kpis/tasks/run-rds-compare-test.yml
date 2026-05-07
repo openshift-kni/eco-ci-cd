@@ -1,0 +1,142 @@
+---
+# RDS Compare Test task for Telco-KPIs
+# Purpose: Validate spoke cluster against RAN RDS metadata from telco-reference
+# Output: cluster-compare.log with comparison results
+# Uses: kubectl-cluster_compare in podman container
+
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .rds-compare-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display RDS compare configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "RDS Comparison Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "OCP Version: {{ version }}"
+      - "Reference Repo: {{ reference_repo_url }}"
+      - "Metadata Path: {{ metadata_relpath }}"
+      - "Baseline Mode: {{ baseline | default(false) }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+
+- name: Determine reference branch
+  ansible.builtin.set_fact:
+    reference_branch: "{{ reference_branch if reference_branch else 'release-' + version }}"
+
+- name: Set telco-reference clone path
+  ansible.builtin.set_fact:
+    reference_repo_path: "/tmp/telco-reference-{{ spoke_cluster }}"
+
+- name: Clone or update telco-reference repo on bastion
+  ansible.builtin.git:
+    repo: "{{ reference_repo_url }}"
+    dest: "{{ reference_repo_path }}"
+    version: "{{ reference_branch }}"
+    update: yes
+    force: yes
+  register: git_clone
+
+- name: Validate metadata file exists
+  ansible.builtin.stat:
+    path: "{{ reference_repo_path }}/{{ metadata_relpath }}"
+  register: metadata_file
+  failed_when: not metadata_file.stat.exists
+
+- name: Display repository details
+  ansible.builtin.debug:
+    msg:
+      - "Repository: {{ reference_repo_path }}"
+      - "Branch: {{ reference_branch }}"
+      - "Commit: {{ git_clone.after }}"
+      - "Metadata: {{ metadata_relpath }}"
+
+- name: Ensure kubeconfig is readable by podman container
+  ansible.builtin.file:
+    path: "{{ spoke_kubeconfig }}"
+    mode: '0644'
+
+- name: Run kubectl-cluster_compare in podman container
+  ansible.builtin.shell: |
+    podman run --rm \
+      -v {{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z \
+      -v {{ reference_repo_path }}:/workspace/reference:ro,Z \
+      -v {{ artifacts_dir.path }}:/workspace/artifacts:rw,Z \
+      -e KUBECONFIG=/tmp/kubeconfig-ro \
+      telco-kpis-test-runner:latest \
+      bash -c "
+        set -euo pipefail
+        cd /workspace/reference
+        echo '[INFO] Running kubectl-cluster_compare'
+        echo '[INFO] Metadata: {{ metadata_relpath }}'
+        echo '[INFO] Extra args: {{ compare_extra_args | default('(none)') }}'
+        set +e
+        kubectl-cluster_compare -r '{{ metadata_relpath }}' {{ compare_extra_args | default('') }} 2>&1 | tee /workspace/artifacts/cluster-compare.log
+        exit \${PIPESTATUS[0]}
+      "
+  register: compare_result
+  failed_when: false
+  changed_when: false
+
+- name: Count comparison results
+  ansible.builtin.set_fact:
+    compare_exit_code: "{{ compare_result.rc }}"
+    compare_success: "{{ compare_result.rc == 0 }}"
+
+- name: Display comparison summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "RDS Comparison Summary"
+      - "=========================================="
+      - "Exit Code: {{ compare_exit_code }}"
+      - "Status: {{ 'PASS (all resources match)' if compare_success else 'FAIL (mismatches found)' }}"
+      - "Baseline Mode: {{ 'Yes (non-failing)' if (baseline | default(false)) else 'No' }}"
+      - "Log: {{ artifacts_dir.path }}/cluster-compare.log"
+      - "=========================================="
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact-management
+  vars:
+    artifact_management_test_name: "rds-compare"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ compare_result.rc }}"
+    artifact_management_test_duration: "600"  # RDS compare doesn't have duration, use default
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Cleanup telco-reference clone on bastion
+  ansible.builtin.file:
+    path: "{{ reference_repo_path }}"
+    state: absent
+
+- name: Fail if comparison found mismatches (unless baseline mode)
+  ansible.builtin.fail:
+    msg: "RDS comparison failed: cluster state does not match reference metadata. Review cluster-compare.log for details."
+  when:
+    - not compare_success
+    - not (baseline | default(false))
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "RDS Comparison Complete"
+      - "=========================================="
+      - "Result: {{ 'PASSED' if compare_success else ('BASELINE COLLECTED' if (baseline | default(false)) else 'FAILED') }}"
+      - "Comparison log saved to artifacts"
+      - "=========================================="

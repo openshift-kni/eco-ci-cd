@@ -1,0 +1,50 @@
+---
+# RDS Compare Playbook for Telco-KPIs
+# Purpose: Validate spoke cluster against RAN RDS metadata from telco-reference
+# Required parameters:
+#   - spoke_cluster: Spoke cluster name
+#   - spoke_kubeconfig: Path to spoke kubeconfig
+#   - version: OCP version (maps to telco-reference branch)
+#   - reference_repo_url: telco-reference Git repository URL
+#   - metadata_relpath: Path to metadata.yaml within repo
+# Optional parameters:
+#   - reference_branch: Override telco-reference branch (default: release-${version})
+#   - compare_extra_args: Extra arguments for kubectl-cluster_compare
+#   - baseline: Baseline mode (collect results without failing on mismatches)
+
+- name: Run RDS comparison validation on spoke cluster
+  hosts: bastion
+  gather_facts: true
+  tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_role:
+        name: telco-kpis-defaults
+
+
+    - name: Validate spoke_cluster parameter
+      ansible.builtin.fail:
+        msg: "spoke_cluster parameter is required"
+      when: spoke_cluster is not defined or spoke_cluster == ''
+
+    - name: Validate spoke_kubeconfig parameter
+      ansible.builtin.fail:
+        msg: "spoke_kubeconfig parameter is required"
+      when: spoke_kubeconfig is not defined or spoke_kubeconfig == ''
+
+    - name: Validate version parameter
+      ansible.builtin.fail:
+        msg: "version parameter is required"
+      when: version is not defined or version == ''
+
+    - name: Validate reference_repo_url parameter
+      ansible.builtin.fail:
+        msg: "reference_repo_url parameter is required"
+      when: reference_repo_url is not defined or reference_repo_url == ''
+
+    - name: Validate metadata_relpath parameter
+      ansible.builtin.fail:
+        msg: "metadata_relpath parameter is required"
+      when: metadata_relpath is not defined or metadata_relpath == ''
+
+    - name: Execute RDS comparison tasks
+      ansible.builtin.include_tasks: "tasks/run-rds-compare-test.yml"

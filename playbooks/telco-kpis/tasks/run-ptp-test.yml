@@ -1,0 +1,113 @@
+---
+# Run PTP (Precision Time Protocol) test
+# Test: PTP validation
+# Purpose: Validate PTP synchronization and offset metrics on spoke cluster
+# Duration: Configurable via duration parameter (default: 10m)
+
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .ptp-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "PTP Test Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Duration: {{ duration | default(telco_kpis_default_duration_ptp) }}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+
+- name: Ensure kubeconfig is readable by podman container
+  ansible.builtin.file:
+    path: "{{ spoke_kubeconfig }}"
+    mode: '0644'
+
+- name: Display monitoring instructions for real-time log viewing
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "To monitor test execution in real-time:"
+      - "=========================================="
+      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
+      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
+      - ""
+      - "Or from local:"
+      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
+      - "=========================================="
+      - "Container name: telco-kpis-ptp-{{ spoke_cluster }}"
+      - "Podman logs:    podman logs -f telco-kpis-ptp-{{ spoke_cluster }}"
+      - "=========================================="
+
+- name: Run PTP test in podman container
+  ansible.builtin.shell: |
+    set -o pipefail
+    podman run --rm \
+      --name telco-kpis-ptp-{{ spoke_cluster }} \
+      -v {{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z \
+      -v {{ artifacts_dir.path }}:/workspace/artifacts:rw,Z \
+      telco-kpis-test-runner:latest \
+      bash -c '
+        set -e
+        cp /tmp/kubeconfig-ro /tmp/kubeconfig
+        export KUBECONFIG=/tmp/kubeconfig
+        export GIT_SSL_NO_VERIFY=true
+        export RAN_METRICS_URL=https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/
+
+        echo "Cloning ran-integration repository..."
+        git clone --depth 1 {{ telco_kpis_ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration
+        cd /workspace/ran-integration
+
+        export WORKSPACE=/workspace/ran-integration
+        export SCRIPTS_DIR=/workspace/ran-integration/scripts
+
+        echo "Creating artifacts symlink..."
+        ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+        echo "Starting PTP test (duration={{ duration | default(telco_kpis_default_duration_ptp) }})..."
+        set +e
+        bash scripts/test_ptp.sh ptp={{ duration | default(telco_kpis_default_duration_ptp) }}
+        exit_code=$?
+
+        echo "PTP test completed with exit code: $exit_code"
+        exit $exit_code
+      ' 2>&1 | tee {{ artifacts_dir.path }}/podman-run.log
+  register: ptp_result
+  failed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Display test execution result
+  ansible.builtin.debug:
+    msg:
+      - "Test exit code: {{ ptp_result.rc }}"
+      - "{{ 'Test PASSED' if ptp_result.rc == 0 else 'Test FAILED' }}"
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact-management
+  vars:
+    artifact_management_test_name: "ptp"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ ptp_result.rc }}"
+    artifact_management_test_duration: "{{ duration_seconds }}"
+    artifact_management_junit_source_pattern: "*ptp*.xml,*report*.xml"
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Fail if test failed
+  ansible.builtin.fail:
+    msg: "PTP test failed with exit code {{ ptp_result.rc }}"
+  when: ptp_result.rc != 0

@@ -1,0 +1,154 @@
+---
+# Main tasks for ztp_deployment_timeline role
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - spoke_cluster is defined
+      - spoke_cluster | length > 0
+      - hub_kubeconfig is defined
+      - hub_kubeconfig | length > 0
+    fail_msg: "Required parameters missing: spoke_cluster and hub_kubeconfig must be provided"
+    success_msg: "All required parameters validated"
+
+- name: Initialize timeline facts
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_success: false
+    ztp_deployment_timeline_error: ""
+    ztp_deployment_timeline_events: []
+    ztp_deployment_timeline_start_time: ""
+    ztp_deployment_timeline_end_time: ""
+    ztp_deployment_timeline_duration_seconds: 0
+    ztp_deployment_timeline_duration_formatted: ""
+    ztp_deployment_timeline_deployment_method: ""
+    clusterinstance_resource: {}
+
+- name: Query ClusterInstance
+  kubernetes.core.k8s_info:
+    api_version: siteconfig.open-cluster-management.io/v1alpha1
+    kind: ClusterInstance
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: clusterinstance_query
+  failed_when: false
+
+- name: Query ManagedCluster
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: managedcluster_query
+  failed_when: false
+
+- name: Query AgentClusterInstall
+  kubernetes.core.k8s_info:
+    api_version: extensions.hive.openshift.io/v1beta1
+    kind: AgentClusterInstall
+    name: "{{ spoke_cluster }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: agentclusterinstall_query
+  failed_when: false
+
+- name: Query ImageBasedInstall (for IBI deployments)
+  kubernetes.core.k8s_info:
+    api_version: extensions.hive.openshift.io/v1alpha1
+    kind: ImageBasedInstall
+    name: "{{ spoke_cluster }}"
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: imagebasedinstall_query
+  failed_when: false
+
+- name: Query TALM ClusterGroupUpgrade
+  kubernetes.core.k8s_info:
+    api_version: ran.openshift.io/v1alpha1
+    kind: ClusterGroupUpgrade
+    name: "{{ spoke_cluster }}"
+    namespace: ztp-install
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: talm_cgu_query
+  failed_when: false
+
+- name: Filter ClusterInstance by spec.clusterName
+  ansible.builtin.set_fact:
+    clusterinstance_resource: "{{ clusterinstance_query.resources | selectattr('spec.clusterName', 'equalto', spoke_cluster) | list | first | default({}) }}"
+  when: clusterinstance_query.resources | length > 0
+
+- name: Check if ClusterInstance exists
+  ansible.builtin.set_fact:
+    has_clusterinstance: "{{ clusterinstance_resource is defined and clusterinstance_resource | length > 0 }}"
+    has_managedcluster: "{{ managedcluster_query.resources | length > 0 }}"
+    has_agentclusterinstall: "{{ agentclusterinstall_query.resources | length > 0 }}"
+    has_imagebasedinstall: "{{ imagebasedinstall_query.resources | length > 0 }}"
+    has_talm_cgu: "{{ talm_cgu_query.resources | length > 0 }}"
+
+- name: Fail if spoke cluster not found
+  ansible.builtin.fail:
+    msg: "Spoke cluster {{ spoke_cluster }} not found in hub cluster (ManagedCluster does not exist)"
+  when: not has_managedcluster
+
+- name: Fail if ClusterInstance not found
+  ansible.builtin.fail:
+    msg: "ClusterInstance {{ spoke_cluster }} not found - cluster may not be a ZTP deployment"
+  when: not has_clusterinstance
+
+- name: Fail if TALM CGU not found
+  ansible.builtin.fail:
+    msg: "TALM ClusterGroupUpgrade {{ spoke_cluster }} not found in namespace ztp-install - policies may not have been applied"
+  when: not has_talm_cgu
+
+- name: Determine deployment method
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_deployment_method: "{{ 'IBI' if has_imagebasedinstall else 'AI' }}"
+
+- name: Extract ClusterInstance creation timestamp (START)
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_start_time: "{{ clusterinstance_resource.metadata.creationTimestamp }}"
+  when: has_clusterinstance
+
+- name: Extract TALM CGU completion timestamp (END)
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_end_time: "{{ talm_cgu_query.resources[0].status.status.completedAt | default('') }}"
+  when:
+    - has_talm_cgu
+    - talm_cgu_query.resources[0].status.status.completedAt is defined
+
+- name: Fail if TALM CGU not completed
+  ansible.builtin.fail:
+    msg: "TALM ClusterGroupUpgrade {{ spoke_cluster }} has not completed yet (completedAt timestamp not found)"
+  when: ztp_deployment_timeline_end_time == ""
+
+- name: Calculate deployment duration
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_duration_seconds: "{{ ((ztp_deployment_timeline_end_time | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ztp_deployment_timeline_start_time | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}"
+
+- name: Format deployment duration
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_duration_formatted: "{{ (ztp_deployment_timeline_duration_seconds | int // 3600) }}h{{ ((ztp_deployment_timeline_duration_seconds | int % 3600) // 60) }}m{{ (ztp_deployment_timeline_duration_seconds | int % 60) }}s"
+
+- name: Collect timeline events
+  ansible.builtin.include_tasks: collect_events.yml
+
+- name: Generate detailed human-readable summary
+  ansible.builtin.include_tasks: generate_detailed_summary.yml
+  when: generate_detailed_summary | default(false)
+
+- name: Mark collection as successful
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_success: true
+
+- name: Display timeline summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "ZTP Deployment Timeline Summary"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Deployment Method: {{ ztp_deployment_timeline_deployment_method }}"
+      - "Start Time: {{ ztp_deployment_timeline_start_time }}"
+      - "End Time: {{ ztp_deployment_timeline_end_time }}"
+      - "Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)"
+      - "Total Events: {{ ztp_deployment_timeline_events | length }}"
+      - "=========================================="

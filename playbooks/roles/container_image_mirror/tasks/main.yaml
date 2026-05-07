@@ -1,0 +1,25 @@
+---
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - container_image_mirror_images is defined
+      - container_image_mirror_images | length > 0
+      - container_image_mirror_operation in ['mirror', 'remove']
+    fail_msg: >-
+      container_image_mirror_images must be defined as a non-empty list, and
+      container_image_mirror_operation must be 'mirror' or 'remove'
+
+- name: Display operation configuration
+  ansible.builtin.debug:
+    msg:
+      - "Operation: {{ container_image_mirror_operation | upper }}"
+      - "Target Registry: {{ container_image_mirror_registry_host }}:{{ container_image_mirror_registry_port }}"
+      - "Images: {{ container_image_mirror_images | length }}"
+
+- name: Execute mirror operation
+  ansible.builtin.include_tasks: mirror.yaml
+  when: container_image_mirror_operation == 'mirror'
+
+- name: Execute remove operation
+  ansible.builtin.include_tasks: remove.yaml
+  when: container_image_mirror_operation == 'remove'

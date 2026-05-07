@@ -1,0 +1,80 @@
+---
+- name: Setup pull secret for mirroring
+  when: container_image_mirror_use_pull_secret | bool
+  block:
+    - name: Ensure pull secret directory exists
+      ansible.builtin.file:
+        path: "{{ container_image_mirror_pull_secret_path | dirname }}"
+        state: directory
+        mode: "0700"
+      when: (container_image_mirror_pull_secret_path | dirname) not in ['/tmp', '/']
+
+    - name: Populate pull secret
+      ansible.builtin.copy:
+        content: "{{ container_image_mirror_pull_secret_string | b64decode | from_json | to_nice_json }}"
+        dest: "{{ container_image_mirror_pull_secret_path }}"
+        mode: "0600"
+      no_log: true
+
+- name: Check if images already exist in registry
+  ansible.builtin.uri:
+    url: "https://{{ container_image_mirror_registry_host }}:{{ container_image_mirror_registry_port }}/v2/{{ container_image_mirror_registry_namespace }}{{ image_item.dest | regex_replace(':.*', '') }}/tags/list"
+    method: GET
+    validate_certs: false
+    status_code: [200, 404, 401]  # 401 = registry requires auth for tag listing
+  register: _image_check
+  loop: "{{ container_image_mirror_images }}"
+  loop_control:
+    loop_var: image_item
+    label: "{{ image_item.dest }}"
+  failed_when: false
+
+- name: Mirror images using skopeo
+  ansible.builtin.command:
+    cmd: >-
+      skopeo copy --all
+      {{ '--authfile ' + container_image_mirror_pull_secret_path if container_image_mirror_use_pull_secret | bool else '' }}
+      {{ '--dest-tls-verify=false' if not container_image_mirror_dest_tls_verify else '' }}
+      docker://{{ image_item.source }}
+      docker://{{ container_image_mirror_registry_host }}:{{ container_image_mirror_registry_port }}/{{ container_image_mirror_registry_namespace }}{{ image_item.dest }}
+  loop: "{{ container_image_mirror_images }}"
+  loop_control:
+    loop_var: image_item
+    label: "{{ image_item.source }} -> {{ container_image_mirror_registry_namespace }}{{ image_item.dest }}"
+  changed_when: true
+  register: _mirror_result
+  failed_when: false
+  ignore_errors: true
+
+- name: Build mirror summary
+  ansible.builtin.set_fact:
+    _mirror_success: "{{ _mirror_result.results | selectattr('rc', 'eq', 0) | list }}"
+    _mirror_failed: "{{ _mirror_result.results | selectattr('rc', 'ne', 0) | list }}"
+
+- name: Display detailed mirror results
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "MIRROR SUMMARY"
+      - "=========================================="
+      - "Total images: {{ container_image_mirror_images | length }}"
+      - "Successfully mirrored: {{ _mirror_success | length }}"
+      - "Failed: {{ _mirror_failed | length }}"
+      - ""
+      - "SUCCESSFUL:"
+      - "{{ _mirror_success | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✓ ') | indent(2, first=True) }}"
+      - ""
+      - "FAILED:"
+      - "{{ _mirror_failed | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✗ ') | indent(2, first=True) if _mirror_failed | length > 0 else '  (none)' }}"
+      - "=========================================="
+
+- name: Cleanup pull secret
+  ansible.builtin.file:
+    path: "{{ container_image_mirror_pull_secret_path }}"
+    state: absent
+  when: container_image_mirror_use_pull_secret | bool
+
+- name: Fail if any images failed to mirror
+  ansible.builtin.fail:
+    msg: "{{ _mirror_failed | length }} image(s) failed to mirror. See summary above for details."
+  when: _mirror_failed | length > 0

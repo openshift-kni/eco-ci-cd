@@ -200,18 +200,47 @@
       - "idms*.yaml"
     file_type: file
 
-- name: Extract manifest paths
+- name: Separate CatalogSource and IDMS manifest paths
   ansible.builtin.set_fact:
-    manifest_paths: "{{ mirror_manifests.files | map(attribute='path') | list }}"
+    _prod_cs_paths: "{{ mirror_manifests.files | map(attribute='path') | select('search', '/cs') | list }}"
+    _prod_idms_paths: "{{ mirror_manifests.files | map(attribute='path') | select('search', '/idms') | list }}"
 
-- name: Apply CatalogSources manifests
-  loop: "{{ manifest_paths }}"
+- name: Apply CatalogSource manifests
+  loop: "{{ _prod_cs_paths }}"
   loop_control:
     loop_var: manifest_item
   kubernetes.core.k8s:
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
     state: present
     src: "{{ manifest_item }}"
+  notify:
+    - Cleanup ocp_operator_mirror artifacts
+
+- name: Read IDMS manifest contents
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop: "{{ _prod_idms_paths }}"
+  register: _prod_idms_slurp
+
+- name: Build operator-specific IDMS name
+  ansible.builtin.set_fact:
+    _prod_idms_name: >-
+      idms-prod-mirror-{{ ocp_operator_mirror_operators_prod
+                          | map(attribute='name')
+                          | map('regex_replace', '^openshift-', '')
+                          | sort | join('--') }}
+
+- name: Apply IDMS with operator-specific name
+  kubernetes.core.k8s:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    state: present
+    definition: >-
+      {{ (item.content | b64decode | from_yaml)
+         | combine({'metadata': {'name': _prod_idms_name ~ '-' ~ idx}}, recursive=True) }}
+  loop: "{{ _prod_idms_slurp.results }}"
+  loop_control:
+    index_var: idx
+    label: "{{ _prod_idms_name }}-{{ idx }}"
   notify:
     - Cleanup ocp_operator_mirror artifacts
 

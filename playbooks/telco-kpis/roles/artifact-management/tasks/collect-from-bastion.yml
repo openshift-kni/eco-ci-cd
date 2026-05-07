@@ -1,0 +1,28 @@
+---
+# Collect artifacts from bastion temporary directory to container /artifacts
+
+- name: List artifacts generated in temp directory
+  ansible.builtin.find:
+    paths: "{{ artifact_management_temp_dir }}"
+    patterns: "*"
+    recurse: yes
+  register: artifact_files
+
+- name: Display artifacts found
+  ansible.builtin.debug:
+    msg: "Artifacts found: {{ artifact_files.files | map(attribute='path') | list }}"
+
+- name: Create local artifact directory
+  ansible.builtin.file:
+    path: "{{ artifact_management_local_base }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Fetch artifacts from bastion to local
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ artifact_management_local_base }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}/"
+    flat: yes
+  loop: "{{ artifact_files.files }}"
+  when: artifact_files.files | length > 0

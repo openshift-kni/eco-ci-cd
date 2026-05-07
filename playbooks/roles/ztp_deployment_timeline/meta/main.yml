@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  author: Red Hat Telco Verification Team
+  description: Collect ZTP deployment timeline data from ACM hub clusters
+  company: Red Hat
+  license: Apache-2.0
+  min_ansible_version: "2.9"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - openshift
+    - ztp
+    - acm
+    - telco
+    - deployment
+    - timeline
+
+dependencies: []
+
+# Requirements:
+# This role requires the kubernetes.core collection to be installed
+# Install with: ansible-galaxy collection install kubernetes.core

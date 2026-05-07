@@ -1,0 +1,19 @@
+---
+# Push artifacts to shared persistent location on bastion
+
+- name: Set timestamp for shared artifact directory
+  ansible.builtin.set_fact:
+    artifact_timestamp: "{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
+
+- name: Create shared artifact base directory
+  ansible.builtin.file:
+    path: "{{ artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy artifacts to shared persistent location
+  ansible.builtin.copy:
+    src: "{{ artifact_management_temp_dir }}/"
+    dest: "{{ artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}-{{ artifact_timestamp }}/"
+    remote_src: true
+    mode: '0755'

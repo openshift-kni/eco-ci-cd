@@ -1,0 +1,35 @@
+---
+# Generate JUnit XML report from test results
+
+- name: Search for existing JUnit XML file (if pattern provided)
+  ansible.builtin.find:
+    paths: "{{ artifact_management_local_base }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}"
+    patterns: "{{ artifact_management_junit_source_pattern }}"
+  delegate_to: localhost
+  register: existing_junit_files
+  when: artifact_management_junit_source_pattern is defined and artifact_management_junit_source_pattern | length > 0
+  failed_when: false
+
+- name: Create JUnit format copy for reporter compatibility (rename existing XML)
+  ansible.builtin.copy:
+    src: "{{ existing_junit_files.files[0].path }}"
+    dest: "{{ artifact_management_local_base }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}/junit_{{ artifact_management_test_name }}_{{ artifact_management_spoke_cluster }}.xml"
+    mode: '0644'
+  delegate_to: localhost
+  when:
+    - artifact_management_junit_source_pattern is defined
+    - artifact_management_junit_source_pattern | length > 0
+    - existing_junit_files is defined
+    - existing_junit_files.files | length > 0
+  failed_when: false
+
+- name: Generate JUnit XML report from template (if no existing XML)
+  ansible.builtin.template:
+    src: junit-report.xml.j2
+    dest: "{{ artifact_management_local_base }}/{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}/junit_{{ artifact_management_test_name }}_{{ artifact_management_spoke_cluster }}.xml"
+    mode: '0644'
+  delegate_to: localhost
+  when: >
+    artifact_management_junit_source_pattern is not defined or
+    artifact_management_junit_source_pattern | length == 0 or
+    (existing_junit_files is defined and existing_junit_files.files | length == 0)

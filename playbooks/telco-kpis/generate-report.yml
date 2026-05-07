@@ -1,0 +1,452 @@
+---
+# Report Generation Task for Telco-KPIs
+# Purpose: Generate Markdown reports from test artifacts using analyze-podman-test-results.py
+# Output: Markdown report + compressed tarball of all source artifacts
+# Uses: telco-kpis-test-runner container (reuses existing test infrastructure)
+
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
+
+- name: Set shared artifact directory paths
+  ansible.builtin.set_fact:
+    shared_artifact_base: "/home/telcov10n/telco-kpis-artifacts"
+    shared_artifact_dir: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}"
+    tarball_name: "{{ spoke_cluster }}-artifacts-{{ timestamp }}.tar.gz"
+
+- name: Display report generation configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Report Generation Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Test Filter: {{ test_filter | default('(all available tests)') }}"
+      - "Output File: {{ output_filename }}"
+      - "Shared Artifacts: {{ shared_artifact_dir }}"
+      - "Tarball: {{ tarball_name }}"
+      - "=========================================="
+
+- name: Validate shared artifact directory exists
+  ansible.builtin.stat:
+    path: "{{ shared_artifact_dir }}"
+  register: artifact_dir_stat
+  failed_when: not artifact_dir_stat.stat.exists or not artifact_dir_stat.stat.isdir
+
+- name: Check for node-info JSON file
+  ansible.builtin.stat:
+    path: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+  register: node_info_stat
+
+- name: Fail if node-info JSON is missing
+  ansible.builtin.fail:
+    msg: |
+      Hardware metadata missing: {{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json
+
+      Run 'telco-kpis-collect-node-info' test first before generating report.
+      This test collects hardware information required for meaningful reports.
+  when: not node_info_stat.stat.exists
+
+- name: Read node-info collected_at timestamp (UTC)
+  ansible.builtin.shell: |
+    jq -r '.collected_at' {{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json
+  register: node_info_collected_at_utc
+  changed_when: false
+
+- name: Convert node-info UTC timestamp to UTC YYYYMMDD-HHMMSS format
+  ansible.builtin.shell: |
+    date -u -d "{{ node_info_collected_at_utc.stdout }}" +%Y%m%d-%H%M%S
+  register: node_info_utc_ts
+  changed_when: false
+
+- name: Display node-info reference timestamp
+  ansible.builtin.debug:
+    msg:
+      - "Node-info collected at (UTC): {{ node_info_collected_at_utc.stdout }}"
+      - "UTC timestamp for comparison: {{ node_info_utc_ts.stdout }}"
+      - "Tests older than this will be excluded and cleaned up"
+
+- name: Filter test directories based on node-info timestamp
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ shared_artifact_dir }}
+
+      # Counters
+      include_count=0
+      exclude_count=0
+
+      # Process each test directory
+      for dir in *-{{ spoke_cluster }}-*; do
+        if [ ! -d "$dir" ]; then
+          continue
+        fi
+
+        # Extract timestamp from directory name: {test}-{spoke}-{YYYYMMDD}-{HHMMSS}
+        dir_ts=$(echo "$dir" | grep -oE '[0-9]{8}-[0-9]{6}$')
+
+        if [ -z "$dir_ts" ]; then
+          echo "WARNING: Could not extract timestamp from: $dir" >&2
+          continue
+        fi
+
+        # Compare timestamps (string comparison works for YYYYMMDD-HHMMSS format in UTC)
+        if [[ "$dir_ts" < "{{ node_info_utc_ts.stdout }}" ]]; then
+          echo "EXCLUDE: $dir (timestamp: $dir_ts < node-info: {{ node_info_utc_ts.stdout }})" >&2
+          ((exclude_count++))
+          # Delete old test data from bastion to save disk space
+          rm -rf "$dir"
+        else
+          echo "INCLUDE: $dir (timestamp: $dir_ts >= node-info: {{ node_info_utc_ts.stdout }})"
+          ((include_count++))
+        fi
+      done
+
+      # Summary
+      echo "---FILTERING-SUMMARY---"
+      echo "Included: $include_count"
+      echo "Excluded: $exclude_count"
+    executable: /bin/bash
+  register: filter_results
+  changed_when: filter_results.stderr_lines | select('match', '^EXCLUDE:') | list | length > 0
+
+- name: Parse filtering results
+  ansible.builtin.set_fact:
+    tests_included: "{{ filter_results.stdout_lines | select('match', '^Included:') | first | regex_replace('^Included: ([0-9]+).*', '\\1') | int }}"
+    tests_excluded: "{{ filter_results.stdout_lines | select('match', '^Excluded:') | first | regex_replace('^Excluded: ([0-9]+).*', '\\1') | int }}"
+
+- name: Display filtering summary
+  ansible.builtin.debug:
+    msg:
+      - "==========================================="
+      - "Test Filtering Results"
+      - "==========================================="
+      - "Tests included: {{ tests_included }} (newer than environment config)"
+      - "Tests excluded: {{ tests_excluded }} (ran before environment update)"
+      - "Excluded tests deleted from bastion to save disk space"
+      - "==========================================="
+
+- name: Determine report action (new vs update)
+  ansible.builtin.set_fact:
+    report_action: "{{ 'new' if (tests_excluded | int) > 0 else 'update' }}"
+
+- name: Display report action
+  ansible.builtin.debug:
+    msg:
+      - "Report action: {{ report_action | upper }}"
+      - "{{ 'Environment changed - creating new report with current-config tests only' if report_action == 'new' else 'Environment stable - updating existing report with latest results' }}"
+
+- name: List available test artifacts after filtering
+  ansible.builtin.find:
+    paths: "{{ shared_artifact_dir }}"
+    file_type: directory
+    patterns: "*-{{ spoke_cluster }}-*"
+  register: available_artifacts
+
+- name: Display available test artifacts
+  ansible.builtin.debug:
+    msg: "Available for report: {{ available_artifacts.files | length }} test artifact directories"
+
+- name: Fail if no test artifacts remain after filtering
+  ansible.builtin.fail:
+    msg: |
+      No test artifacts available for current environment configuration.
+
+      All existing test results were excluded because they ran before the latest
+      node-info collection (environment config update at {{ node_info_collected_at_utc.stdout }}).
+
+      Run telco-kpis tests with the current environment configuration before generating report.
+  when: available_artifacts.files | length == 0
+
+- name: Check if Gitea repository has existing reports for this spoke
+  block:
+    - name: Set Gitea repository URL (matches gitea role defaults)
+      ansible.builtin.set_fact:
+        gitea_repo_clone_url: "http://{{ ansible_fqdn }}:3000/{{ ansible_user }}/telco-kpis-reports.git"
+        gitea_clone_dir: "/tmp/gitea-freshness-check-{{ spoke_cluster }}-{{ ansible_date_time.epoch }}"
+
+    - name: Clone Gitea repository to check last report timestamp
+      ansible.builtin.git:
+        repo: "{{ gitea_repo_clone_url }}"
+        dest: "{{ gitea_clone_dir }}"
+        version: main
+        depth: 10
+      failed_when: false
+      register: gitea_clone_result
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+
+    - name: Get last commit timestamp for this spoke's reports
+      ansible.builtin.shell: |
+        cd {{ gitea_clone_dir }}
+        git log --format='%ai' -1 -- reports/*/{{ spoke_cluster }}/ 2>/dev/null || echo ""
+      register: last_report_commit_time
+      changed_when: false
+      when: gitea_clone_result.failed is not defined or not gitea_clone_result.failed
+
+    - name: Convert last report commit time to UTC YYYYMMDD-HHMMSS
+      ansible.builtin.shell: |
+        if [ -n "{{ last_report_commit_time.stdout }}" ]; then
+          date -u -d "{{ last_report_commit_time.stdout }}" +%Y%m%d-%H%M%S
+        else
+          echo ""
+        fi
+      register: last_report_utc_ts
+      changed_when: false
+      when: last_report_commit_time.stdout is defined and last_report_commit_time.stdout | length > 0
+
+    - name: Check if any test artifacts are newer than last report
+      ansible.builtin.shell:
+        cmd: |
+          last_report_ts="{{ last_report_utc_ts.stdout | default('', true) }}"
+
+          # If no last report exists, generate report
+          if [ -z "$last_report_ts" ]; then
+            echo "NO_PREVIOUS_REPORT"
+            exit 0
+          fi
+
+          # Check each test artifact timestamp
+          newer_count=0
+          for dir in {{ shared_artifact_dir }}/*-{{ spoke_cluster }}-*; do
+            if [ ! -d "$dir" ]; then
+              continue
+            fi
+
+            # Extract timestamp from directory name
+            dir_ts=$(echo "$dir" | grep -oE '[0-9]{8}-[0-9]{6}$')
+
+            if [ -z "$dir_ts" ]; then
+              continue
+            fi
+
+            # Compare timestamps (string comparison works for YYYYMMDD-HHMMSS in UTC)
+            if [[ "$dir_ts" > "$last_report_ts" ]]; then
+              echo "NEWER: $(basename $dir) (timestamp: $dir_ts > last report: $last_report_ts)"
+              ((newer_count++))
+            fi
+          done
+
+          if [ $newer_count -eq 0 ]; then
+            echo "NO_NEW_TESTS"
+          else
+            echo "FOUND_NEW_TESTS: $newer_count"
+          fi
+        executable: /bin/bash
+      register: test_freshness_check
+      changed_when: false
+      when: last_report_utc_ts.stdout is defined and last_report_utc_ts.stdout | length > 0
+
+    - name: Display test freshness analysis
+      ansible.builtin.debug:
+        msg:
+          - "==========================================="
+          - "Test Freshness Check"
+          - "==========================================="
+          - "Gitea repository: {{ gitea_repo_clone_url }}"
+          - "Last report generated: {{ last_report_commit_time.stdout | default('Never', true) }}"
+          - "Last report UTC timestamp: {{ last_report_utc_ts.stdout | default('N/A', true) }}"
+          - "Freshness check result: {{ test_freshness_check.stdout_lines[-1] if (test_freshness_check.stdout_lines is defined and test_freshness_check.stdout_lines | length > 0) else 'NO_PREVIOUS_REPORT' }}"
+          - "==========================================="
+      when: test_freshness_check is defined
+
+    - name: Cleanup temporary Gitea clone
+      ansible.builtin.file:
+        path: "{{ gitea_clone_dir }}"
+        state: absent
+      when: gitea_clone_result is defined
+
+    - name: Skip report generation (no new tests since last report)
+      ansible.builtin.meta: end_play
+      when:
+        - test_freshness_check.stdout_lines is defined
+        - test_freshness_check.stdout_lines | length > 0
+        - test_freshness_check.stdout_lines[-1] == "NO_NEW_TESTS"
+
+- name: Create temporary directory for report output
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .report-{{ spoke_cluster }}
+  register: temp_output_dir
+
+- name: Build Python script arguments
+  ansible.builtin.set_fact:
+    python_args: >-
+      {{ spoke_cluster }}
+      --latest
+      --output /workspace/output/{{ output_filename }}
+      {{ ('--test ' + test_filter) if (test_filter is defined and test_filter != '') else '' }}
+
+- name: Display Python script command
+  ansible.builtin.debug:
+    msg: "Running: python3.11 /opt/analyze-podman-test-results.py {{ python_args }}"
+
+- name: Run analyze-podman-test-results.py in test-runner container
+  ansible.builtin.shell: |
+    podman run --rm \
+      -v {{ shared_artifact_dir }}:/reports/podman-runs:ro,Z \
+      -v {{ shared_artifact_dir }}:/reports/rds-compare:ro,Z \
+      -v {{ temp_output_dir.path }}:/workspace/output:rw,Z \
+      telco-kpis-test-runner:latest \
+      python3.11 /opt/analyze-podman-test-results.py {{ python_args }}
+  register: report_result
+  failed_when: report_result.rc != 0
+  changed_when: false
+
+- name: Display report generation output
+  ansible.builtin.debug:
+    var: report_result.stdout_lines
+
+- name: Verify report file was generated
+  ansible.builtin.stat:
+    path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+  register: report_file_stat
+  failed_when: not report_file_stat.stat.exists
+
+- name: Find latest ztp-ai-deployment-time test directory
+  ansible.builtin.find:
+    paths: "{{ shared_artifact_dir }}"
+    file_type: directory
+    patterns: "ztp-ai-deployment-time-{{ spoke_cluster }}-*"
+  register: ztp_deployment_dirs
+
+- name: Get latest ztp-ai-deployment-time directory
+  ansible.builtin.set_fact:
+    latest_ztp_deployment_dir: "{{ ztp_deployment_dirs.files | sort(attribute='mtime') | last }}"
+  when: ztp_deployment_dirs.files | length > 0
+
+- name: Check for deployment timeline summary in latest directory
+  ansible.builtin.stat:
+    path: "{{ latest_ztp_deployment_dir.path }}/deployment-timeline-summary.txt"
+  register: deployment_timeline_stat
+  when: latest_ztp_deployment_dir is defined
+
+- name: Append deployment timeline to report
+  block:
+    - name: Read deployment timeline summary
+      ansible.builtin.slurp:
+        src: "{{ latest_ztp_deployment_dir.path }}/deployment-timeline-summary.txt"
+      register: deployment_timeline_content
+
+    - name: Insert deployment timeline section before Report Metadata
+      ansible.builtin.blockinfile:
+        path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+        marker: "<!-- {mark} DEPLOYMENT TIMELINE SECTION -->"
+        insertbefore: '^## Report Metadata'
+        block: |
+          ---
+
+          ## ZTP Deployment Timeline
+
+          This section shows the complete ZTP/ACM deployment timeline for the spoke cluster, including all deployment phases from GitOps sync to workload readiness.
+
+          **📊 [View Raw Timeline JSON](ztp-ai-deployment-time/deployment-timeline.json)**
+
+          <details>
+          <summary><b>Click to expand deployment timeline details</b></summary>
+
+          ```
+          {{ deployment_timeline_content.content | b64decode }}
+          ```
+
+          </details>
+
+          ---
+
+    - name: Extract test result from deployment timeline summary
+      ansible.builtin.shell: |
+        grep "Result:" "{{ latest_ztp_deployment_dir.path }}/deployment-timeline-summary.txt" | awk '{print $2}'
+      register: ztp_test_result
+      changed_when: false
+
+    - name: Extract deployment duration from deployment timeline summary
+      ansible.builtin.shell: |
+        grep "Duration:" "{{ latest_ztp_deployment_dir.path }}/deployment-timeline-summary.txt" | awk '{print $2}'
+      register: ztp_duration
+      changed_when: false
+
+    - name: Add ZTP deployment timeline entry to test summary table
+      ansible.builtin.lineinfile:
+        path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+        insertafter: '^\| \[.*\*\*\]\(#.*\) \|'
+        line: "| [**ZTP_AI_DEPLOYMENT_TIME**](#ztp-deployment-timeline) | ✅ Ran | {{ '✅ PASS' if ztp_test_result.stdout == 'PASS' else '❌ FAIL' }} | {{ ztp_duration.stdout }} | Start→TALM CGU Complete |"
+        regexp: '^\| \[.*ZTP_AI_DEPLOYMENT_TIME.*'
+
+    - name: Remove Script metadata line from report
+      ansible.builtin.lineinfile:
+        path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+        regexp: '^\s*-\s+\*\*Script\*\*:'
+        state: absent
+
+    - name: Remove Data Source metadata line from report
+      ansible.builtin.lineinfile:
+        path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+        regexp: '^\s*-\s+\*\*Data Source\*\*:'
+        state: absent
+
+    - name: Copy deployment timeline JSON to report artifacts
+      ansible.builtin.copy:
+        src: "{{ latest_ztp_deployment_dir.path }}/deployment-timeline.json"
+        dest: "{{ temp_output_dir.path }}/deployment-timeline.json"
+        remote_src: true
+        mode: '0644'
+  when:
+    - latest_ztp_deployment_dir is defined
+    - deployment_timeline_stat.stat.exists
+
+- name: Compress shared artifacts into tarball
+  ansible.builtin.command:
+    cmd: >
+      tar -czf {{ temp_output_dir.path }}/{{ tarball_name }}
+      -C {{ shared_artifact_dir }} .
+  register: compress_result
+  failed_when: compress_result.rc != 0
+  changed_when: false
+
+- name: Get tarball size
+  ansible.builtin.stat:
+    path: "{{ temp_output_dir.path }}/{{ tarball_name }}"
+  register: tarball_stat
+
+- name: Create local artifact directory
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Fetch report to local artifacts
+  ansible.builtin.fetch:
+    src: "{{ temp_output_dir.path }}/{{ output_filename }}"
+    dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+    flat: yes
+
+- name: Fetch tarball to local artifacts
+  ansible.builtin.fetch:
+    src: "{{ temp_output_dir.path }}/{{ tarball_name }}"
+    dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+    flat: yes
+
+- name: Fetch deployment timeline JSON to local artifacts
+  ansible.builtin.fetch:
+    src: "{{ temp_output_dir.path }}/deployment-timeline-{{ spoke_cluster }}.json"
+    dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+    flat: yes
+  when: deployment_timeline_stat.stat.exists
+  failed_when: false
+
+- name: Cleanup temporary output directory
+  ansible.builtin.file:
+    path: "{{ temp_output_dir.path }}"
+    state: absent
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Report Generation Complete"
+      - "=========================================="
+      - "Report: {{ output_filename }}"
+      - "Tarball: {{ tarball_name }} ({{ (tarball_stat.stat.size / 1024 / 1024) | round(2) }} MB)"
+      - "Test Artifacts Included: {{ available_artifacts.files | length }}"
+      - "Deployment Timeline: {{ 'Included' if deployment_timeline_stat.stat.exists else 'Not Available' }}"
+      - "Artifacts saved to: {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+      - "=========================================="

@@ -1,0 +1,49 @@
+---
+# Mirror container images to internal registry
+#
+# This playbook uses the container_image_mirror role to mirror images from
+# source registries to a target internal registry.
+#
+# Prerequisites:
+#   - skopeo CLI tool installed on bastion
+#   - Authentication to source registries (via pull_secret or existing auth)
+#   - Target registry reachable
+#
+# Usage:
+#   ansible-playbook playbooks/mirror-images.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "images='[{\"source\":\"quay.io/org/image:tag\",\"dest\":\"namespace/image:tag\"}]'"
+#
+#   # With pull secret
+#   ansible-playbook playbooks/mirror-images.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "images='[...]' pull_secret_string=$(cat ~/.docker/config.json | base64 -w0)"
+#
+# Required variables:
+#   images: List of image mappings with 'source' and 'dest' keys
+#     Example: [{"source": "quay.io/org/image:tag", "dest": "namespace/image:tag"}]
+#
+# Optional variables:
+#   registry_host: Target registry hostname (default: bastion FQDN)
+#   registry_port: Target registry port (default: 5000)
+#   registry_namespace: Namespace prefix for all dest images (default: none)
+#   dest_tls_verify: Verify TLS for dest registry (default: false)
+#   use_pull_secret: Enable pull secret authentication (default: false)
+#   pull_secret_string: Base64-encoded pull secret (only used if use_pull_secret=true)
+#   pull_secret_path: Path to write pull secret file (only used if use_pull_secret=true)
+#
+- name: Mirror container images to internal registry
+  hosts: bastion
+  gather_facts: true
+  roles:
+    - role: container_image_mirror
+      vars:
+        container_image_mirror_operation: mirror
+        container_image_mirror_images: "{{ images }}"
+        container_image_mirror_registry_host: "{{ registry_host | default(ansible_fqdn) }}"
+        container_image_mirror_registry_port: "{{ registry_port | default(5000) }}"
+        container_image_mirror_registry_namespace: "{{ registry_namespace | default('') }}"
+        container_image_mirror_dest_tls_verify: "{{ dest_tls_verify | default(false) }}"
+        container_image_mirror_use_pull_secret: "{{ use_pull_secret | default(false) }}"
+        container_image_mirror_pull_secret_string: "{{ pull_secret_string | default('') }}"
+        container_image_mirror_pull_secret_path: "{{ pull_secret_path | default('/tmp/.pull-secret-mirror.json') }}"

@@ -1,0 +1,40 @@
+---
+- name: Remove image repositories from registry storage
+  ansible.builtin.file:
+    path: "{{ container_image_mirror_registry_data_path }}/{{ container_image_mirror_registry_namespace }}{{ image_item.dest | regex_replace(':.*', '') }}"
+    state: absent
+  become: true
+  loop: "{{ container_image_mirror_images }}"
+  loop_control:
+    loop_var: image_item
+    label: "{{ container_image_mirror_registry_namespace }}{{ image_item.dest }}"
+  register: _remove_result
+  failed_when: false
+  ignore_errors: true
+
+- name: Build removal summary
+  ansible.builtin.set_fact:
+    _remove_success: "{{ _remove_result.results | selectattr('changed', 'eq', true) | list }}"
+    _remove_failed: "{{ _remove_result.results | selectattr('failed', 'eq', true) | default([]) | list }}"
+
+- name: Display detailed removal results
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "REMOVAL SUMMARY"
+      - "=========================================="
+      - "Total images: {{ container_image_mirror_images | length }}"
+      - "Successfully removed: {{ _remove_success | length }}"
+      - "Failed: {{ _remove_failed | length }}"
+      - ""
+      - "REMOVED:"
+      - "{{ _remove_success | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✓ ') | indent(2, first=True) }}"
+      - ""
+      - "FAILED:"
+      - "{{ _remove_failed | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✗ ') | indent(2, first=True) if _remove_failed | length > 0 else '  (none)' }}"
+      - "=========================================="
+
+- name: Fail if any images failed to remove
+  ansible.builtin.fail:
+    msg: "{{ _remove_failed | length }} image(s) failed to remove. See summary above for details."
+  when: _remove_failed | length > 0

@@ -1,0 +1,213 @@
+---
+# Generate detailed human-readable deployment timeline summary
+# Similar to summarize-ztp-deployment.sh bash script
+
+- name: Get current timestamp for readiness calculation
+  ansible.builtin.set_fact:
+    current_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+- name: Check for ArgoCD Application event
+  ansible.builtin.set_fact:
+    has_argo_app: "{{ ztp_deployment_timeline_events | selectattr('event', 'equalto', 'ZTP.ArgoApplicationCreated') | list | length > 0 }}"
+
+- name: Extract key milestone timestamps
+  ansible.builtin.set_fact:
+    milestone_timestamps:
+      argo_app: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'ZTP.ArgoApplicationCreated') | list | first).timestamp | default('N/A') }}"
+      clusterinstance: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'ZTP.ClusterInstanceCreated') | list | first).timestamp | default('N/A') }}"
+      gitops_sync: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'ZTP.ManagedClusterCreated') | list | first).timestamp | default('N/A') }}"
+      aci_created: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'AgentClusterInstall.Created') | list | first).timestamp | default('N/A') }}"
+      iso_ready: "{{ (ztp_deployment_timeline_events | selectattr('event', 'search', 'InfraEnv.Condition.ImageCreated') | list | first).timestamp | default('N/A') }}"
+      agent_registered: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'Agent.Registered') | list | first).timestamp | default('N/A') }}"
+      agent_bound: "{{ (ztp_deployment_timeline_events | selectattr('event', 'search', 'Agent.Condition.Bound') | list | first).timestamp | default('N/A') }}"
+      install_started: "{{ (ztp_deployment_timeline_events | selectattr('event', 'search', 'InstallationInProgress|Installing') | list | first).timestamp | default('N/A') }}"
+      install_completed: "{{ (ztp_deployment_timeline_events | selectattr('event', 'search', 'Completed|Installed') | list | first).timestamp | default('N/A') }}"
+      import_started: "{{ (ztp_deployment_timeline_events | selectattr('event', 'search', 'ManifestWork.*klusterlet') | list | first).timestamp | default('N/A') }}"
+      talm_cgu_completed: "{{ (ztp_deployment_timeline_events | selectattr('event', 'equalto', 'TALM.CGU.Completed') | list | first).timestamp | default('N/A') }}"
+
+- name: Build milestone list for sorting
+  ansible.builtin.set_fact:
+    milestone_list:
+      - name: "ArgoCD Application Created"
+        timestamp: "{{ milestone_timestamps.argo_app }}"
+      - name: "ClusterInstance Created"
+        timestamp: "{{ milestone_timestamps.clusterinstance }}"
+      - name: "GitOps Sync (ManagedCluster Created)"
+        timestamp: "{{ milestone_timestamps.gitops_sync }}"
+      - name: "AgentClusterInstall Created"
+        timestamp: "{{ milestone_timestamps.aci_created }}"
+      - name: "Discovery ISO Ready"
+        timestamp: "{{ milestone_timestamps.iso_ready }}"
+      - name: "Agent Registered"
+        timestamp: "{{ milestone_timestamps.agent_registered }}"
+      - name: "Agent Bound to Cluster"
+        timestamp: "{{ milestone_timestamps.agent_bound }}"
+      - name: "Installation Started"
+        timestamp: "{{ milestone_timestamps.install_started }}"
+      - name: "Installation Completed"
+        timestamp: "{{ milestone_timestamps.install_completed }}"
+      - name: "Import to ACM Started"
+        timestamp: "{{ milestone_timestamps.import_started }}"
+      - name: "TALM CGU Completed (Ready for Workloads)"
+        timestamp: "{{ milestone_timestamps.talm_cgu_completed }}"
+
+- name: Filter out N/A milestones and sort chronologically
+  ansible.builtin.set_fact:
+    sorted_milestones: "{{ milestone_list | rejectattr('timestamp', 'equalto', 'N/A') | sort(attribute='timestamp') | list }}"
+
+- name: Calculate milestone durations
+  ansible.builtin.set_fact:
+    milestone_durations: "{{ milestone_durations | default([]) + [item | combine({'total_seconds': ((item.timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ztp_deployment_timeline_start_time | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int})] }}"
+  loop: "{{ sorted_milestones }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Calculate deltas between milestones
+  ansible.builtin.set_fact:
+    milestone_with_deltas: "{{ milestone_with_deltas | default([]) + [item | combine({'delta_seconds': (0 if loop_index == 0 else (item.total_seconds | int) - (milestone_durations[loop_index - 1].total_seconds | int))})] }}"
+  loop: "{{ milestone_durations }}"
+  loop_control:
+    index_var: loop_index
+    label: "{{ item.name }}"
+
+- name: Format durations helper
+  ansible.builtin.set_fact:
+    formatted_milestones: []
+
+- name: Format each milestone duration
+  ansible.builtin.set_fact:
+    formatted_milestones: "{{ formatted_milestones + [item | combine({
+      'total_formatted': ((item.total_seconds | int // 3600) | string + 'h' + ((item.total_seconds | int % 3600) // 60) | string + 'm' + (item.total_seconds | int % 60) | string + 's'),
+      'delta_formatted': ('START' if item.delta_seconds == 0 else '+' + ((item.delta_seconds | int // 3600) | string + 'h' + ((item.delta_seconds | int % 3600) // 60) | string + 'm' + (item.delta_seconds | int % 60) | string + 's'))
+    })] }}"
+  loop: "{{ milestone_with_deltas }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Calculate time since TALM CGU completion
+  ansible.builtin.set_fact:
+    time_ready_seconds: "{{ ((current_timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (milestone_timestamps.talm_cgu_completed | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}"
+  when: milestone_timestamps.talm_cgu_completed != 'N/A'
+
+- name: Format time ready duration
+  ansible.builtin.set_fact:
+    time_ready_formatted: "{{ (time_ready_seconds | int // 3600) | string + 'h' + ((time_ready_seconds | int % 3600) // 60) | string + 'm' + (time_ready_seconds | int % 60) | string + 's' }}"
+  when: time_ready_seconds is defined
+
+- name: Group events by milestone
+  ansible.builtin.set_fact:
+    milestone_groups: "{{ ztp_deployment_timeline_events | groupby('milestone') }}"
+
+- name: Build milestone breakdown data
+  ansible.builtin.set_fact:
+    milestone_breakdown: "{{ milestone_breakdown | default([]) + [{'milestone': item.0, 'count': item.1 | length, 'first': item.1 | first, 'last': item.1 | last}] }}"
+  loop: "{{ milestone_groups }}"
+  loop_control:
+    label: "{{ item.0 }}"
+
+- name: Calculate deployment duration (ClusterInstance to TALM CGU)
+  ansible.builtin.set_fact:
+    deployment_duration_seconds: "{{ ((milestone_timestamps.talm_cgu_completed | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (milestone_timestamps.clusterinstance | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}"
+  when:
+    - milestone_timestamps.clusterinstance != 'N/A'
+    - milestone_timestamps.talm_cgu_completed != 'N/A'
+
+- name: Format deployment duration
+  ansible.builtin.set_fact:
+    deployment_duration_formatted: "{{ (deployment_duration_seconds | int // 3600) | string + 'h' + ((deployment_duration_seconds | int % 3600) // 60) | string + 'm' + (deployment_duration_seconds | int % 60) | string + 's' }}"
+  when: deployment_duration_seconds is defined
+
+- name: Build formatted milestone table lines
+  ansible.builtin.set_fact:
+    milestone_table_lines: "{{ milestone_table_lines | default([]) + [
+      ((loop_idx + 1) | string) + '. ' + item.name + ' | ' + item.timestamp + ' | ' + item.total_formatted + ' | ' + item.delta_formatted
+    ] }}"
+  loop: "{{ formatted_milestones }}"
+  loop_control:
+    index_var: loop_idx
+    label: "{{ item.name }}"
+
+- name: Generate detailed summary text
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_detailed_summary: |
+      ======================================================================
+      ZTP Deployment Timeline Summary
+      ======================================================================
+      Hub Cluster: {{ hub_cluster | default('Unknown') }}
+      Bastion Host: {{ inventory_hostname }}
+      Spoke Cluster: {{ spoke_cluster }}
+
+      Deployment Features:
+        - ArgoCD Application Starting Point: {{ 'Present' if milestone_timestamps.argo_app != 'N/A' else 'Not Present' }}
+        - ClusterInstance Tracking: {{ 'Present' if milestone_timestamps.clusterinstance != 'N/A' else 'Not Present' }}
+        - TALM CGU Completion: {{ 'Present' if milestone_timestamps.talm_cgu_completed != 'N/A' else 'Not Present' }}
+        - ztp-done Label: {{ 'Present' if has_ztp_done_label | default(false) else 'Not Present' }}
+
+      Total Events Captured: {{ ztp_deployment_timeline_events | length }}
+
+      ======================================================================
+      KEY MILESTONES
+      ======================================================================
+      {% for line in milestone_table_lines %}
+      {{ line }}
+      {% endfor %}
+
+      ======================================================================
+      WORKLOAD READINESS STATUS
+      ======================================================================
+      {% if milestone_timestamps.talm_cgu_completed != 'N/A' %}
+      ✅ Cluster ready for workloads since: {{ milestone_timestamps.talm_cgu_completed }} (since {{ time_ready_formatted }})
+      {% else %}
+      ⚠️  Workload readiness not yet achieved
+      {% endif %}
+
+      ======================================================================
+      MILESTONE BREAKDOWN
+      ======================================================================
+      {% for group in milestone_breakdown %}
+
+      {{ group.milestone }} ({{ group.count }} events)
+        First: {{ group.first.timestamp }} - {{ group.first.event }}
+        Last:  {{ group.last.timestamp }} - {{ group.last.event }}
+      {% endfor %}
+
+      ======================================================================
+      FEATURE STATUS
+      ======================================================================
+      1. ArgoCD Application Starting Point: {{ 'Present' if milestone_timestamps.argo_app != 'N/A' else 'Not Present' }}
+      {% if milestone_timestamps.argo_app != 'N/A' %}
+         ✅ Captured GitOps deployment trigger (earliest possible start)
+         ✅ Using ArgoCD Application creation as deployment start
+      {% else %}
+         ℹ️  ArgoCD Application not found (checked openshift-gitops and argocd namespaces)
+         ℹ️  Using ClusterInstance or ManagedCluster creation as starting point instead
+      {% endif %}
+
+      2. ClusterInstance Tracking: {{ 'Present' if milestone_timestamps.clusterinstance != 'N/A' else 'Not Present' }}
+      {% if milestone_timestamps.clusterinstance != 'N/A' %}
+         ✅ Captured SiteConfig v2 operator reconciliation events
+         ℹ️  Available for SiteConfig v2 deployments
+      {% else %}
+         ℹ️  ClusterInstance resource not found (requires SiteConfig v2 operator)
+         ℹ️  Not critical - SiteConfig v1 deployments don't have ClusterInstance
+      {% endif %}
+
+      3. TALM CGU Completion: {{ 'Present' if milestone_timestamps.talm_cgu_completed != 'N/A' else 'Not Present' }}
+      {% if milestone_timestamps.talm_cgu_completed != 'N/A' %}
+         ✅ Captured accurate policy completion timestamp (ready for workloads)
+         ✅ Using TALM CGU completedAt as deployment success milestone
+      {% else %}
+         ℹ️  TALM ClusterGroupUpgrade not found in ztp-install namespace
+         ℹ️  Using individual policy compliance events as fallback
+      {% endif %}
+
+      ======================================================================
+      DEPLOYMENT SUMMARY
+      ======================================================================
+      {% if deployment_duration_formatted is defined %}
+      🚀 The deployment took {{ deployment_duration_formatted }} from ClusterInstance CR creation to TALM CGU Completed (Ready for Workloads)
+      {% else %}
+      ⚠️  Unable to calculate deployment duration (missing key milestones)
+      {% endif %}
+
+      ======================================================================

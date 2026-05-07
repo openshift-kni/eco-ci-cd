@@ -1,0 +1,28 @@
+---
+# Gitea Configuration Defaults
+gitea_container_name: gitea
+gitea_http_port: 3000
+gitea_ssh_port: 2222
+gitea_domain: "bastion.kni-qe-71.telco-kpis.rdu3.redhat.com"
+gitea_root_url: "http://{{ gitea_domain }}:{{ gitea_http_port }}/"
+
+# Admin credentials from vault (defaults to bastion user credentials)
+# These are typically provided by ansible_group_bastions vault or bastion host_vars
+gitea_admin_user: "{{ ansible_user | default('telcov10n') }}"
+gitea_admin_password: "{{ ansible_password | default(lookup('env', 'BASTION_PASSWORD') | default('', true)) }}"
+gitea_admin_email: "{{ gitea_admin_user }}@localhost"
+
+gitea_data_dir: "{{ ansible_env.HOME }}/gitea/data"
+gitea_repo_name: telco-kpis-reports
+gitea_repo_description: "Telco KPIs Test Reports Archive"
+gitea_image: "docker.io/gitea/gitea:latest"
+
+# API endpoints
+gitea_api_base: "{{ gitea_root_url }}api/v1"
+gitea_install_url: "{{ gitea_root_url }}"
+
+# Development mode flag (passed from playbook)
+development_mode: false
+
+# Repository retention policy
+gitea_report_retention_days: 7  # Keep reports for last 7 days

@@ -1,0 +1,245 @@
+---
+# ZTP AI Deployment Time Test
+# Validates that ZTP Assisted Installer deployment completed within acceptable time threshold
+#
+# Required parameters:
+#   - spoke_cluster: Spoke cluster name
+#   - hub_cluster: Hub cluster name
+#   - hub_kubeconfig: Path to hub cluster kubeconfig on bastion
+#   - threshold_duration: Maximum acceptable deployment time (default: "2h0m" = 120 minutes)
+#
+# Usage:
+#   ansible-playbook ztp-ai-deployment-time.yml \
+#     -e spoke_cluster=spree-02 \
+#     -e hub_cluster=kni-qe-71 \
+#     -e hub_kubeconfig=/home/telcov10n/project/generated/kni-qe-71/auth/kubeconfig \
+#     -e threshold_duration=2h0m
+
+- name: ZTP AI Deployment Time Validation
+  hosts: bastion
+  gather_facts: true
+
+  tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_role:
+        name: telco-kpis-defaults
+
+    - name: Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+          - hub_cluster is defined
+          - hub_cluster | length > 0
+          - hub_kubeconfig is defined
+          - hub_kubeconfig | length > 0
+          - threshold_duration is defined
+          - threshold_duration | length > 0
+        fail_msg: "Required parameters missing: spoke_cluster, hub_cluster, hub_kubeconfig, and threshold_duration must be provided"
+        success_msg: "All required parameters validated"
+
+    - name: Create test artifacts directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .ztp-ai-deployment-time-{{ spoke_cluster }}
+        path: /tmp
+      register: test_artifacts_dir
+
+    - name: Get current timestamp (UTC)
+      ansible.builtin.command: date -u +%Y%m%d-%H%M%S
+      register: utc_timestamp
+      changed_when: false
+
+    - name: Set test artifact directory names
+      ansible.builtin.set_fact:
+        test_result_dir: "ztp-ai-deployment-time-{{ spoke_cluster }}-{{ utc_timestamp.stdout }}"
+        test_artifacts_name: "ztp-ai-deployment-time-{{ spoke_cluster }}"
+
+    - name: Display test configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ZTP AI Deployment Time Test Configuration"
+          - "=========================================="
+          - "Spoke Cluster: {{ spoke_cluster }}"
+          - "Hub Cluster: {{ hub_cluster }}"
+          - "Hub Kubeconfig: {{ hub_kubeconfig }}"
+          - "Threshold Duration: {{ threshold_duration }}"
+          - "Test Artifacts: {{ test_artifacts_dir.path }}"
+          - "=========================================="
+
+    - name: Collect ZTP deployment timeline
+      ansible.builtin.include_role:
+        name: ztp_deployment_timeline
+      vars:
+        spoke_cluster: "{{ spoke_cluster }}"
+        hub_kubeconfig: "{{ hub_kubeconfig }}"
+        hub_cluster: "{{ hub_cluster }}"
+        generate_detailed_summary: true
+
+    - name: Parse threshold duration to seconds
+      ansible.builtin.set_fact:
+        threshold_hours: "{{ threshold_duration | regex_search('(\\d+)h') | default('0h', true) | regex_replace('h', '') | int }}"
+        threshold_minutes: "{{ threshold_duration | regex_search('(\\d+)m') | default('0m', true) | regex_replace('m', '') | int }}"
+
+    - name: Calculate threshold in seconds
+      ansible.builtin.set_fact:
+        threshold_seconds: "{{ (threshold_hours | int * 3600) + (threshold_minutes | int * 60) }}"
+
+    - name: Determine test result
+      ansible.builtin.set_fact:
+        test_passed: "{{ ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int }}"
+        test_status: "{{ 'PASS' if (ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int) else 'FAIL' }}"
+
+    - name: Save deployment timeline JSON
+      ansible.builtin.copy:
+        content: "{{ ztp_deployment_timeline_events | to_nice_json }}"
+        dest: "{{ test_artifacts_dir.path }}/deployment-timeline.json"
+        mode: '0644'
+
+    - name: Generate deployment timeline summary
+      ansible.builtin.copy:
+        content: |
+          ======================================================================
+          ZTP AI DEPLOYMENT TIME TEST SUMMARY
+          ======================================================================
+          Spoke Cluster: {{ spoke_cluster }}
+          Hub Cluster: {{ hub_cluster }}
+          Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+
+          DEPLOYMENT TIMELINE:
+            Start Time: {{ ztp_deployment_timeline_start_time }}
+            End Time: {{ ztp_deployment_timeline_end_time }}
+            Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }} seconds)
+
+          TEST VALIDATION:
+            Threshold: {{ threshold_duration }} ({{ threshold_seconds }} seconds)
+            Result: {{ test_status }}
+            {{ 'PASS - Deployment completed within acceptable time' if test_passed else 'FAIL - Deployment exceeded time threshold' }}
+
+          {% if not test_passed %}
+          FAILURE DETAILS:
+            Actual deployment time ({{ ztp_deployment_timeline_duration_seconds }}s) exceeded threshold ({{ threshold_seconds }}s)
+            Difference: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds over limit
+          {% endif %}
+
+          {{ ztp_deployment_timeline_detailed_summary }}
+        dest: "{{ test_artifacts_dir.path }}/deployment-timeline-summary.txt"
+        mode: '0644'
+
+    - name: Generate JUnit XML test result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuites>
+            <testsuite name="ZTP AI Deployment Time" tests="1" failures="{{ 0 if test_passed else 1 }}" errors="0" time="{{ ztp_deployment_timeline_duration_seconds }}">
+              <testcase name="ZTP AI Deployment Time Validation" classname="telco.kpis.ztp.ai.deployment.time" time="{{ ztp_deployment_timeline_duration_seconds }}">
+                {% if not test_passed %}
+                <failure message="Deployment time {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s) exceeded threshold {{ threshold_duration }} ({{ threshold_seconds }}s)" type="TimeThresholdExceeded">
+          Deployment Time Test Failed
+
+          Spoke Cluster: {{ spoke_cluster }}
+          Hub Cluster: {{ hub_cluster }}
+          Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+
+          Start Time: {{ ztp_deployment_timeline_start_time }}
+          End Time: {{ ztp_deployment_timeline_end_time }}
+
+          Actual Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }} seconds)
+          Threshold: {{ threshold_duration }} ({{ threshold_seconds }} seconds)
+
+          Exceeded By: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds
+
+          The deployment took longer than the acceptable threshold for AI (Assisted Installer) deployments.
+          Expected: ≤ {{ threshold_seconds }}s
+          Actual: {{ ztp_deployment_timeline_duration_seconds }}s
+                </failure>
+                {% endif %}
+                <system-out>
+          Spoke Cluster: {{ spoke_cluster }}
+          Hub Cluster: {{ hub_cluster }}
+          Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
+          Start Time: {{ ztp_deployment_timeline_start_time }}
+          End Time: {{ ztp_deployment_timeline_end_time }}
+          Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
+          Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
+          Result: {{ test_status }}
+          Events Captured: {{ ztp_deployment_timeline_events | length }}
+                </system-out>
+              </testcase>
+            </testsuite>
+          </testsuites>
+        dest: "{{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml"
+        mode: '0644'
+
+    - name: List test artifacts
+      ansible.builtin.find:
+        paths: "{{ test_artifacts_dir.path }}"
+        patterns: "*"
+        recurse: no
+      register: test_artifact_files
+
+    - name: Create shared artifact base directory
+      ansible.builtin.file:
+        path: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create test result directory in shared location
+      ansible.builtin.file:
+        path: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/{{ test_result_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy test artifacts to shared persistent location
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "/home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/{{ test_result_dir }}/{{ item.path | basename }}"
+        remote_src: true
+        mode: '0644'
+      loop: "{{ test_artifact_files.files }}"
+      when: test_artifact_files.files | length > 0
+
+    - name: Create local artifact directory
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_artifacts_name }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Fetch test artifacts to local
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_artifacts_name }}/"
+        flat: yes
+      loop: "{{ test_artifact_files.files }}"
+      when: test_artifact_files.files | length > 0
+
+    - name: Cleanup temporary test artifacts directory
+      ansible.builtin.file:
+        path: "{{ test_artifacts_dir.path }}"
+        state: absent
+
+    - name: Display test result
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ZTP AI Deployment Time Test Complete"
+          - "=========================================="
+          - "Spoke: {{ spoke_cluster }}"
+          - "Hub: {{ hub_cluster }}"
+          - "Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)"
+          - "Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)"
+          - "Result: {{ test_status }}"
+          - "Artifacts: {{ test_artifact_files.files | length }} files"
+          - "Location: /home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/{{ test_result_dir }}"
+          - "=========================================="
+
+    - name: Fail if test did not pass
+      ansible.builtin.fail:
+        msg: |
+          ZTP AI Deployment Time test FAILED
+          Actual: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
+          Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
+          Exceeded by: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds
+      when: not test_passed

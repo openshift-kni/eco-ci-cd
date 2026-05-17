@@ -175,7 +175,7 @@
           retries: 30
           delay: 20
 
-        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade
+        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:
             api_version: ran.openshift.io/v1alpha1
             kind: ClusterGroupUpgrade
@@ -300,7 +300,7 @@
           retries: 30
           delay: 30
       always:
-        - name: Delete the day2 worker ClusterGroupUpgrade
+        - name: Delete the day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:
             api_version: ran.openshift.io/v1alpha1
             kind: ClusterGroupUpgrade

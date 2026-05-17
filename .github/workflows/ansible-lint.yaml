@@ -17,4 +17,4 @@ jobs:
       - name: Install dependencies
         run: pip install ansible ansible-lint
       - name: Run ansible-lint
-        run: ansible-lint .
+        run: ansible-lint

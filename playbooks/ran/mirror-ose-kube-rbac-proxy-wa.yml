@@ -18,7 +18,7 @@
 #     --extra-vars "version=4.14"
 #
 # Required variables:
-#   version: OCP version (e.g., "4.14") 
+#   version: OCP version (e.g., "4.14")
 #
 - name: Mirror missing ose-kube-rbac-proxy for OCP 4.14 gitops operator
   hosts: bastion
@@ -28,9 +28,9 @@
     container_registry_service_name: "container-registry"
     ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/repositories
     ocp_operator_mirror_folders:
-    - openshift-release-dev
-    - operators
-    - openshift4
+      - openshift-release-dev
+      - operators
+      - openshift4
 
   tasks:
 
@@ -55,7 +55,7 @@
         name: "{{ container_registry_service_name }}"
         state: started
         enabled: true
-        
+
     - name: Validate required variables
       ansible.builtin.assert:
         that:

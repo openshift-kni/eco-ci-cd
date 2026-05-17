@@ -32,7 +32,7 @@
       loop_control:
         label: "{{ item.metadata.name }}"
 
-    - name: Delete ArgoCD apps before cleanup
+    - name: Delete ArgoCD apps before cleanup # noqa: ignore-errors
       kubernetes.core.k8s:
         state: absent
         api_version: argoproj.io/v1alpha1
@@ -62,7 +62,7 @@
       ignore_errors: true
 
     - name: Cleanup spoke cluster resources
-      include_tasks: tasks/site-cleanup.yml
+      ansible.builtin.include_tasks: tasks/site-cleanup.yml
       vars:
         hub_kubeconfig: "{{ hub_kubeconfig }}"
         spoke_cluster: "{{ spoke_cluster }}"
@@ -90,7 +90,7 @@
       ansible.builtin.debug:
         msg: "VMs to delete for {{ spoke_cluster }}: {{ vms_to_delete }}"
 
-    - name: Destroy old cluster VMs
+    - name: Destroy old cluster VMs # noqa: ignore-errors
       community.libvirt.virt:
         name: "{{ item }}"
         command: destroy

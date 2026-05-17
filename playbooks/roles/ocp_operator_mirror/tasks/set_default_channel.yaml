@@ -5,6 +5,7 @@
     - name: Gather default channels for each operator from production catalog
       ansible.builtin.shell:
         cmd: >-
+          set -o pipefail
           jq -r --arg n "{{ operator.name }}"
           'select(.schema=="olm.package" and .name==$n) | .defaultChannel'
           "{{ mirror_catalog_json_path }}"

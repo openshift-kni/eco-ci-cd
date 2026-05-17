@@ -117,7 +117,7 @@
       loop_control:
         label: "Creating BMC credentials for {{ spoke_cluster }}"
         loop_var: spoke_cluster
-  
+
     - name: Get hub cluster pull secret
       kubernetes.core.k8s_info:
         api_version: v1
@@ -233,7 +233,7 @@
       delay: 30
 
     - name: Wait for spoke cluster installation and policy compliance
-      include_tasks: tasks/wait-spoke-sno.yaml
+      ansible.builtin.include_tasks: tasks/wait-spoke-sno.yaml
       loop: "{{ spoke_clusters }}"
       loop_control:
         label: "Processing cluster: {{ spoke_cluster }}"

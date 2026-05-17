@@ -25,7 +25,11 @@
 
 - name: Check if images already exist in registry
   ansible.builtin.uri:
-    url: "https://{{ container_image_mirror_registry_host }}:{{ container_image_mirror_registry_port }}/v2/{{ container_image_mirror_registry_namespace }}{{ image_item.dest | regex_replace(':.*', '') }}/tags/list"
+    url: >-
+      https://{{ container_image_mirror_registry_host }}:{{
+      container_image_mirror_registry_port }}/v2/{{
+      container_image_mirror_registry_namespace }}{{
+      image_item.dest | regex_replace(':.*', '') }}/tags/list
     method: GET
     validate_certs: false
     status_code: [200, 404, 401]  # 401 = registry requires auth for tag listing
@@ -43,7 +47,9 @@
       {{ '--authfile ' + container_image_mirror_pull_secret_path if container_image_mirror_use_pull_secret | bool else '' }}
       {{ '--dest-tls-verify=false' if not container_image_mirror_dest_tls_verify else '' }}
       docker://{{ image_item.source }}
-      docker://{{ container_image_mirror_registry_host }}:{{ container_image_mirror_registry_port }}/{{ container_image_mirror_registry_namespace }}{{ image_item.dest }}
+      docker://{{ container_image_mirror_registry_host }}:{{
+      container_image_mirror_registry_port }}/{{
+      container_image_mirror_registry_namespace }}{{ image_item.dest }}
   loop: "{{ container_image_mirror_images }}"
   loop_control:
     loop_var: image_item
@@ -69,10 +75,28 @@
       - "Failed: {{ _mirror_failed | length }}"
       - ""
       - "SUCCESSFUL:"
-      - "{{ _mirror_success | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✓ ') | indent(2, first=True) }}"
+      - >-
+        {{
+          _mirror_success
+          | map(attribute='image_item')
+          | map(attribute='dest')
+          | list
+          | join('\n  ✓ ')
+          | indent(2, first=True)
+        }}
       - ""
       - "FAILED:"
-      - "{{ _mirror_failed | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✗ ') | indent(2, first=True) if _mirror_failed | length > 0 else '  (none)' }}"
+      - >-
+        {{
+          (
+            _mirror_failed
+            | map(attribute='image_item')
+            | map(attribute='dest')
+            | list
+            | join('\n  ✗ ')
+            | indent(2, first=True)
+          ) if _mirror_failed | length > 0 else '  (none)'
+        }}
       - "=========================================="
 
 - name: Cleanup pull secret

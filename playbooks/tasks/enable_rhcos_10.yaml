@@ -17,6 +17,6 @@
           name: rhel-10
 
 - name: Wait for MCP osImageStream to be set to rhel-10
-  import_tasks: cnf/tasks/wait_for_mcp.yaml
+  ansible.builtin.import_tasks: cnf/tasks/wait_for_mcp.yaml
   vars:
     mcp_name: "{{ mcp_name }}"

@@ -105,8 +105,8 @@
             - masters_secret_password: BMC password for Masters (sushy-tools)
             - ztp_git_repo_url: Git repository URL for ZTP site configs
 
-    # Thorough cleanup for re-deployments - only runs when force_cleanup=true    
-    - name: Delete ArgoCD apps before cleanup
+    # Thorough cleanup for re-deployments - only runs when force_cleanup=true
+    - name: Delete ArgoCD apps before cleanup # noqa: ignore-errors
       kubernetes.core.k8s:
         state: absent
         api_version: argoproj.io/v1alpha1
@@ -137,7 +137,7 @@
       when: force_cleanup | default(false) | bool
       ignore_errors: true
 
-    - name: Delete existing ManagedCluster if re-deploying
+    - name: Delete existing ManagedCluster if re-deploying # noqa: ignore-errors
       kubernetes.core.k8s:
         state: absent
         api_version: cluster.open-cluster-management.io/v1
@@ -147,7 +147,7 @@
       ignore_errors: true
       when: force_cleanup | default(false) | bool
 
-    - name: Delete spoke namespace to force cleanup all resources
+    - name: Delete spoke namespace to force cleanup all resources # noqa: ignore-errors
       kubernetes.core.k8s:
         state: absent
         api_version: v1
@@ -314,7 +314,7 @@
         regexp: 'targetRevision:.*'
         replace: "targetRevision: {{ ztp_git_repo_branch }}"
 
-    - name: Display patched clusters-app.yaml content
+    - name: Display patched clusters-app.yaml content # noqa: command-instead-of-shell
       ansible.builtin.shell: "cat {{ clusters_app_path }}"
       register: patched_clusters_app
       changed_when: false
@@ -353,7 +353,7 @@
         regexp: 'targetRevision:.*'
         replace: "targetRevision: {{ ztp_git_repo_branch }}"
 
-    - name: Display patched policies-app.yaml content
+    - name: Display patched policies-app.yaml content # noqa: command-instead-of-shell
       ansible.builtin.shell: "cat {{ policies_app_path }}"
       register: patched_policies_app
       changed_when: false
@@ -465,6 +465,7 @@
 
     - name: Register cluster installation type
       ansible.builtin.shell: |
+        set -o pipefail
         oc -n {{ spoke_cluster }} get cd {{ spoke_cluster }} -o json | jq -r .spec.clusterInstallRef.kind
       register: clusterinstallref
       environment:
@@ -490,6 +491,7 @@
 
     - name: Wait for installation to finish
       ansible.builtin.shell: |
+        set -o pipefail
         oc get clusterdeployments.hive.openshift.io {{ spoke_cluster }} -n {{ spoke_cluster }} -o json | jq '.spec.installed'
       register: cluster_deployment_status
       environment:
@@ -518,10 +520,22 @@
         namespace: "{{ spoke_cluster }}"
         kubeconfig: "{{ kubeconfig }}"
       register: policies
-      until:
-        - policies.resources | length > 0
-        - (policies.resources | selectattr('status', 'defined') | selectattr('status.compliant', 'defined') | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
-        - (policies.resources | rejectattr('status', 'defined') | list | length) == 0
+      until: >
+        policies.resources | length > 0 and
+        (
+          policies.resources
+          | selectattr('status', 'defined')
+          | selectattr('status.compliant', 'defined')
+          | selectattr('status.compliant', 'ne', 'Compliant')
+          | list
+          | length
+        ) == 0 and
+        (
+          policies.resources
+          | rejectattr('status', 'defined')
+          | list
+          | length
+        ) == 0
       retries: 90
       delay: 60
 

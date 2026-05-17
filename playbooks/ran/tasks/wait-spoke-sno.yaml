@@ -49,7 +49,7 @@
 - name: Display number of policies found
   ansible.builtin.debug:
     msg: "Found {{ spoke_policies.resources | length }} policies in namespace {{ spoke_cluster }}"
-  
+
 - name: Wait for all policies to be Compliant
   kubernetes.core.k8s_info:
     api_version: policy.open-cluster-management.io/v1
@@ -57,10 +57,22 @@
     namespace: "{{ spoke_cluster }}"
     kubeconfig: "{{ kubeconfig }}"
   register: policies
-  until:
-  - policies.resources | length > 0
-  - (policies.resources | selectattr('status', 'defined') | selectattr('status.compliant', 'defined') | selectattr('status.compliant', 'ne', 'Compliant') | list | length) == 0
-  - (policies.resources | rejectattr('status', 'defined') | list | length) == 0
+  until: >
+    policies.resources | length > 0 and
+    (
+      policies.resources
+      | selectattr('status', 'defined')
+      | selectattr('status.compliant', 'defined')
+      | selectattr('status.compliant', 'ne', 'Compliant')
+      | list
+      | length
+    ) == 0 and
+    (
+      policies.resources
+      | rejectattr('status', 'defined')
+      | list
+      | length
+    ) == 0
   retries: 60
   delay: 60
 

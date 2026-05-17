@@ -28,10 +28,28 @@
       - "Failed: {{ _remove_failed | length }}"
       - ""
       - "REMOVED:"
-      - "{{ _remove_success | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✓ ') | indent(2, first=True) }}"
+      - >-
+        {{
+          _remove_success
+          | map(attribute='image_item')
+          | map(attribute='dest')
+          | list
+          | join('\n  ✓ ')
+          | indent(2, first=True)
+        }}
       - ""
       - "FAILED:"
-      - "{{ _remove_failed | map(attribute='image_item') | map(attribute='dest') | list | join('\n  ✗ ') | indent(2, first=True) if _remove_failed | length > 0 else '  (none)' }}"
+      - >-
+        {{
+          (
+            _remove_failed
+            | map(attribute='image_item')
+            | map(attribute='dest')
+            | list
+            | join('\n  ✗ ')
+            | indent(2, first=True)
+          ) if _remove_failed | length > 0 else '  (none)'
+        }}
       - "=========================================="
 
 - name: Fail if any images failed to remove

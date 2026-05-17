@@ -169,7 +169,7 @@
         dest: "{{ artifact_dest_dir }}/set_ocp_net_vars.sh"
         mode: "0770"
 
-    - name: Enable the NETCONF service
+    - name: Enable the NETCONF service  # noqa: ignore-errors
       vars:
         ansible_connection: ansible.netcommon.network_cli
         ansible_paramiko_proxy_command: "ssh -i {{ hostvars['localhost'].ansible_env.HOME }}/jump-key

@@ -36,7 +36,7 @@
 - name: Configure hub cluster to reach gitlab repo
   hosts: bastion
   gather_facts: false
-  become: no
+  become: false
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   vars:
@@ -108,7 +108,7 @@
           'Connection timed out' in gitlab_curl_check.stderr or
           'Could not resolve host' in gitlab_curl_check.stderr
       changed_when: false
-      
+
     - name: Display connectivity test results
       ansible.builtin.debug:
         msg: |

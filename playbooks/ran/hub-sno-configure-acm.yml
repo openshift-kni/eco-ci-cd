@@ -101,7 +101,7 @@
         ocp_hub_major_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}"
         ocp_hub_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
         ocp_hub_patch_version: "{{ cluster_info.resources[0].status.version.split('.')[2] }}"
-    
+
     - name: Validate required variables for HTTP store
       ansible.builtin.assert:
         that:
@@ -278,10 +278,10 @@
 
     - name: Set RHCOS version from ISO file name
       ansible.builtin.set_fact:
-        rhcos_version: "{{ rhcos_iso_files.files 
-        | map(attribute='path') 
-        | first 
-        | basename 
+        rhcos_version: "{{ rhcos_iso_files.files
+        | map(attribute='path')
+        | first
+        | basename
         | regex_replace('^rhcos-(.*?)-live-iso.*$', '\\1') }}"
 
     - name: Set RHCOS ISO URL
@@ -289,11 +289,11 @@
         rhcos_iso_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/{{ rhcos_iso_files.files | map(attribute='path') | first | basename }}"
 
     - name: Copy RHCOS ISO to http_store data directory
-      become: yes
+      become: true
       ansible.builtin.copy:
         src: "{{ item.path }}"
         dest: "{{ http_store_data_dir }}/{{ item.path | basename }}"
-        remote_src: yes
+        remote_src: true
         mode: '0644'
       loop: "{{ rhcos_iso_files.files }}"
       when: rhcos_iso_files.files | length > 0
@@ -369,38 +369,38 @@
         - mch_siteconfig_patch.status is defined
         - mch_siteconfig_patch.changed is false
       block:
-      - name: Get MulticlusterHub resource
-        kubernetes.core.k8s_info:
-          api_version: operator.open-cluster-management.io/v1
-          kind: MultiClusterHub
-          name: "{{ mch_cr_name }}"
-          namespace: "{{ mce_namespace }}"
-        register: mch_info
-        retries: 3
-        delay: 20
-        until: mch_info.resources | length > 0
+        - name: Get MulticlusterHub resource
+          kubernetes.core.k8s_info:
+            api_version: operator.open-cluster-management.io/v1
+            kind: MultiClusterHub
+            name: "{{ mch_cr_name }}"
+            namespace: "{{ mce_namespace }}"
+          register: mch_info
+          retries: 3
+          delay: 20
+          until: mch_info.resources | length > 0
 
-      - name: Find index of siteconfig component
-        set_fact:
-          siteconfig_component_index: "{{ idx }}"
-        loop: "{{ mch_info.resources[0].spec.overrides.components }}"
-        loop_control:
-          index_var: idx
-        when: item.name == "siteconfig"
+        - name: Find index of siteconfig component
+          ansible.builtin.set_fact:
+            siteconfig_component_index: "{{ idx }}"
+          loop: "{{ mch_info.resources[0].spec.overrides.components }}"
+          loop_control:
+            index_var: idx
+          when: item.name == "siteconfig"
 
-      - name: Enable siteconfig component in MCH
-        kubernetes.core.k8s_json_patch:
-          api_version: operator.open-cluster-management.io/v1
-          kind: MultiClusterHub
-          name: "{{ mch_cr_name }}"
-          namespace: "{{ mce_namespace }}"
-          patch:
-            - op: replace
-              path: /spec/overrides/components/{{ siteconfig_component_index }}/enabled
-              value: true
-        failed_when: false
-        register: mch_siteconfig_patch
-        when: siteconfig_component_index is defined
+        - name: Enable siteconfig component in MCH
+          kubernetes.core.k8s_json_patch:
+            api_version: operator.open-cluster-management.io/v1
+            kind: MultiClusterHub
+            name: "{{ mch_cr_name }}"
+            namespace: "{{ mce_namespace }}"
+            patch:
+              - op: replace
+                path: /spec/overrides/components/{{ siteconfig_component_index }}/enabled
+                value: true
+          failed_when: false
+          register: mch_siteconfig_patch
+          when: siteconfig_component_index is defined
 
     - name: Report siteconfig component not supported
       ansible.builtin.debug:

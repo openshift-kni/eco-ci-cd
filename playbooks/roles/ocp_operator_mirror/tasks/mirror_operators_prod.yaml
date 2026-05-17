@@ -50,13 +50,14 @@
     state: absent
 
 - name: Render production catalog index straight to file
+  changed_when: true
   ansible.builtin.shell: >-
     podman run --authfile=/tmp/auth.json --rm
     "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
     render /configs > "{{ ocp_operator_mirror_prod_catalog_json_path }}"
 
 - name: Set default channel for production operators
-  include_tasks: set_default_channel.yaml
+  ansible.builtin.include_tasks: set_default_channel.yaml
   loop: "{{ ocp_operator_mirror_operators_prod }}"
   loop_control:
     loop_var: operator

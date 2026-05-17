@@ -102,6 +102,7 @@
 
     - name: Convert JSON stream to YAML and save
       ansible.builtin.copy:
+        mode: '0644'
         dest: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
         content: |
           {% set raw = remote_json_file.content | b64decode | trim %}
@@ -159,8 +160,10 @@
       }}
 - name: Set entry_names from channel or from bundles
   ansible.builtin.set_fact:
-    entry_names: "{{ _channel_entries if (_channel_entries | length) > 0 else 
-      (docs | selectattr('schema','equalto','olm.bundle') | selectattr('package','equalto', package) | map(attribute='name') | list) }}"
+    entry_names: >-
+      {{ _channel_entries if (_channel_entries | length) > 0 else
+      (docs | selectattr('schema', 'equalto', 'olm.bundle') | selectattr('package', 'equalto', package) | map(attribute='name') | list)
+      }}
   changed_when: false
 
 - name: Ensure channel has entries
@@ -291,7 +294,11 @@
     loop_var: image
     label: "{{ image }}"
 
-- block:
+- name: Build source/destination image pairs for ACM/MCE catalog
+  when: >-
+    ('acm' in ((operator.catalog | default('')) | lower))
+    or ('mce' in ((operator.catalog | default('')) | lower))
+  block:
     - name: Reset image pairs for this FBC operator
       changed_when: false
       ansible.builtin.set_fact:
@@ -324,9 +331,6 @@
       loop_control:
         loop_var: image
         label: "{{ image }}"
-  when: >-
-    ('acm' in ((operator.catalog | default('')) | lower))
-    or ('mce' in ((operator.catalog | default('')) | lower))
 
 - name: Set image pairs
   ansible.builtin.set_fact:

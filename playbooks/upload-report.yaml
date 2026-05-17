@@ -168,6 +168,7 @@
         - Remove reporter project dir
 
     - name: Run make upload-report-portal
+      changed_when: true
       ansible.builtin.shell: |
         timeout 120 make upload-report-portal || true
       args:

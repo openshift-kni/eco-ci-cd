@@ -163,6 +163,7 @@
 
     - name: Download OCP release graph from releases.ci.openshift.org
       ansible.builtin.get_url:
+        mode: '0644'
         url: "https://amd64.ocp.releases.ci.openshift.org/graph?channel=stable-{{ ocp_version }}"
         dest: "{{ graph_file }}"
 
@@ -173,7 +174,16 @@
 
     - name: Set srcimage from graph node matching OCP version
       ansible.builtin.set_fact:
-        srcimage: "{{ ((graph_content.content | b64decode | from_json).nodes | selectattr('version', 'equalto', ocp_full_version) | list | first | default({})).get('payload', '') }}"
+        srcimage: >-
+          {{
+            (
+              (graph_content.content | b64decode | from_json).nodes
+              | selectattr('version', 'equalto', ocp_full_version)
+              | list
+              | first
+              | default({})
+            ).get('payload', '')
+          }}
 
     - name: Set digest from image reference (part after @)
       ansible.builtin.set_fact:
@@ -197,7 +207,10 @@
 
     - name: Get operator-registry image pull spec from payload
       ansible.builtin.command:
-        cmd: "oc adm release mirror -a {{ ocp_operator_mirror_pull_secret_path }} --insecure --from {{ srcimage }} --to {{ dest_repo }} --to-release-image {{ dest_repo }}:{{ocp_full_version }}-x86_64"
+        cmd: >-
+          oc adm release mirror -a {{ ocp_operator_mirror_pull_secret_path }}
+          --insecure --from {{ srcimage }} --to {{ dest_repo }}
+          --to-release-image {{ dest_repo }}:{{ ocp_full_version }}-x86_64
       register: operator_registry_cmd
       changed_when: false
       environment:

@@ -50,4 +50,3 @@
       collect_metrics_ci_lane: "{{ ran_ci_lane }}"
       collect_metrics_output_file: "{{ ran_output_file }}"
       collect_metrics_list: "{{ ran_metrics_list.split(',') }}"
-

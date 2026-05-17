@@ -10,8 +10,8 @@
         vms_to_destroy: "{{ vms_to_destroy | default([]) + [{'name': hostvars[item].hostname, 'disks': {'main': '1'}}] }}"
       loop: "{{ groups['masters'] }}"
 
-    - name: Ensure VMs do not already exist
-      include_role:
+    - name: Ensure VMs do not already exist # noqa: ignore-errors
+      ansible.builtin.include_role:
         name: redhatci.ocp.destroy_vms
         apply:
           delegate_to: hypervisor
@@ -24,13 +24,16 @@
 
     - name: Create empty qcow2 disk for VM
       ansible.builtin.command:
-        cmd: "qemu-img create -f qcow2 {{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2 {{ (hostvars[item].vm_spec_string | from_yaml).disk_size_gb }}G"
+        cmd: >-
+          qemu-img create -f qcow2
+          {{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2
+          {{ (hostvars[item].vm_spec_string | from_yaml).disk_size_gb }}G
         creates: "{{ libvirtd_disk_path }}/{{ hostvars[item].hostname }}_main.qcow2"
       loop: "{{ groups['masters'] }}"
       delegate_to: hypervisor
 
     - name: Create master VMs
-      include_role:
+      ansible.builtin.include_role:
         name: redhatci.ocp.create_vms
         apply:
           delegate_to: hypervisor
@@ -52,7 +55,7 @@
       loop_control:
         loop_var: master_item
 
-    - name: Ensure VMs are stopped for ZTP boot
+    - name: Ensure VMs are stopped for ZTP boot # noqa: ignore-errors
       community.libvirt.virt:
         name: "{{ hostvars[item].hostname }}"
         state: shutdown

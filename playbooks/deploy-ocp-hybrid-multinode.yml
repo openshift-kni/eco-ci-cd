@@ -768,6 +768,7 @@
   vars:
     internal_registry: "{{ cached_internal_registry | default(false) }}"
     trusted_ca_config_map_name: "external-registry"
+    enable_rhcos_10: false
   tasks:
     - name: Set Kubeconfig
       ansible.builtin.set_fact:
@@ -838,3 +839,48 @@
                 path: /spec/additionalTrustedCA
                 value:
                   name: "{{ trusted_ca_config_map_name }}"
+
+    # Temporary task to configure RHCOS 10 configuration for OCP 4.22+
+    # TODO: Remove this task after OCP 4.22+ is released
+    - name: Configure RHCOS 10
+      when: enable_rhcos_10 | bool and ocp_version_facts_minor | int >= 22
+      block:
+        - name: Enable TechPreview feature set on cluster FeatureGate
+          kubernetes.core.k8s_json_patch:
+            api: config.openshift.io/v1
+            kind: FeatureGate
+            kubeconfig: "{{ kubeconfig }}"
+            name: cluster
+            patch:
+              - op: replace
+                path: /spec/featureSet
+                value: TechPreviewNoUpgrade
+
+        - name: Get cluster OSImageStream
+          kubernetes.core.k8s_info:
+            api_version: machineconfiguration.openshift.io/v1alpha1
+            kind: OSImageStream
+            name: cluster
+            kubeconfig: "{{ kubeconfig }}"
+          register: os_image_stream
+          until: >-
+            os_image_stream is not failed and
+            os_image_stream.resources is defined and
+            os_image_stream.resources | length > 0 and
+            os_image_stream.resources[0].status.availableStreams is defined and
+            os_image_stream.resources[0].status.availableStreams | length > 0 and
+            os_image_stream.resources[0].status.availableStreams
+            | selectattr('name', 'equalto', 'rhel-10')
+            | list
+            | length > 0
+          retries: 30
+          delay: 30
+
+        - name: Configure MCP osImageStream to rhel-10
+          ansible.builtin.include_tasks: tasks/enable_rhcos_10.yaml
+          vars:
+            mcp_name: "{{ item }}"
+          loop:
+            - master
+            - worker
+

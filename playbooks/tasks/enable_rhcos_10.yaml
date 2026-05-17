@@ -1,0 +1,22 @@
+---
+# Temporary task to configure RHCOS 10 configuration for OCP 4.22+
+# TODO: Remove this task after OCP 4.22+ is released
+- name: Set MCP osImageStream to rhel-10
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    merge_type:
+      - merge
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfigPool
+      metadata:
+        name: "{{ mcp_name }}"
+      spec:
+        osImageStream:
+          name: rhel-10
+
+- name: Wait for MCP osImageStream to be set to rhel-10
+  import_tasks: cnf/tasks/wait_for_mcp.yaml
+  vars:
+    mcp_name: "{{ mcp_name }}"

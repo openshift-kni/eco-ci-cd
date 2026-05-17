@@ -1,7 +1,6 @@
 - name: Nrop Deploy testing
   hosts: bastion
   gather_facts: false
-  vars:
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
 

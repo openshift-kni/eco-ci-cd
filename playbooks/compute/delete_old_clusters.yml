@@ -40,7 +40,13 @@
 
     - name: Set VM disks to delete matching CLUSTER_NAME
       ansible.builtin.set_fact:
-        vm_disks_to_delete: "{{ vm_disks_result.files | map(attribute='path') | select('match', '(?i).*' + cluster_name + '.*_(master|worker)[0-9].*.qcow2') | list }}"
+        vm_disks_to_delete: >-
+          {{
+            vm_disks_result.files
+            | map(attribute='path')
+            | select('match', '(?i).*' + cluster_name + '.*_(master|worker)[0-9].*.qcow2')
+            | list
+          }}
 
     - name: Set agent images files to delete
       ansible.builtin.set_fact:

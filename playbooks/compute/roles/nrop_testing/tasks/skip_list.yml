@@ -68,7 +68,7 @@
 - name: Set scope for Non-reboot tests
   ansible.builtin.set_fact:
     scope: "{{ topology_manager_scope }}"
-  when: run_reboot_tests_only | bool == false
+  when: not run_reboot_tests_only | bool
 
 - name: Create Test dir
   ansible.builtin.file:

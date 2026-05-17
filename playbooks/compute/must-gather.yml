@@ -1,4 +1,4 @@
-- name: Setup NTO gotests
+- name: Collect NTO must gather
   hosts: bastion
   gather_facts: false
   vars:

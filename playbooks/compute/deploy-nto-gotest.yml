@@ -10,6 +10,7 @@
     gotest_dir: /tmp/gotest
     nto_repo: https://github.com/openshift/cluster-node-tuning-operator
     day0_installation: false
+    must_gather_dir: /must-gather
   tasks:
     - name: Ensure required variables are defined
       ansible.builtin.assert:
@@ -17,10 +18,33 @@
           - cluster_name is defined
           - kubeconfig is defined
 
-    - name: Create must gather directory
-      ansible.builtin.include_tasks: ./nto/roles/configurecluster/tasks/must_gather.yml
-      vars:
-        dir_path: "{{ must_gather_dir }}"
+    - name: Ensure test directory does not exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      loop:
+        - "{{ gotest_dir }}"
+        - "{{ artifact_dir }}"
+        - "{{ must_gather_dir }}"
+
+    - name: Create new directory
+      ansible.builtin.file:
+        state: directory
+        path: "{{ item }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0775'
+      become: true
+      loop:
+        - "{{ must_gather_dir }}"
+        - "{{ artifact_dir }}"
+
+    - name: Collect Must Gather
+      ansible.builtin.shell: |
+        oc adm must-gather --kubeconfig={{ kubeconfig }} --dest-dir={{ must_gather_dir }}
+      register: must_gather
+      changed_when: must_gather.rc == 0
 
     - name: Get Cluster version
       kubernetes.core.k8s_info:
@@ -43,22 +67,6 @@
       ansible.builtin.set_fact:
         sno_cluster: true
       when: nodes_info.resources | length == 1
-
-    - name: Ensure test directory does not exist
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      become: true
-      loop:
-        - "{{ gotest_dir }}"
-        - "{{ artifact_dir }}"
-
-    - name: Ensure artifact directory is present
-      ansible.builtin.file:
-        mode: "0766"
-        path: "{{ artifact_dir }}"
-        state: directory
-        recurse: true
 
     - name: Clone NTO repository
       ansible.builtin.git:

@@ -1,0 +1,69 @@
+---
+- name: Install Libvirt
+  become: true
+  block:
+
+  - name: Install libvirt pacakges
+    ansible.builtin.dnf:
+      name:
+      - libvirt
+      - libvirt-daemon-driver-qemu
+      - qemu-kvm
+      - virt-viewer
+      state: present
+
+  - name: Make sure libvirt service unit is running
+    ansible.builtin.systemd_service:
+      name: libvirtd
+      state: started
+      enabled: true
+
+  - name: Add 'ansible_user_id' user to libvirt group
+    when: ansible_user_id != 'root'
+    ansible.builtin.user:
+      name: "{{ ansible_user_id }}"
+      groups: libvirt,qemu
+      append: true
+
+- name: Install kcli
+  become: true
+  block:
+
+  - name: Add KCLI package repository
+    command: dnf -y copr enable karmab/kcli
+
+  - name: Install kcli pacakges
+    ansible.builtin.dnf:
+      name: kcli
+      state: latest
+
+- name: Install oc tool
+  when: kcli_wrp_oc.url is defined
+  block:
+
+  - name: Check if oc tool is installed
+    ansible.builtin.command: which oc
+    changed_when: false
+    failed_when: _oc_installed.rc not in [0,1]
+    register: _oc_installed
+
+  - name: Install oc tool
+    become: true
+    when: _oc_installed.rc not in [ 0 ]
+    ansible.builtin.unarchive:
+      src: "{{ kcli_wrp_oc.url }}"
+      dest: "{{ kcli_wrp_oc.dest | default('/usr/bin') }}"
+      mode: "0755"
+      remote_src: yes
+      include:
+      - oc
+      - kubectl
+
+- name: Install HAProxy pacakges
+  become: true
+  when: kcli_wrp_haproxy is defined
+  ansible.builtin.dnf:
+    name:
+    - haproxy
+    state: present
+

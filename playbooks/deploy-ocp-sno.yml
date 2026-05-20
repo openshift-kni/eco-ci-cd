@@ -543,7 +543,7 @@
                'auths': pull_secret.auths | dict2items
                  | rejectattr('key', 'equalto', 'cloud.openshift.com')
                  | items2dict
-             }, recursive=True) }}
+             }) }}
 
     - name: Generate deployment manifests for OpenShift installation
       when: (disconnected | bool) is false

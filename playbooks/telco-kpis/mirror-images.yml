@@ -10,12 +10,12 @@
 #   - Target registry reachable
 #
 # Usage:
-#   ansible-playbook playbooks/telco-kpi/mirror-images.yml \
+#   ansible-playbook playbooks/telco-kpis/mirror-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "images='[{\"source\":\"quay.io/org/image:tag\",\"dest\":\"namespace/image:tag\"}]'"
 #
 #   # With pull secret
-#   ansible-playbook playbooks/telco-kpi/mirror-images.yml \
+#   ansible-playbook playbooks/telco-kpis/mirror-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "images='[...]' pull_secret_string=$(cat ~/.docker/config.json | base64 -w0)"
 #

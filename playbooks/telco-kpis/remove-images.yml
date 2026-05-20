@@ -9,12 +9,12 @@
 #   - Target registry reachable
 #
 # Usage:
-#   ansible-playbook playbooks/telco-kpi/remove-images.yml \
+#   ansible-playbook playbooks/telco-kpis/remove-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "images='[{\"dest\":\"namespace/image:tag\"}]'"
 #
 #   # Remove multiple images
-#   ansible-playbook playbooks/telco-kpi/remove-images.yml \
+#   ansible-playbook playbooks/telco-kpis/remove-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars 'images=[{"dest":"ran-test/old-image:v1"},{"dest":"ran-test/deprecated:latest"}]'
 #

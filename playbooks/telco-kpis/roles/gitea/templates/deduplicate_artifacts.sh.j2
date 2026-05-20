@@ -1,0 +1,62 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# Deduplicate artifact directories: keep only latest run per test, rename to remove timestamps
+# Pattern: {test_name}-{spoke_cluster}-{YYYYMMDD}-{HHMMSS} -> {test_name}
+
+set -euo pipefail
+
+# Associative arrays for tracking latest runs
+declare -A latest_dirs
+declare -A latest_timestamps
+
+# Process all matching directories
+for dir in *-{{ spoke_cluster }}-*; do
+  if [ ! -d "$dir" ]; then
+    continue
+  fi
+
+  # Extract test name and timestamp using regex
+  if [[ "$dir" =~ ^(.+)-{{ spoke_cluster }}-([0-9]{8}-[0-9]{6})$ ]]; then
+    test_name="${BASH_REMATCH[1]}"
+    timestamp="${BASH_REMATCH[2]}"
+  else
+    echo "Warning: Directory '$dir' does not match expected pattern, skipping"
+    continue
+  fi
+
+  # Track latest run for each test name (string comparison works for YYYYMMDD-HHMMSS format)
+  if [ -z "${latest_timestamps[$test_name]:-}" ] || [ "$timestamp" \> "${latest_timestamps[$test_name]}" ]; then
+    # If we already tracked a directory for this test, delete it (it's older)
+    if [ -n "${latest_dirs[$test_name]:-}" ]; then
+      echo "Deleting older run: ${latest_dirs[$test_name]}"
+      rm -rf "${latest_dirs[$test_name]}"
+    fi
+    # Update tracking with this newer directory
+    latest_dirs[$test_name]="$dir"
+    latest_timestamps[$test_name]="$timestamp"
+  else
+    # Current directory is older than what we've already seen, delete it
+    echo "Deleting older run: $dir"
+    rm -rf "$dir"
+  fi
+done
+
+# Rename latest runs to remove timestamps
+for test_name in "${!latest_dirs[@]}"; do
+  dir="${latest_dirs[$test_name]}"
+
+  # Only rename if directory name differs from test name
+  if [ "$dir" != "$test_name" ]; then
+    # Remove target directory if it already exists (cleanup from previous runs)
+    if [ -d "$test_name" ]; then
+      echo "Removing pre-existing directory: $test_name"
+      rm -rf "$test_name"
+    fi
+
+    # Rename latest run to just the test name
+    echo "Renaming latest run: $dir -> $test_name"
+    mv "$dir" "$test_name"
+  fi
+done
+
+echo "Deduplication complete. Kept latest runs for: ${!latest_dirs[*]}"

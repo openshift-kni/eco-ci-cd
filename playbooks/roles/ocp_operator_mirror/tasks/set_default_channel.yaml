@@ -3,12 +3,15 @@
   when: operator.catalog == ocp_operator_mirror_prod_redhat_catalog_name
   block:
     - name: Gather default channels for each operator from production catalog
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail
-          jq -r --arg n "{{ operator.name }}"
-          'select(.schema=="olm.package" and .name==$n) | .defaultChannel'
-          "{{ mirror_catalog_json_path }}"
+      ansible.builtin.command:
+        argv:
+          - jq
+          - -r
+          - --arg
+          - n
+          - "{{ operator.name }}"
+          - 'select(.schema=="olm.package" and .name==$n) | .defaultChannel'
+          - "{{ mirror_catalog_json_path }}"
       register: default_channel
       changed_when: false
 

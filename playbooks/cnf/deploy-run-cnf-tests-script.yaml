@@ -56,6 +56,7 @@
     features: "sctp"
     role_worker_cnf: "workercnf"
     latest_minor_version: 21
+    cluster_disconnected: false
   tasks:
 
     - name: Gather cluster network information
@@ -66,6 +67,12 @@
         api: operator.openshift.io/v1
         kind: Network
         name: cluster
+
+    - import_tasks: tasks/mirror_images_if_disconnected.yaml
+      vars:
+        image_tag_mirror_set_name: "network-metrics-daemon-images"
+        test_images:
+          - "{{ network_metric_daemon_image }}"
 
     - name: Extract OpenShift version details
       ansible.builtin.set_fact:

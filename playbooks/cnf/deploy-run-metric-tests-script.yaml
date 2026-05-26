@@ -59,13 +59,14 @@
         kind: Network
         name: cluster
 
-    - import_tasks: tasks/mirror_images_if_disconnected.yaml
+    - name: Mirror images if disconnected
+      ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
       when: cluster_info.resources[0].spec.clusterNetwork | length == 1
       vars:
         image_tag_mirror_set_name: "network-metrics-daemon-images"
         test_images:
           - "{{ network_metric_daemon_image }}"
-            
+
     - name: Extract OpenShift version details
       ansible.builtin.set_fact:
         version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"

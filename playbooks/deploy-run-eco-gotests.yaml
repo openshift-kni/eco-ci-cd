@@ -72,6 +72,7 @@
     eco_cnf_core_net_switch_pass: "{{ hostvars['switch'].ansible_password | default(undefined) }}"
     mirror_registry: ""
     eco_worker_label: workercnf
+    cluster_disconnected: false
   tasks:
     - name: Ensure required variables are defined
       ansible.builtin.assert:
@@ -164,6 +165,31 @@
         - name: Set tag to latest
           ansible.builtin.set_fact:
             eco_gotests_tag: latest
+
+    - name: Build list of images to mirror
+      when: labels | default('') | length > 0 and labels | lower | contains('net')
+      ansible.builtin.set_fact:
+        test_images: "{{ test_images | default([]) + [_image] }}"
+      vars:
+        _image: >-
+          {{
+            (additional_test_env_variables | default('')
+            | regex_findall('-e ' ~ item ~ '=([^ ]+)'))
+            | flatten
+            | first
+            | default('', true)
+          }}
+      loop:
+        - ECO_CNF_CORE_NET_FRR_IMAGE
+        - ECO_CNF_CORE_NET_TEST_CONTAINER
+        - ECO_CNF_CORE_NET_DPDK_TEST_CONTAINER
+
+    - name: Mirror images if disconnected
+      ansible.builtin.import_tasks: cnf/tasks/mirror_images_if_disconnected.yaml
+      when: test_images | default([]) | length > 0
+      vars:
+        image_tag_mirror_set_name: eco-gotests-images
+        test_images: "{{ test_images }}"
 
     - name: Prepare execute shell script
       ansible.builtin.template:

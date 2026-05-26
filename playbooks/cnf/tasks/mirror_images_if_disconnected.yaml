@@ -16,11 +16,18 @@
   block:
     - name: Set images to mirror
       ansible.builtin.set_fact:
-        images:
-          - source: "{{ item }}"
-            dest: "{{ item.split('/')[-1] }}"
-      loop: "{{ test_images }}"
-      
+        images: >-
+          {{
+            images | default([])
+            + [{
+                'source': item,
+                'dest': item.split('/')[-1]
+              }]
+          }}
+      loop: "{{ test_images | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+
     - name: Mirror test images to disconnected registry
       ansible.builtin.include_role:
         name: container_image_mirror
@@ -33,7 +40,7 @@
         container_image_mirror_dest_tls_verify: "{{ dest_tls_verify | default(false) }}"
         container_image_mirror_use_pull_secret: "{{ use_pull_secret | default(false) }}"
         container_image_mirror_pull_secret_string: "{{ pull_secret_string }}"
-  
+
     - name: Build repositoryDigestMirrors from images list
       ansible.builtin.set_fact:
         test_image_mirrors: >-

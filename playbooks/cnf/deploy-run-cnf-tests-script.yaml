@@ -68,12 +68,6 @@
         kind: Network
         name: cluster
 
-    - import_tasks: tasks/mirror_images_if_disconnected.yaml
-      vars:
-        image_tag_mirror_set_name: "network-metrics-daemon-images"
-        test_images:
-          - "{{ network_metric_daemon_image }}"
-
     - name: Extract OpenShift version details
       ansible.builtin.set_fact:
         version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
@@ -281,6 +275,14 @@
         - name: Print cnf_tests_version image version
           ansible.builtin.debug:
             msg: dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}
+
+        - name: Mirror images if disconnected
+          ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
+          vars:
+            image_tag_mirror_set_name: "cnf-tests-images"
+            test_images:
+              - "{{ container_registry }}/dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}"
+              - "{{ container_registry }}/cnf-tests-rhel{{ '8' if (version.split('.')[1] | int < 20) else '9' }}:v{{ containers_version }}"
 
         - name: Prepare execute shell script
           ansible.builtin.template:

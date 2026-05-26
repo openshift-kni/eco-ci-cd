@@ -47,6 +47,7 @@
     metric_git_repo: "https://github.com/openshift/network-metrics-daemon.git"
     network_metric_daemon_image: quay.io/centos/centos:7
     network_metric_daemon_report_path: /tmp/nmd_report/nmd_report.xml
+    cluster_disconnected: false
   tasks:
 
     - name: Gather cluster network information
@@ -57,6 +58,14 @@
         api: operator.openshift.io/v1
         kind: Network
         name: cluster
+
+    - name: Mirror images if disconnected
+      ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
+      when: cluster_info.resources[0].spec.clusterNetwork | length == 1
+      vars:
+        image_tag_mirror_set_name: "network-metrics-daemon-images"
+        test_images:
+          - "{{ network_metric_daemon_image }}"
 
     - name: Extract OpenShift version details
       ansible.builtin.set_fact:

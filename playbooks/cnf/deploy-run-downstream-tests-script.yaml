@@ -60,6 +60,7 @@
     switch_user: "{{ hostvars['switch'].ansible_user }}"
     switch_address: "{{ hostvars['switch'].ansible_host }}"
     switch_pass: "{{ hostvars['switch'].ansible_password }}"
+    cluster_disconnected: false
   tasks:
     - name: Ensure required variables are defined
       ansible.builtin.assert:
@@ -132,6 +133,14 @@
         go install {{ ginkgo_link | default('github.com/onsi/ginkgo/v2/ginkgo@v2.23.3') }}
       environment:
         PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+    - name: Mirror images if disconnected
+      ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
+      vars:
+        image_tag_mirror_set_name: "cnf-tests-images"
+        test_images:
+          - "{{ frr_image_link }}"
+          - "{{ network_test_container_link }}"
 
     - name: Prepare execute shell script
       ansible.builtin.template:

@@ -1,0 +1,71 @@
+---
+- name: Detect cluster network IP family
+  when: cluster_info.resources[0].spec.clusterNetwork | length == 1
+  block:
+    - name: Detect cluster network IP family
+      ansible.builtin.set_fact:
+        cluster_network_ip_family: "{{ 'ipv6' if (':' in cluster_info.resources[0].spec.clusterNetwork[0].cidr) else 'ipv4' }}"
+
+    - name: Set disconnected flag
+      when: cluster_network_ip_family == 'ipv6'
+      ansible.builtin.set_fact:
+        cluster_disconnected: true
+
+- name: Mirror test images to disconnected registry and configure cluster mirroring
+  when: cluster_disconnected
+  block:
+    - name: Set images to mirror
+      ansible.builtin.set_fact:
+        images: >-
+          {{
+            images | default([])
+            + [{
+                'source': item,
+                'dest': item.split('/')[-1]
+              }]
+          }}
+      loop: "{{ test_images | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Mirror test images to disconnected registry
+      ansible.builtin.include_role:
+        name: container_image_mirror
+      vars:
+        container_image_mirror_operation: mirror
+        container_image_mirror_images: "{{ images }}"
+        container_image_mirror_registry_host: "{{ disconnected_registry_url }}"
+        container_image_mirror_registry_port: "{{ disconnected_registry_port }}"
+        container_image_mirror_registry_namespace: "tests/"
+        container_image_mirror_dest_tls_verify: "{{ dest_tls_verify | default(false) }}"
+        container_image_mirror_use_pull_secret: "{{ use_pull_secret | default(false) }}"
+        container_image_mirror_pull_secret_string: "{{ pull_secret_string }}"
+
+    - name: Build repositoryDigestMirrors from images list
+      ansible.builtin.set_fact:
+        test_image_mirrors: >-
+          {{
+            test_image_mirrors | default([])
+            + [{
+                'source': item.source | regex_replace('[:@].*$', ''),
+                'mirrors': [
+                  disconnected_registry_url ~ ':' ~ disconnected_registry_port
+                  ~ '/tests/' ~ (item.source | regex_replace('[:@].*$', '') | regex_replace('^.*/', ''))
+                ]
+              }]
+          }}
+      loop: "{{ images }}"
+      loop_control:
+        label: "{{ item.source }}"
+
+    - name: Apply ImageTagMirrorSet for test images
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: ImageTagMirrorSet
+          metadata:
+            name: "{{ image_tag_mirror_set_name }}"
+          spec:
+            imageTagMirrors: "{{ test_image_mirrors }}"

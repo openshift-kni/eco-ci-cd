@@ -32,12 +32,23 @@
     force: true
 
 - name: Pull FBC index image
+  register: image_info
   containers.podman.podman_image:
     name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
     tag: "{{ fbc_tag }}"
     state: present
     force: true
     authfile: "{{ ocp_operator_mirror_pull_secret_path }}"
+
+- name: Print FBC index image digest # noqa: ignore-errors
+  failed_when: false
+  ignore_errors: true
+  ansible.builtin.debug:
+    msg: >-
+      FBC {{
+      operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base)
+      }}:{{ fbc_tag }} index image digest:
+      {{ image_info.image[0].Digest }}
 
 - name: Mirror FBC index image to internal registry (if missing)
   changed_when: true

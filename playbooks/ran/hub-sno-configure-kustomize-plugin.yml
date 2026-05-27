@@ -87,11 +87,16 @@
         mode: "0777"
 
     - name: Create temporary container for ztp-site-generator extraction
+      register: container_info
       containers.podman.podman_container:
         name: "ztp-extract-{{ site_generate_image.split(':')[-1] }}"
         image: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}"
         authfile: /etc/containers/auth.json
         state: created
+
+    - name: Print ztp-site-generator image digest
+      ansible.builtin.debug:
+        msg: "ztp-site-generator image digest: {{ container_info.container.ImageDigest }}"
 
     - name: Copy /home/ztp content from container to host workdir
       containers.podman.podman_container_copy:

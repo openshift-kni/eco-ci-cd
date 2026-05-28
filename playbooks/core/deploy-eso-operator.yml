@@ -334,7 +334,7 @@
         ocp_operator_mirror_operators: "{{ operators }}"
         ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
         ocp_operator_mirror_skip_internal_registry_cleanup: "{{ skip_registry_cleanup | default(true) }}"
-        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default('') }}"
+        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default(omit) }}"
         ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base | default(omit) }}"
         ocp_operator_mirror_art_images_share: "{{ art_share_image | default(omit) }}"
 

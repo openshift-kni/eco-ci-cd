@@ -192,7 +192,6 @@
       when: test_images | default([]) | length > 0
       vars:
         image_tag_mirror_set_name: eco-gotests-images
-        test_images: "{{ test_images }}"
 
     - name: Prepare execute shell script
       ansible.builtin.template:

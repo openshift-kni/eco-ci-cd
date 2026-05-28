@@ -30,7 +30,10 @@
 # - disconnected (bool): set true to mirror & use internal registry, default is false
 # - mirror_only (bool): set true to only mirror operators without installing them, default is false
 # - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
-# - version (str): OCP major.minor used to pick catalog index images (e.g., 4.19)
+# - version (str): OCP version used to pick catalog index images. Supports both:
+#     - Short format: major.minor (e.g., "4.19")
+#     - Full pull spec: (e.g., "quay.io/openshift-release-dev/ocp-release:4.22.0-rc.5-x86_64")
+#     When a full pull spec is provided, the major.minor version is automatically extracted.
 # - ocp_operator_mirror_skip_internal_registry_cleanup (bool): set true to preserve existing mirrored
 #     images in the internal registry (skips registry storage reset before mirroring), default is false
 # - operators (list or JSON string): operator specs with fields such as:
@@ -54,6 +57,14 @@
 # disconnected=true \
 # mirror_only=true \
 # version="4.16" operators=[
+# {"name":"sriov-network-operator","catalog":"redhat-operators","nsname":"openshift-sriov-network-operator"},\
+# {"name":"metallb-operator","catalog":"redhat-operators","nsname":"metallb-system","channel":"stable"}]
+
+# Example 3: Using full pull spec for version (automatically extracts major.minor)
+# ansible-playbook ./playbooks/deploy-ocp-operators.yaml -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+# --extra-vars 'kubeconfig="/path/to/kubeconfig" \
+# disconnected=true \
+# version="quay.io/openshift-release-dev/ocp-release:4.22.0-rc.5-x86_64" operators=[
 # {"name":"sriov-network-operator","catalog":"redhat-operators","nsname":"openshift-sriov-network-operator"},\
 # {"name":"metallb-operator","catalog":"redhat-operators","nsname":"metallb-system","channel":"stable"}]
 
@@ -108,6 +119,83 @@
           - openshift
         state: present
 
+    - name: Resolve OCP version with fallback strategy
+      block:
+        # First, normalize version to string if provided
+        - name: Normalize version to string
+          when: version is defined and version != ""
+          ansible.builtin.set_fact:
+            version_string: "{{ version | string }}"
+
+        # First, try to use the provided version if available
+        - name: Parse version from pull spec if provided
+          when: version is defined and version
+          block:
+            - name: Validate Version String
+              when: version_string is ansible.builtin.match('^[0-9]+\\.[0-9]+\\.[0-9]+.*$')
+              ansible.builtin.fail:
+                msg: >-
+                  "Release candidate version is not supported,
+                  please provide a full pull spec i.e quay.io/openshift-release-dev/ocp-release:4.22.0-rc.5-x86_64"
+
+            - name: Extract version facts from pull spec
+              ansible.builtin.include_role:
+                name: ocp_version_facts
+              vars:
+                ocp_version_facts_release: "{{ version_string }}"
+
+            - name: Set extracted version for operator mirror
+              ansible.builtin.set_fact:
+                extracted_version: "{{ ocp_version_facts_major }}.{{ ocp_version_facts_minor }}"
+
+            - name: Display extracted version from pull spec
+              ansible.builtin.debug:
+                msg: "Using version {{ extracted_version }} from pull spec {{ version_string }}  and parsed release {{ ocp_version_facts_parsed_release }}"
+
+        - name: Set version for short format
+          when: version is defined and version != "" and (version_string | length <= 7)
+          block:
+            - name: Set version directly from short format
+              ansible.builtin.set_fact:
+                extracted_version: "{{ version_string | regex_replace('^([0-9]+\\.[0-9]+).*', '\\1') }}"
+
+            - name: Display using provided version
+              ansible.builtin.debug:
+                msg: "Using provided version {{ extracted_version }}"
+
+        # Fallback: extract from cluster only if version was not provided or is empty
+        - name: Extract OCP version from cluster as fallback
+          when: version is not defined or version == ""
+          block:
+            - name: Get cluster version from OpenShift cluster
+              kubernetes.core.k8s_info:
+                api_version: config.openshift.io/v1
+                kind: ClusterVersion
+                name: version
+              register: cluster_version_info
+              failed_when: false
+
+            - name: Extract version from cluster
+              when: cluster_version_info.resources is defined and cluster_version_info.resources | length > 0
+              ansible.builtin.set_fact:
+                extracted_version: >-
+                  {{ cluster_version_info.resources[0].status.desired.version.split('.')[0:2] | join('.') }}
+
+            - name: Display extracted cluster version
+              when: extracted_version is defined
+              ansible.builtin.debug:
+                msg: "Extracted version {{ extracted_version }} from running cluster"
+
+            - name: Fail if version could not be determined
+              when: cluster_version_info.resources is not defined or cluster_version_info.resources | length == 0
+              ansible.builtin.fail:
+                msg: "Unable to determine OCP version: 'version' variable not provided and cluster is not accessible"
+
+      rescue:
+        - name: Handle version resolution failure
+          ansible.builtin.fail:
+            msg: "Failed to resolve OCP version. Please provide 'version' variable (e.g., version='4.17' or version='quay.io/...')"
+
     - name: Mirror Operators to internal registry for disconnected installation
       when: disconnected | bool
       ansible.builtin.include_role:
@@ -117,7 +205,7 @@
         ocp_operator_mirror_registry_user: "{{ ansible_user }}"
         ocp_operator_mirror_registry_password: "{{ ansible_password }}"
         ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode }}"
-        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_version: "{{ extracted_version }}"
         ocp_operator_mirror_operators: "{{ operators }}"
         ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
         ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base }}"
@@ -142,7 +230,7 @@
       ansible.builtin.include_role:
         name: ocp_operator_deployment
       vars:
-        ocp_operator_deployment_version: "{{ version }}"
+        ocp_operator_deployment_version: "{{ extracted_version }}"
         ocp_operator_deployment_operators: "{{ operator_input }}"
         ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
         ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"

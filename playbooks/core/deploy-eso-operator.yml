@@ -214,7 +214,7 @@
             state: absent
           loop: >-
             {{ _eso_csvs.resources
-               | selectattr('metadata.name', 'match', 'external-secrets-operator')
+               | selectattr('metadata.name', 'search', 'external-secrets-operator')
                | list }}
           loop_control:
             label: "{{ item.metadata.name }}"
@@ -424,8 +424,8 @@
           register: _csv_info
           until:
             - _csv_info.resources | length > 0
-            - _csv_info.resources | selectattr('metadata.name', 'match', 'external-secrets-operator') | list | length > 0
-            - (_csv_info.resources | selectattr('metadata.name', 'match', 'external-secrets-operator') | list | first).status.phase == 'Succeeded'
+            - _csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | length > 0
+            - (_csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | first).status.phase == 'Succeeded'
           retries: 30
           delay: 10
 

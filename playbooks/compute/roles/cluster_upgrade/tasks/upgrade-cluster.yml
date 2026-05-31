@@ -86,8 +86,8 @@
   until:
     - not all_nodes.failed
     - all_nodes.resources | map(attribute='spec.unschedulable', default=false) | select('equalto', true) | list | length == 0
-  retries: 150
-  delay: 10
+  retries: "{{ upgrade_timeout_retries }}"
+  delay: "{{ upgrade_delay }}"
   failed_when: all_nodes.resources | selectattr('spec.unschedulable', 'equalto', true) | list | length > 0
 
 # ---------------------------------------------------------

@@ -5,7 +5,7 @@
 # before deploying to production.
 
 # -----------------------------------------------------------------------------
-# Playbook Name: Set up eco-gotests PTP 4-cycle configuration test
+# Playbook Name: Set up eco-gotests RAN PTP test
 # Description  : This playbook prepares a bastion host to run eco-gotests
 #                PTP tests across 4 PTP configurations. It mirrors required
 #                images to a disconnected registry, pulls the eco-gotests
@@ -57,7 +57,7 @@
 # mirror_registry               # string: Disconnected registry URL host:port
 # additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
 
-- name: Set up eco-gotests PTP 4-cycle configuration test
+- name: Set up eco-gotests RAN PTP test
   hosts: bastion
   gather_facts: true
   vars:

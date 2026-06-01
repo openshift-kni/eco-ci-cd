@@ -2,7 +2,6 @@
 - name: Validate required variables
   ansible.builtin.assert:
     that:
-      - collect_metrics_spoke_kubeconfig is defined
       - collect_metrics_ci_lane is defined
       - collect_metrics_list is defined
       - collect_metrics_output_file is defined
@@ -15,8 +14,7 @@
     'hub_general_ocp' in collect_metrics_list or
     'acm' in collect_metrics_list or
     'talm' in collect_metrics_list or
-    'gitops' in collect_metrics_list or
-    'local_storage' in collect_metrics_list
+    'gitops' in collect_metrics_list
   ansible.builtin.assert:
     that:
       - collect_metrics_hub_kubeconfig is defined
@@ -27,6 +25,10 @@
 - name: Initialize collected metrics
   ansible.builtin.set_fact:
     _collect_metrics_entries: []
+
+- name: Collect general OCP metrics
+  when: "'general_ocp' in collect_metrics_list"
+  ansible.builtin.include_tasks: general_ocp.yml
 
 - name: Collect spoke general OCP metrics
   when: "'spoke_general_ocp' in collect_metrics_list"
@@ -67,6 +69,13 @@
 - name: Collect logging metrics
   when: "'logging' in collect_metrics_list"
   ansible.builtin.include_tasks: logging.yml
+
+- name: Collect containers digests
+  loop: "{{ collect_containers_list | default([]) }}"
+  loop_control:
+    loop_var: container_item
+  when: "container_item is defined and container_item | length > 0"
+  ansible.builtin.include_tasks: containers_digests.yml
 
 - name: Append CI lane to metrics
   ansible.builtin.set_fact:

@@ -5,7 +5,7 @@
       kubernetes.core.k8s_info:
         api_version: operators.coreos.com/v1alpha1
         kind: Subscription
-        name: sriov-fec
+        name: sriov-fec-subscription
         namespace: vran-acceleration-operators
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _sriov_fec_sub

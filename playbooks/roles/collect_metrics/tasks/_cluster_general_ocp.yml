@@ -1,0 +1,101 @@
+---
+- name: Collect version {{ _collect_metrics_ocp_display_prefix }}
+  block:
+    - name: Get version {{ _collect_metrics_ocp_display_prefix }}
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
+      register: _cluster_version
+
+    - name: Set version facts
+      ansible.builtin.set_fact:
+        _ocp_build: "{{ _cluster_version.resources[0].status.desired.version }}"
+        _ocp_version: "{{ _cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+
+    - name: Append OCP version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             [_collect_metrics_ocp_key_prefix + 'ocp_build:' + _ocp_build,
+              _collect_metrics_ocp_key_prefix + 'ocp_version:' + _ocp_version] }}
+
+    - name: Display version
+      ansible.builtin.debug:
+        msg: "{{ _collect_metrics_ocp_display_prefix }}: {{ _ocp_build }} ({{ _ocp_version }})"
+
+  rescue:
+    - name: Handle OCP version collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect {{ _collect_metrics_ocp_scope }}OCP version, setting to N/A"
+
+    - name: Append default OCP version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             [_collect_metrics_ocp_key_prefix + 'ocp_build:N/A',
+              _collect_metrics_ocp_key_prefix + 'ocp_version:N/A'] }}
+
+- name: Collect cluster name
+  block:
+    - name: Get cluster infrastructure
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+        kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
+      register: _infra
+
+    - name: Append cluster name to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             [_collect_metrics_ocp_key_prefix + 'cluster_name:' + _infra.resources[0].status.infrastructureName] }}
+
+    - name: Display cluster name
+      ansible.builtin.debug:
+        msg: "{{ _collect_metrics_ocp_cluster_display_prefix }}: {{ _infra.resources[0].status.infrastructureName }}"
+
+  rescue:
+    - name: Handle cluster name collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect {{ _collect_metrics_ocp_scope }}cluster name, setting to N/A"
+
+    - name: Append default cluster name to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries + [_collect_metrics_ocp_key_prefix + 'cluster_name:N/A'] }}
+
+- name: Collect worker kernel versions
+  when: _collect_metrics_ocp_collect_worker_kernels | bool
+  block:
+    - name: Get worker nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
+        label_selectors:
+          - node-role.kubernetes.io/worker
+      register: _worker_nodes
+
+    - name: Append kernel version for each worker
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: >-
+          {{ _collect_metrics_entries +
+             [_collect_metrics_ocp_key_prefix + item.metadata.name + '_kernel_version:' + item.status.nodeInfo.kernelVersion] }}
+      loop: "{{ _worker_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Display worker kernel versions
+      ansible.builtin.debug:
+        msg: "{{ item.metadata.name }}: {{ item.status.nodeInfo.kernelVersion }}"
+      loop: "{{ _worker_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+  rescue:
+    - name: Handle worker kernel version collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect {{ _collect_metrics_ocp_scope }}worker kernel versions, skipping"

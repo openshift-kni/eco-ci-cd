@@ -35,18 +35,83 @@
     - name: Validate RAN required variables
       ansible.builtin.assert:
         that:
-          - ran_spoke_kubeconfig is defined
           - ran_hub_kubeconfig is defined
           - ran_ci_lane is defined
           - ran_output_file is defined
           - ran_metrics_list is defined
         fail_msg: >-
-          ran_spoke_kubeconfig, ran_hub_kubeconfig, ran_ci_lane,
+          ran_hub_kubeconfig, ran_ci_lane,
           ran_output_file and ran_metrics_list must be provided via --extra-vars
+
+    - name: Get hub cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ ran_hub_kubeconfig }}"
+      register: hub_cluster_version
+
+    - name: Extract hub OCP version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+
+    - name: List ManagedClusters on hub
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        kubeconfig: "{{ ran_hub_kubeconfig }}"
+      register: managed_clusters
+      no_log: true
+
+    - name: Set spoke cluster name
+      ansible.builtin.set_fact:
+        spoke_cluster: >-
+          {{
+            managed_clusters.resources
+            | map(attribute='metadata.name')
+            | reject('equalto', 'local-cluster')
+            | list
+            | first
+          }}
+
+    - name: Print spoke cluster name
+      ansible.builtin.debug:
+        msg: "Spoke cluster: {{ spoke_cluster }}"
+
+    - name: Get spoke cluster admin kubeconfig secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ spoke_cluster }}-admin-kubeconfig"
+        namespace: "{{ spoke_cluster }}"
+        kubeconfig: "{{ ran_hub_kubeconfig }}"
+      register: spoke_kubeconfig_secret
+      no_log: true
+
+    - name: Extract spoke kubeconfig to /tmp
+      ansible.builtin.copy:
+        content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+        dest: "/tmp/{{ spoke_cluster }}-kubeconfig"
+        mode: '0600'
+      no_log: true
+
+    - name: Set ran containers list
+      when: ran_containers is not defined or ran_containers | length == 0
+      ansible.builtin.set_fact:
+        ran_containers: "{{ _ran_container_images | join(',') }}"
+      vars:
+        _ran_container_images:
+          - >-
+            {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:v{{ ocp_version }}
+          - >-
+            quay.io/redhat-user-workloads/telco-5g-tenant/topology-aware-lifecycle-manager-fbc-{{
+            ocp_version | replace('.', '-') }}:latest
+
   roles:
     - role: collect_metrics
-      collect_metrics_spoke_kubeconfig: "{{ ran_spoke_kubeconfig }}"
+      collect_metrics_spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
       collect_metrics_hub_kubeconfig: "{{ ran_hub_kubeconfig }}"
       collect_metrics_ci_lane: "{{ ran_ci_lane }}"
       collect_metrics_output_file: "{{ ran_output_file }}"
       collect_metrics_list: "{{ ran_metrics_list.split(',') }}"
+      collect_containers_list: "{{ ran_containers.split(',') }}"

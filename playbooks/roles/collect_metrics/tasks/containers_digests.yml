@@ -1,0 +1,28 @@
+---
+- name: Collect containers digests
+  block:
+    - name: Gather facts about the image
+      containers.podman.podman_image_info:
+        name: "{{ container_item }}"
+      register: image_facts
+
+    - name: Set Container metric tag
+      ansible.builtin.set_fact:
+        container_metric_tag: "{{ container_item.split('/')[-1] | replace(':', '_') }}"
+
+    - name: Print ztp-site-generator image digest
+      ansible.builtin.set_fact:
+        container_metric_digest: "{{ image_facts.images[0].Digest | replace('sha256:', '') }}"
+
+    - name: Append PTP operator version to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + [container_metric_tag + ':' + container_metric_digest] }}"
+  rescue:
+    - name: Handle container digest collection failure
+      ansible.builtin.debug:
+        msg: "Failed to collect digest for {{ container_item }}, setting to N/A"
+
+    - name: Append default container digest to metrics
+      ansible.builtin.set_fact:
+        _collect_metrics_entries: "{{ _collect_metrics_entries + [container_metric_tag + ':N/A'] }}"
+...

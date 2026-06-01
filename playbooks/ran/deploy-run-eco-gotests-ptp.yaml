@@ -219,6 +219,6 @@
 
     - name: Generate 4-cycle PTP test execution script
       ansible.builtin.template:
-        src: ../templates/run_eco_gotests_ptp.j2
+        src: run_eco_gotests_ptp.j2
         dest: "{{ eco_gotest_base_dir }}/{{ script_name }}"
         mode: "0764"

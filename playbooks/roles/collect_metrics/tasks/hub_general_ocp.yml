@@ -1,67 +1,12 @@
 ---
-- name: Collect hub OCP version
-  block:
-    - name: Get hub OCP version
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: ClusterVersion
-        name: version
-        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
-      register: _hub_cluster_version
+- name: Configure hub OCP metrics collection
+  ansible.builtin.set_fact:
+    _collect_metrics_ocp_kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
+    _collect_metrics_ocp_key_prefix: "hub_"
+    _collect_metrics_ocp_scope: "hub "
+    _collect_metrics_ocp_display_prefix: "Hub OCP"
+    _collect_metrics_ocp_cluster_display_prefix: "Hub cluster"
+    _collect_metrics_ocp_collect_worker_kernels: false
 
-    - name: Set hub version facts
-      ansible.builtin.set_fact:
-        _hub_ocp_build: "{{ _hub_cluster_version.resources[0].status.desired.version }}"
-        _hub_ocp_version: "{{ _hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
-
-    - name: Append hub OCP version to metrics
-      ansible.builtin.set_fact:
-        _collect_metrics_entries: >-
-          {{ _collect_metrics_entries +
-             ['hub_ocp_build:' + _hub_ocp_build,
-              'hub_ocp_version:' + _hub_ocp_version] }}
-
-    - name: Display hub version
-      ansible.builtin.debug:
-        msg: "Hub OCP: {{ _hub_ocp_build }} ({{ _hub_ocp_version }})"
-
-  rescue:
-    - name: Handle hub OCP version collection failure
-      ansible.builtin.debug:
-        msg: "Failed to collect hub OCP version, setting to N/A"
-
-    - name: Append default hub OCP version to metrics
-      ansible.builtin.set_fact:
-        _collect_metrics_entries: >-
-          {{ _collect_metrics_entries +
-             ['hub_ocp_build:N/A',
-              'hub_ocp_version:N/A'] }}
-
-- name: Collect hub cluster name
-  block:
-    - name: Get hub cluster infrastructure
-      kubernetes.core.k8s_info:
-        api_version: config.openshift.io/v1
-        kind: Infrastructure
-        name: cluster
-        kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
-      register: _hub_infra
-
-    - name: Append hub cluster name to metrics
-      ansible.builtin.set_fact:
-        _collect_metrics_entries: >-
-          {{ _collect_metrics_entries +
-             ['hub_cluster_name:' + _hub_infra.resources[0].status.infrastructureName] }}
-
-    - name: Display hub cluster name
-      ansible.builtin.debug:
-        msg: "Hub cluster: {{ _hub_infra.resources[0].status.infrastructureName }}"
-
-  rescue:
-    - name: Handle hub cluster name collection failure
-      ansible.builtin.debug:
-        msg: "Failed to collect hub cluster name, setting to N/A"
-
-    - name: Append default hub cluster name to metrics
-      ansible.builtin.set_fact:
-        _collect_metrics_entries: "{{ _collect_metrics_entries + ['hub_cluster_name:N/A'] }}"
+- name: Collect hub general OCP metrics
+  ansible.builtin.include_tasks: _cluster_general_ocp.yml

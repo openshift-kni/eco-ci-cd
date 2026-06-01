@@ -1,0 +1,16 @@
+---
+- name: Configure general OCP metrics collection
+  ansible.builtin.set_fact:
+    _collect_metrics_ocp_kubeconfig: "{{ collect_metrics_kubeconfig }}"
+    _collect_metrics_ocp_key_prefix: ""
+    _collect_metrics_ocp_scope: ""
+    _collect_metrics_ocp_display_prefix: "OCP"
+    _collect_metrics_ocp_cluster_display_prefix: "Cluster"
+    _collect_metrics_ocp_collect_worker_kernels: true
+
+- name: Collect general OCP metrics
+  ansible.builtin.include_tasks: _cluster_general_ocp.yml
+
+- name: Enable Spoke kubeconfig
+  ansible.builtin.set_fact:
+    collect_metrics_spoke_kubeconfig: "{{ collect_metrics_kubeconfig }}"

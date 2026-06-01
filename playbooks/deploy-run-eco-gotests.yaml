@@ -130,59 +130,6 @@
           ansible.builtin.set_fact:
             eco_gotests_image: "{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}"
 
-    - name: Mirror PTP images to disconnected registry
-      when:
-        - mirror_registry | default('') | length > 0
-        - "'ptp' in features"
-      block:
-        - name: Write pull secret auth file for registry mirroring
-          no_log: true
-          ansible.builtin.copy:
-            content: "{{ pull_secret_string | b64decode }}"
-            dest: "{{ pull_secret_file | default('/tmp/auth.json') }}"
-            mode: '0600'
-
-        - name: Mirror cloud-event-consumer v1 image
-          ansible.builtin.command: >
-            skopeo copy
-            --dest-tls-verify=false
-            --all
-            docker://quay.io/redhat-cne/cloud-event-consumer:4.18
-            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v1
-          register: skopeo_v1_result
-          changed_when: skopeo_v1_result.rc == 0
-
-        - name: Mirror cloud-event-consumer v2 image
-          ansible.builtin.command: >
-            skopeo copy
-            --dest-tls-verify=false
-            --all
-            docker://quay.io/redhat-cne/cloud-event-consumer:latest
-            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v2
-          register: skopeo_v2_result
-          changed_when: skopeo_v2_result.rc == 0
-
-        - name: Mirror ptp-must-gather image (OCP < 4.21 only)
-          when: version.split('.')[1] | int < 21
-          ansible.builtin.command: >
-            skopeo copy
-            --dest-tls-verify=false
-            --all
-            --authfile {{ pull_secret_file | default('/tmp/auth.json') }}
-            docker://registry.redhat.io/openshift4/ptp-must-gather-rhel9:v{{ version }}
-            docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
-          register: skopeo_must_gather_result
-          changed_when: skopeo_must_gather_result.rc == 0
-
-        - name: Set PTP event consumer mirror fact
-          ansible.builtin.set_fact:
-            ptp_event_consumer_image: "{{ mirror_registry }}/ran-test/cloud-event-consumer"
-
-        - name: Set PTP must-gather mirror fact (OCP < 4.21 only)
-          when: version.split('.')[1] | int < 21
-          ansible.builtin.set_fact:
-            ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
-
     - name: Remove eco-gotests image
       when: pull_container_image is true
       containers.podman.podman_image:

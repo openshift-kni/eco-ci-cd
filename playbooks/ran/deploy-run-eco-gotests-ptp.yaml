@@ -1,0 +1,224 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Set up eco-gotests RAN PTP test
+# Description  : This playbook prepares a bastion host to run eco-gotests
+#                PTP tests across 4 PTP configurations. It mirrors required
+#                images to a disconnected registry, pulls the eco-gotests
+#                container, and generates a self-contained bash script that
+#                runs all 4 cycles sequentially,switching the PTP config
+#                on the spoke cluster between each run.
+#
+# Prerequisites:
+#   - kubeconfig and spoke_kubeconfig must be accessible on the bastion
+#   - hub_clusterconfigs_path must contain auth/kubeconfig for the hub
+#   - ptp_cycle_configs must be a list of {name, urls[]} dicts for cycles 1-3
+#
+# Key Tasks:
+#   - Cleanup previously created working directory
+#   - Ensure required variables are configured
+#   - Gather cluster version from OpenShift
+#   - Clone eco-gotests container from repository
+#   - Generate test execution script from a Jinja2 template using given parameters
+
+# Usage:
+# Run this playbook using Ansible:
+#   ansible-playbook ./playbooks/ran/deploy-run-eco-gotests-ptp.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "kubeconfig=/tmp/helix56-kubeconfig \
+#       spoke_kubeconfig=/tmp/helix56-kubeconfig \
+#       hub_clusterconfigs_path=/home/telcov10n/project/generated/kni-qe-110 \
+#       features=ptp \
+#       labels='!no-container' \
+#       eco_gotest_base_dir=/tmp/eco_gotests_ptp \
+#       eco_gotests_tag=latest \
+#       mirror_registry=disconnected.registry.local:5000 \
+#       test_timeout=2h \
+#       ptp_cycle_configs='[
+#         {\"name\": \"oc-2-port\", \"urls\": [\"https://gitlab.../PtpConfigOrdinary.yaml\"]},
+#         {\"name\": \"t-tsc\",     \"urls\": [\"https://gitlab.../PtpConfigTsc.yaml\"]},
+#         {\"name\": \"t-bc\",      \"urls\": [\"https://gitlab.../PtpConfigBcRx.yaml\",
+#                                              \"https://gitlab.../PtpConfigBcTx.yaml\"]}
+#       ]'"
+#
+# Available extra-vars:
+# kubeconfig                        # string: Path to the kubeconfig file.
+# spoke_kubeconfig                  # string: Same as kubeconfig, used for oc commands between cycles
+# hub_clusterconfigs_path           # string: Path to hub clusterconfigs dir on bastion
+# features                          # string: Features to test
+# labels                            # string: List of test labels
+# ptp_cycle_configs                 # list:   [{name, urls[]}] for cycles 1-3
+# eco_gotests_tag                   # string: Override image tag (e.g., "latest", "v4.18.0"). If not set, auto-detects from cluster version.
+# test_timeout                      # string: Per-cycle timeout e.g. 2h (default: 12h)
+# mirror_registry               # string: Disconnected registry URL host:port
+# additional_test_env_variables     # string: Any additional env variables accepted by eco-gotests container
+
+- name: Set up eco-gotests RAN PTP test
+  hosts: bastion
+  gather_facts: true
+  vars:
+    eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests
+    eco_gotest_base_dir: /tmp/eco_gotests
+    eco_gotests_report_path: "{{ eco_gotest_base_dir }}/report"
+    test_timeout: "12h"
+    script_name: "eco-gotests-ptp-run.sh"
+    pull_container_image: true
+    mirror_registry: ""
+    additional_test_env_variables: ""
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - spoke_kubeconfig is defined
+          - features is defined
+          - labels is defined
+          - ptp_cycle_configs is defined
+
+    - name: Ensure base directory does not exist
+      ansible.builtin.file:
+        path: "{{ eco_gotest_base_dir }}"
+        state: absent
+
+    - name: Ensure test directory is present
+      ansible.builtin.file:
+        mode: "0760"
+        path: "{{ eco_gotests_report_path }}"
+        state: directory
+        recurse: true
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Mirror eco-gotests image to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      block:
+        - name: Set eco-gotests mirror tag
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "{{ eco_gotests_tag | default('v' ~ version ~ '.0') }}"
+
+        - name: Copy eco-gotests image to disconnected registry
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            docker://{{ eco_gotests_image }}:{{ eco_gotests_tag }}
+            docker://{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}:{{ eco_gotests_tag }}
+          register: skopeo_result
+          changed_when: skopeo_result.rc == 0
+
+        - name: Override eco-gotests image source to disconnected registry
+          ansible.builtin.set_fact:
+            eco_gotests_image: "{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}"
+
+    - name: Mirror PTP images to disconnected registry
+      when:
+        - mirror_registry | default('') | length > 0
+        - "'ptp' in features"
+      block:
+        - name: Write pull secret auth file for registry mirroring
+          no_log: true
+          ansible.builtin.copy:
+            content: "{{ pull_secret_string | b64decode }}"
+            dest: "{{ pull_secret_file | default('/tmp/auth.json') }}"
+            mode: '0600'
+
+        - name: Mirror cloud-event-consumer v1 image
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            docker://quay.io/redhat-cne/cloud-event-consumer:4.18
+            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v1
+          register: skopeo_v1_result
+          changed_when: skopeo_v1_result.rc == 0
+
+        - name: Mirror cloud-event-consumer v2 image
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            docker://quay.io/redhat-cne/cloud-event-consumer:latest
+            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v2
+          register: skopeo_v2_result
+          changed_when: skopeo_v2_result.rc == 0
+
+        - name: Mirror ptp-must-gather image (OCP < 4.21 only)
+          when: version.split('.')[1] | int < 21
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            --authfile {{ pull_secret_file | default('/tmp/auth.json') }}
+            docker://registry.redhat.io/openshift4/ptp-must-gather-rhel9:v{{ version }}
+            docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
+          register: skopeo_must_gather_result
+          changed_when: skopeo_must_gather_result.rc == 0
+
+        - name: Set PTP event consumer mirror fact
+          ansible.builtin.set_fact:
+            ptp_event_consumer_image: "{{ mirror_registry }}/ran-test/cloud-event-consumer"
+
+        - name: Set PTP must-gather mirror fact (OCP < 4.21 only)
+          when: version.split('.')[1] | int < 21
+          ansible.builtin.set_fact:
+            ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
+
+    - name: Remove eco-gotests image
+      when: pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        state: absent
+        tag: "{{ item }}"
+      loop: "{{ (['v' + version + '.0', 'latest'] + ([eco_gotests_tag] if eco_gotests_tag is defined else [])) | unique }}"
+
+    - name: Pull user-specified eco-gotests image
+      when: eco_gotests_tag is defined and pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        tag: "{{ eco_gotests_tag }}"
+
+    - name: Try pulling cluster version matched image, fallback to latest if it fails
+      when: eco_gotests_tag is not defined and pull_container_image is true
+      block:
+        - name: Pull a cluster version matched eco-gotests image
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: v{{ version }}.0
+
+        - name: Set tag to specific version
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "v{{ version }}.0"
+
+      rescue:
+        - name: Pull latest version of eco-gotests image as fallback
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: latest
+
+        - name: Set tag to latest
+          ansible.builtin.set_fact:
+            eco_gotests_tag: latest
+
+    - name: Generate 4-cycle PTP test execution script
+      ansible.builtin.template:
+        src: run_eco_gotests_ptp.j2
+        dest: "{{ eco_gotest_base_dir }}/{{ script_name }}"
+        mode: "0764"

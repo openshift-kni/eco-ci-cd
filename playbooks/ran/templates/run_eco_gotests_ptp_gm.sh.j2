@@ -1,0 +1,62 @@
+#!/bin/bash
+
+{% macro podman_run(feat, reports_dir, extra_env='') %}
+podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001:1001:64536 --gidmap 0:1:1000 --gidmap 1000:0:1 --gidmap 1001:1001:64536 \
+  -e KUBECONFIG=/kubeconfig/kubeconfig \
+  -e ECO_REPORTS_DUMP_DIR=/tmp/reports \
+  -e ECO_VERBOSE_LEVEL=100 \
+  -e ECO_TEST_VERBOSE=true \
+  -e ECO_DUMP_FAILED_TESTS=true \
+  -e "REPORT_CASE_TAG={{ report_test_case_tag | default('') }}" \
+  -e "REPORT_PARAMETER_TAG={{ report_parameter_tag | default('') }}" \
+  -e "ECO_TC_PREFIX={{ report_tc_prefix | default('') }}" \
+  -e "ECO_TEST_FEATURES={{ feat }}" \
+  -e "ECO_TEST_LABELS={{ labels }}" \
+  {% if hub_kubeconfig is defined and hub_kubeconfig | length > 0 %}-e ECO_CNF_RAN_KUBECONFIG_HUB=/kubeconfig/hub-kubeconfig \
+  {% endif %}
+  {% if cnf_test_image is defined and cnf_test_image | length > 0 %}-e "ECO_CNF_RAN_TEST_IMAGE={{ cnf_test_image }}" \
+  {% endif %}
+  {% if feat == 'ptp' and ptp_event_consumer_image is defined %}-e "ECO_CNF_RAN_PTP_EVENT_CONSUMER_IMAGE={{ ptp_event_consumer_image }}" \
+  -e ECO_CNF_RAN_PTP_EVENT_CONSUMER_V1_TAG=:v1 \
+  -e ECO_CNF_RAN_PTP_EVENT_CONSUMER_V2_TAG=:v2 \
+  {% endif %}
+  {% if feat == 'ptp' and ptp_must_gather_image is defined %}-e "ECO_CNF_RAN_PTP_MUST_GATHER_IMAGE={{ ptp_must_gather_image }}" \
+  {% endif %}
+  {% if extra_env | length > 0 %}{{ extra_env }} \
+  {% endif %}
+  -v "{{ kubeconfig }}:/kubeconfig/kubeconfig:Z" \
+  -v "{{ reports_dir }}:/tmp/reports:Z" \
+  {% if hub_kubeconfig is defined and hub_kubeconfig | length > 0 %}-v "{{ hub_kubeconfig }}:/kubeconfig/hub-kubeconfig:Z" \
+  {% endif %}
+  "{{ eco_gotests_image }}:{{ eco_gotests_tag }}" \
+  --timeout={{ test_timeout }} \
+  --keep-going \
+  --output-dir=/tmp/reports \
+  --junit-report=ginkgo_junit.xml
+{%- endmacro %}
+
+{% for feat_config in _eco_gotests_feature_configs | default([]) | selectattr('name', 'in', eco_gotests_features) %}
+{% set feat_dir = eco_gotest_base_dir ~ '_0' if feat_config.name == 'ptp' else '/tmp/eco_gotests_' ~ feat_config.name ~ '_0' %}
+echo "=== Running {{ feat_config.name }} ==="
+rm -rf {{ feat_dir }}/report
+mkdir -p {{ feat_dir }}/report
+{{ podman_run(feat_config.name, feat_dir ~ '/report', feat_config.additional_test_env_variables | default('')) }} || true
+
+{% endfor %}
+{% for cycle in ptp_cycle_configs %}
+echo "=== PTP Cycle {{ loop.index }}: {{ cycle.name }} ==="
+KUBECONFIG="{{ spoke_kubeconfig }}" oc -n openshift-ptp delete --all ptpconfigs
+
+{% for url in cycle.urls %}
+echo "Applying {{ url }}..."
+KUBECONFIG="{{ spoke_kubeconfig }}" oc apply -f "{{ url }}"
+{% endfor %}
+
+echo "Waiting 15 minutes for PTP to stabilize"
+sleep 15m
+
+rm -rf {{ eco_gotest_base_dir }}_{{ loop.index }}/report
+mkdir -p {{ eco_gotest_base_dir }}_{{ loop.index }}/report
+{{ podman_run('ptp', eco_gotest_base_dir ~ '_' ~ loop.index ~ '/report', additional_test_env_variables | default('')) }} || true
+
+{% endfor %}

@@ -40,7 +40,7 @@ podman run --rm --name nrop-container-tests \
   --label-filter "reboot_required && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!hypershift" \
 {% else %}
   {% if ginkgo_label | default("") != "" %}
-  --label-filter "{{ ginkgo_label }} && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!schedrst && !reboot_required && !hypershift" \
+  --label-filter "( {{ ginkgo_label }} ) && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!schedrst && !reboot_required && !hypershift" \
     {% else %}
   --label-filter "{% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}!schedrst && !reboot_required && !hypershift"
   {% endif %}

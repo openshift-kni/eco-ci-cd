@@ -76,7 +76,7 @@
 
 - name: Append CI lane to metrics
   ansible.builtin.set_fact:
-    _collect_metrics_entries: "{{ _collect_metrics_entries + ['ci_lane:' + collect_metrics_ci_lane] }}"
+    _collect_metrics_entries: "{{ _collect_metrics_entries + ['ci-lane:' + collect_metrics_ci_lane] }}"
 
 - name: Build metrics attributes string
   ansible.builtin.set_fact:

@@ -11,10 +11,7 @@
 
 - name: Validate hub kubeconfig when hub metrics are requested
   when: >-
-    'hub_general_ocp' in collect_metrics_list or
-    'acm' in collect_metrics_list or
-    'talm' in collect_metrics_list or
-    'gitops' in collect_metrics_list
+    'hub_general_ocp' in collect_metrics_list
   ansible.builtin.assert:
     that:
       - collect_metrics_hub_kubeconfig is defined

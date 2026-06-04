@@ -32,6 +32,7 @@
         oc adm must-gather --kubeconfig={{ kubeconfig }} --dest-dir={{ must_gather_dir }}
       register: must_gather
       changed_when: must_gather.rc == 0
+      no_log: true
 
     - name: Archive Must Gather
       community.general.archive:

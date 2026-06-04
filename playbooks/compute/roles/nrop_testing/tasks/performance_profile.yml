@@ -8,6 +8,7 @@
   ansible.builtin.shell: |
     oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir="{{ must_gather_path }}"
   register: must_gather
+  no_log: true
   changed_when: must_gather.rc == 0
 
 - name: Set performance profile creator

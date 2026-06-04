@@ -14,3 +14,4 @@
 - name: Enable Spoke kubeconfig
   ansible.builtin.set_fact:
     collect_metrics_spoke_kubeconfig: "{{ collect_metrics_kubeconfig }}"
+    collect_metrics_hub_kubeconfig: "{{ collect_metrics_kubeconfig }}"

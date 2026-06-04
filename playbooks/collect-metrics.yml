@@ -1,0 +1,163 @@
+---
+# Ansible Playbook: Collect Metrics
+# -------------------------------------------------
+# Collects operator versions, cluster metadata, and optional container image
+# digests, then writes a semicolon-delimited metrics string for upload-report.
+# Uses the collect_metrics role (see playbooks/roles/collect_metrics/README.md).
+#
+# The playbook auto-detects the deployment model from ManagedCluster resources on
+# the cluster referenced by kubeconfig:
+#
+#   RAN-ZTP (hub + spoke): more than one ManagedCluster (hub local-cluster plus
+#     at least one spoke). Discovers the spoke name, extracts its admin kubeconfig
+#     secret to /tmp/<spoke>-kubeconfig, and runs collect_metrics with hub and
+#     spoke kubeconfigs.
+#
+#   Core (single cluster): zero ManagedClusters. Runs collect_metrics with
+#     collect_metrics_kubeconfig only; use general_ocp in metrics_list (not
+#     spoke_general_ocp / hub_general_ocp).
+#
+# Requirements:
+# - Bastion host with cluster API access and oc/kubernetes.core modules
+# - kubeconfig for the hub (RAN-ZTP) or target cluster (core)
+# - For RAN-ZTP default container digests: disconnected_registry_url and
+#   disconnected_registry_port (inventory or --extra-vars)
+#
+# Usage (RAN-ZTP hub + spoke):
+# ansible-playbook ./playbooks/collect-metrics.yml \
+#   -i ./inventories/ocp-deployment/build-inventory.py \
+#   --extra-vars '{
+#     "kubeconfig": "/path/to/hub/kubeconfig",
+#     "ci_lane": "ran-4.17",
+#     "output_file": "/tmp/metrics/metrics.txt",
+#     "metrics_list": "spoke_general_ocp,hub_general_ocp,sriov,sriov_fec,ptp,acm,talm,gitops,logging"
+#   }'
+#
+# Usage (core / single cluster):
+# ansible-playbook ./playbooks/collect-metrics.yml \
+#   -i ./inventories/ocp-deployment/build-inventory.py \
+#   --extra-vars '{
+#     "kubeconfig": "/path/to/kubeconfig",
+#     "ci_lane": "core-4.17",
+#     "output_file": "/tmp/metrics/metrics.txt",
+#     "metrics_list": "general_ocp,sriov,ptp,logging"
+#   }'
+#
+# Required extra-vars:
+#   kubeconfig    Path to kubeconfig (hub in RAN-ZTP, target cluster in core mode)
+#   ci_lane       CI lane identifier. Example: ran-4.17
+#   output_file   Output metrics file path. Example: /tmp/metrics/metrics.txt
+#   metrics_list  Comma-separated collect_metrics_list categories (see role README)
+#
+# Optional extra-vars:
+#   containers    Comma-separated container images for digest metrics (RAN-ZTP only).
+#                 If unset, ran_containers defaults are built from hub OCP version and
+#                 disconnected registry variables when the spoke block runs.
+#   disconnected_registry_url   Registry host for default ZTP image (no port)
+#   disconnected_registry_port  Registry port for default ZTP image (e.g. 5000)
+#
+# metrics_list examples:
+#   RAN-ZTP: spoke_general_ocp,hub_general_ocp,sriov,acm,gitops
+#   Core:    general_ocp,sriov,ptp,logging
+
+- name: Collect metrics for report portal
+  hosts: bastion
+  gather_facts: false
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - ci_lane is defined
+          - output_file is defined
+          - metrics_list is defined
+        fail_msg: >-
+          kubeconfig, ci_lane,
+          output_file and metrics_list must be provided via --extra-vars
+
+    - name: Get hub cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ kubeconfig }}"
+      register: hub_cluster_version
+
+    - name: Extract hub OCP version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ hub_cluster_version.resources[0].status.desired.version | regex_search('^([0-9]+\\.[0-9]+)') }}"
+
+    - name: List ManagedClusters on hub
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        kubeconfig: "{{ kubeconfig }}"
+      register: managed_clusters
+      # no_log: true
+      # failed_when: false
+
+    - name: Gather RAN ZTP setup details
+      when: managed_clusters.resources | length > 1
+      block:
+        - name: Set spoke cluster name
+          ansible.builtin.set_fact:
+            spoke_cluster: >-
+              {{
+                managed_clusters.resources
+                | map(attribute='metadata.name')
+                | reject('equalto', 'local-cluster')
+                | list
+                | first
+              }}
+
+        - name: Print spoke cluster name
+          ansible.builtin.debug:
+            msg: "Spoke cluster: {{ spoke_cluster }}"
+
+        - name: Get spoke cluster admin kubeconfig secret
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ spoke_cluster }}-admin-kubeconfig"
+            namespace: "{{ spoke_cluster }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: spoke_kubeconfig_secret
+          no_log: true
+
+        - name: Extract spoke kubeconfig to /tmp
+          ansible.builtin.copy:
+            content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+            dest: "/tmp/{{ spoke_cluster }}-kubeconfig"
+            mode: '0600'
+          no_log: true
+
+        - name: Set ran containers list
+          when: ran_containers is not defined or ran_containers | length == 0
+          ansible.builtin.set_fact:
+            ran_containers: "{{ _ran_container_images | join(',') }}"
+          vars:
+            _ran_container_images:
+              - >-
+                {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:v{{ ocp_version }}
+              - >-
+                quay.io/redhat-user-workloads/telco-5g-tenant/topology-aware-lifecycle-manager-fbc-{{
+                ocp_version | replace('.', '-') }}:latest
+
+  roles:
+    - name: Collect metrics for RAN-ZTP
+      when: managed_clusters.resources | length > 1
+      role: collect_metrics
+      collect_metrics_spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+      collect_metrics_hub_kubeconfig: "{{ kubeconfig }}"
+      collect_metrics_ci_lane: "{{ ci_lane }}"
+      collect_metrics_output_file: "{{ output_file }}"
+      collect_metrics_list: "{{ metrics_list.split(',') }}"
+      collect_containers_list: "{{ (containers | default(ran_containers | default(''))).split(',') }}"
+
+    - name: Collect metrics for core cluster
+      when: managed_clusters.resources | length == 0
+      role: collect_metrics
+      collect_metrics_kubeconfig: "{{ kubeconfig }}"
+      collect_metrics_ci_lane: "{{ ci_lane }}"
+      collect_metrics_output_file: "{{ output_file }}"
+      collect_metrics_list: "{{ metrics_list.split(',') }}"

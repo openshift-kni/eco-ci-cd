@@ -219,25 +219,25 @@
 
     - name: Commit and push zone file changes to GitLab
       block:
-        - name: Configure git user for commit
+        - name: Configure git user for commit  # noqa: command-instead-of-module
           ansible.builtin.command:
             cmd: "git config user.email 'ansible@telcov10n.lab.eng.tlv2.redhat.com'"
             chdir: "{{ dns_repo_local_path }}"
           changed_when: false
 
-        - name: Configure git username
+        - name: Configure git username  # noqa: command-instead-of-module
           ansible.builtin.command:
             cmd: "git config user.name 'Ansible Automation'"
             chdir: "{{ dns_repo_local_path }}"
           changed_when: false
 
-        - name: Add zone file to git
+        - name: Add zone file to git  # noqa: command-instead-of-module
           ansible.builtin.command:
             cmd: "git add {{ zone_file | relpath(dns_repo_local_path) }}"
             chdir: "{{ dns_repo_local_path }}"
           changed_when: false
 
-        - name: Commit zone file changes
+        - name: Commit zone file changes  # noqa: command-instead-of-module
           ansible.builtin.command:
             cmd: "git commit -m 'Add A record: {{ dns_record_hostname }} IN A {{ dns_record_ip }}'"
             chdir: "{{ dns_repo_local_path }}"
@@ -247,7 +247,7 @@
             - git_commit.rc != 0
             - "'nothing to commit' not in git_commit.stdout"
 
-        - name: Push changes to GitLab
+        - name: Push changes to GitLab  # noqa: command-instead-of-module no-changed-when no-handler
           ansible.builtin.command:
             cmd: "git push"
             chdir: "{{ dns_repo_local_path }}"
@@ -256,7 +256,7 @@
           environment:
             GIT_SSL_NO_VERIFY: "true"
 
-        - name: Display git push result
+        - name: Display git push result  # noqa: no-handler
           ansible.builtin.debug:
             msg: "Changes pushed to GitLab"
           when: git_push.changed

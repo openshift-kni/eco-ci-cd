@@ -43,6 +43,7 @@
         tee {{ must_gather_artifacts_dir }}/mustgather-{{ scope }}.log
       register: reg_must_gather
       changed_when: reg_must_gather.rc == 0
+      no_log: true
       ignore_errors: true
 
     - name: Archive Must Gather

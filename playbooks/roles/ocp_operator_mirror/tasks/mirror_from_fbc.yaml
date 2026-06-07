@@ -57,6 +57,33 @@
     "docker://{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}:{{ fbc_tag }}"
     "docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
 
+- name: Mirror sigstore signature for FBC index image (stage, OCP 4.21+ workaround)
+  when:
+    - (operator.ocp_operator_mirror_fbc_image_base | default('')) | length > 0
+    - (ocp_operator_mirror_version.split('.')[0] | int >= 5) or (ocp_operator_mirror_version.split('.')[1] | int >= 21)
+  block:
+    - name: Resolve FBC index image digest
+      ansible.builtin.command: >-
+        skopeo inspect
+        --no-tags
+        --format {% raw %}'{{ .Digest }}'{% endraw %}
+        --authfile {{ ocp_operator_mirror_pull_secret_path }}
+        docker://{{ operator.ocp_operator_mirror_fbc_image_base }}:{{ fbc_tag }}
+      register: _fbc_digest_result
+      changed_when: false
+
+    - name: Mirror sigstore .sig artifact to disconnected registry
+      vars:
+        _fbc_digest: "{{ _fbc_digest_result.stdout | replace(':', '-') }}"
+      ansible.builtin.command: >-
+        {{ ansible_user_dir }}/.local/bin/oc image mirror
+        --insecure=true
+        -a {{ ocp_operator_mirror_pull_secret_path }}
+        "{{ operator.ocp_operator_mirror_fbc_image_base }}:{{ _fbc_digest }}.sig"
+        "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}:{{ _fbc_digest }}.sig"
+      register: _fbc_sig_mirror_result
+      changed_when: _fbc_sig_mirror_result.rc == 0
+
 - name: Create temporary container
   containers.podman.podman_container:
     name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"

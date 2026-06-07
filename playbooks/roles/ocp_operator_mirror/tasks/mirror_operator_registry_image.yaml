@@ -50,6 +50,33 @@
   when: opreg_check.rc != 0
   changed_when: true
 
+- name: Mirror sigstore signature for operator-registry image (OCP 4.21+ workaround)
+  when:
+    - opreg_check.rc != 0
+    - (ocp_operator_mirror_version.split('.')[0] | int >= 5) or (ocp_operator_mirror_version.split('.')[1] | int >= 21)
+  block:
+    - name: Resolve operator-registry image digest
+      ansible.builtin.command: >-
+        skopeo inspect
+        --no-tags
+        --format {% raw %}'{{ .Digest }}'{% endraw %}
+        --authfile {{ ocp_operator_mirror_pull_secret_path }}
+        docker://{{ operator_registry_image }}
+      register: _opreg_digest_result
+      changed_when: false
+
+    - name: Mirror sigstore .sig artifact for operator-registry to disconnected registry
+      vars:
+        _opreg_digest: "{{ _opreg_digest_result.stdout | replace(':', '-') }}"
+      ansible.builtin.command: >-
+        {{ ansible_user_dir }}/.local/bin/oc image mirror
+        --insecure=true
+        -a {{ ocp_operator_mirror_pull_secret_path }}
+        "{{ operator_registry_repo }}:{{ _opreg_digest }}.sig"
+        "{{ operator_registry_mirror_repo }}:{{ _opreg_digest }}.sig"
+      register: _opreg_sig_mirror_result
+      changed_when: _opreg_sig_mirror_result.rc == 0
+
 - name: Ensure IDMS for ocp-v4.0-art-dev is present
   kubernetes.core.k8s:
     state: present

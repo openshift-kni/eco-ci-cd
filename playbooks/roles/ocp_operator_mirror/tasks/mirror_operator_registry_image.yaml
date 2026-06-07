@@ -76,6 +76,8 @@
         "{{ operator_registry_mirror_repo }}:{{ _opreg_digest }}.sig"
       register: _opreg_sig_mirror_result
       changed_when: _opreg_sig_mirror_result.rc == 0
+      failed_when: false
+      ignore_errors: true
 
 - name: Ensure IDMS for ocp-v4.0-art-dev is present
   kubernetes.core.k8s:

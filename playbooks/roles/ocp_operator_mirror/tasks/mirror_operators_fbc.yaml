@@ -36,3 +36,5 @@
     label: "{{ image.src }} -> {{ image.dst }}"
   register: _bundle_sig_mirror_result
   changed_when: _bundle_sig_mirror_result.rc == 0
+  failed_when: false
+  ignore_errors: true

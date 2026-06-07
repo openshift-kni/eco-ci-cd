@@ -83,6 +83,8 @@
         "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}:{{ _fbc_digest }}.sig"
       register: _fbc_sig_mirror_result
       changed_when: _fbc_sig_mirror_result.rc == 0
+      failed_when: false
+      ignore_errors: true
 
 - name: Create temporary container
   containers.podman.podman_container:

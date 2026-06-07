@@ -17,3 +17,22 @@
   delay: 3
   until: mirror_cmd.rc == 0
   changed_when: true
+
+- name: Mirror sigstore .sig artifacts for bundle images (OCP 4.21+ workaround)
+  when: (ocp_operator_mirror_version.split('.')[0] | int >= 5) or (ocp_operator_mirror_version.split('.')[1] | int >= 21)
+  vars:
+    _digest: "{{ image.src | regex_search('@(sha256:[0-9a-f]{64})', '\\1') | first | replace(':', '-') }}"
+    _src_repo: "{{ image.src | regex_replace('@.*', '') }}"
+    _dst_repo: "{{ image.dst | regex_replace('@.*', '') }}"
+  ansible.builtin.command: >-
+    {{ ansible_user_dir }}/.local/bin/oc image mirror
+    --insecure=true
+    -a {{ ocp_operator_mirror_pull_secret_path }}
+    "{{ _src_repo }}:{{ _digest }}.sig"
+    "{{ _dst_repo }}:{{ _digest }}.sig"
+  loop: "{{ image_pairs | unique | selectattr('src', 'search', '@sha256:') | list }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image.src }} -> {{ image.dst }}"
+  register: _bundle_sig_mirror_result
+  changed_when: _bundle_sig_mirror_result.rc == 0

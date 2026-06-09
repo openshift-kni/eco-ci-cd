@@ -81,7 +81,9 @@
 # Example 3 — A record + multiple CNAMEs in one run:
 # ansible-playbook playbooks/infra/create-dns-record.yml \
 #   -i ./inventories/infra/deploy-vm-dns-server.yml \
-#   -e 'dns_records=[{"type":"A","hostname":"my-cluster","value":"192.168.1.10"},{"type":"CNAME","hostname":"api.my-cluster","value":"my-cluster.example.com."},{"type":"CNAME","hostname":"*.apps.my-cluster","value":"my-cluster.example.com."}]'
+#   -e 'dns_records=[{"type":"A","hostname":"my-cluster","value":"192.168.1.10"},
+#     {"type":"CNAME","hostname":"api.my-cluster","value":"my-cluster.example.com."},
+#     {"type":"CNAME","hostname":"*.apps.my-cluster","value":"my-cluster.example.com."}]'
 
 ## Variables Used by Playbook
 # all:

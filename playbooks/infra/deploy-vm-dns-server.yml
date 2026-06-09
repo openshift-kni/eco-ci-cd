@@ -120,7 +120,7 @@
     dns_ttl: 60
     dns_forwarders:
       - "{{ hostvars['bastion']['dns'] }}"
-      - "{{ hostvars['bastion']['dns2'] | default(hostvars['bastion']['dns']) }}"
+      - "{{ hostvars['bastion']['dns2'] }}"
     bind:
       config: "{{ bind_root }}/config"
       zones: "{{ bind_root }}/zones"
@@ -135,13 +135,13 @@
         msg: "Configuring DNS on {{ inventory_hostname }} ({{ ansible_host }})"
 
     - name: Configure unprivileged port access
-      become: true
       ansible.posix.sysctl:
         name: net.ipv4.ip_unprivileged_port_start
         value: '53'
         sysctl_file: /etc/sysctl.d/99-bind.conf
         state: present
         reload: true
+      become: true
 
     - name: Allow DNS service through firewall
       become: true
@@ -151,20 +151,15 @@
         state: enabled
         immediate: true
 
-    - name: Create bind config and zones directories
+    - name: Create bind directory structure
+      loop:
+        - "{{ bind.config }}"
+        - "{{ bind.zones }}"
+        - "{{ bind.cache }}"
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: '0755'
-      loop:
-        - "{{ bind.config }}"
-        - "{{ bind.zones }}"
-
-    - name: Create bind cache directory
-      ansible.builtin.file:
-        path: "{{ bind.cache }}"
-        state: directory
-        mode: '0777'
 
     - name: Deploy named.conf configuration
       ansible.builtin.template:
@@ -192,10 +187,10 @@
       notify: Reload systemd user daemon
 
     - name: Enable linger for user (keep services running after logout)
-      become: true
       ansible.builtin.command:
         cmd: "loginctl enable-linger {{ ansible_user }}"
       changed_when: false
+      become: true
 
     - name: Enable and start BIND DNS service
       ansible.builtin.systemd:

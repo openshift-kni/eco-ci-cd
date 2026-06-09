@@ -1,0 +1,113 @@
+---
+# Deploy Gitea container on bastion if not already running
+
+- name: Check if Gitea is accessible via localhost
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/"
+    method: GET
+    status_code: 200
+    validate_certs: false
+  register: gitea_accessible
+  until: gitea_accessible.status is defined and gitea_accessible.status == 200
+  retries: 3
+  delay: 2
+  failed_when: false
+  changed_when: false
+
+- name: Open Gitea ports in firewall
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  become: true
+  loop:
+    - "{{ gitea_http_port }}"
+    - "{{ gitea_ssh_port }}"
+  failed_when: false
+
+- name: Set Gitea deployment needed flag
+  ansible.builtin.set_fact:
+    gitea_deployment_needed: "{{ gitea_accessible.status is not defined or gitea_accessible.status != 200 }}"
+
+- name: Display Gitea status
+  ansible.builtin.debug:
+    msg: >-
+      {% if not gitea_deployment_needed %}
+      Gitea is running - skipping deployment
+      {% else %}
+      Gitea deployment needed
+      {% endif %}
+
+- name: Deploy Gitea
+  when: gitea_deployment_needed
+  block:
+
+    - name: Deploy or redeploy Gitea container
+      when: gitea_accessible.status is not defined or gitea_accessible.status != 200
+      block:
+        - name: Check if Gitea container exists
+          containers.podman.podman_container_info:
+            name: "{{ gitea_container_name }}"
+          register: gitea_container_info
+          failed_when: false
+
+        - name: Set Gitea container exists flag
+          ansible.builtin.set_fact:
+            gitea_container_exists: "{{ gitea_container_info.containers | length > 0 }}"
+
+        - name: Remove existing broken Gitea container
+          containers.podman.podman_container:
+            name: "{{ gitea_container_name }}"
+            state: absent
+          when: gitea_container_exists
+
+        - name: Create Gitea data directory
+          ansible.builtin.file:
+            path: "{{ gitea_data_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: Pull Gitea container image
+          containers.podman.podman_image:
+            name: "{{ gitea_image }}"
+            pull: true
+            force: false
+
+        - name: Deploy Gitea container
+          containers.podman.podman_container:
+            name: "{{ gitea_container_name }}"
+            image: "{{ gitea_image }}"
+            state: started
+            ports:
+              - "{{ gitea_http_port }}:3000"
+              - "{{ gitea_ssh_port }}:22"
+            volume:
+              - "{{ gitea_data_dir }}:/data:Z"
+            env:
+              USER_UID: "{{ ansible_user_uid }}"
+              USER_GID: "{{ ansible_user_gid }}"
+              GITEA__database__DB_TYPE: "sqlite3"
+              GITEA__database__PATH: "/data/gitea/gitea.db"
+              GITEA__server__DOMAIN: "{{ gitea_domain }}"
+              GITEA__server__ROOT_URL: "{{ gitea_root_url }}"
+              GITEA__server__SSH_DOMAIN: "{{ gitea_domain }}"
+              GITEA__server__SSH_PORT: "{{ gitea_ssh_port }}"
+              GITEA__service__DISABLE_REGISTRATION: "true"
+              GITEA__repository__DEFAULT_BRANCH: "main"
+            restart_policy: always
+
+        - name: Wait for Gitea to start
+          ansible.builtin.uri:
+            url: "http://localhost:{{ gitea_http_port }}/"
+            method: GET
+            status_code: 200
+            validate_certs: false
+          register: gitea_health
+          until: gitea_health.status == 200
+          retries: 30
+          delay: 2
+
+- name: Display Gitea deployment status
+  ansible.builtin.debug:
+    msg: "Gitea is accessible at {{ gitea_root_url }}"

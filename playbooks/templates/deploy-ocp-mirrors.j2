@@ -1,0 +1,14 @@
+{% if (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20) or (ocp_version_facts_major | int >= 5) %}
+- source: quay.io/openshift-release-dev/ocp-release
+  mirrors:
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
+- source: quay.io/openshift-release-dev/ocp-v{{ ocp_version_facts_major }}.0-art-dev
+  mirrors:
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift-release-dev/ocp-v{{ ocp_version_facts_major }}.0-art-dev
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
+- source: registry.ci.openshift.org/ocp/release
+  mirrors:
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
+{% endif %}

@@ -323,13 +323,21 @@
     - name: Mirror OpenShift release (disconnected)
       when: disconnected | bool
       vars:
+        _ocp_use_major_registry_path: >-
+          {{
+            ocp_version_facts_major | int > 4
+            or (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20)
+          }}
         mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
         mor_version: "{{ ocp_version_facts_parsed_release }}"
         mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
         mor_cache_dir: "/opt/cache"
         mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
         mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
-        mor_registry_path: "ocp4/openshift"
+        mor_registry_path: >-
+          {{ 'ocp' ~ ocp_version_facts_major
+             if _ocp_use_major_registry_path
+             else 'ocp4/openshift' }}
         mor_auths_file: "{{ pull_secret_file }}"
         mor_force: true
         mor_install_type: "abi"
@@ -339,35 +347,6 @@
         mor_write_custom_config: true
       ansible.builtin.include_role:
         name: redhatci.ocp.mirror_ocp_release
-
-    - name: Mirror sigstore signature for release image (OCP 4.21+ workaround)
-      when:
-        - disconnected | bool
-        - ocp_version_facts_minor | int >= 21
-      block:
-        - name: Resolve release image tag to digest
-          ansible.builtin.command: >-
-            skopeo inspect
-            --no-tags
-            --format {% raw %}'{{ .Digest }}'{% endraw %}
-            --authfile {{ pull_secret_file }}
-            docker://{{ ocp_version_facts_pull_spec }}
-          register: _release_digest_result
-          changed_when: false
-
-        - name: Mirror sigstore .sig artifact to disconnected registry
-          vars:
-            _release_digest: "{{ _release_digest_result.stdout | replace(':', '-') }}"
-            _mirror_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
-            _mirror_path: "ocp4/openshift"
-          ansible.builtin.command: >-
-            {{ ansible_user_dir }}/.local/bin/oc image mirror
-            --insecure=true
-            -a {{ pull_secret_file }}
-            "quay.io/openshift-release-dev/ocp-release:{{ _release_digest }}.sig"
-            "{{ _mirror_registry }}/{{ _mirror_path }}:{{ _release_digest }}.sig"
-          register: _sig_mirror_result
-          changed_when: _sig_mirror_result.rc == 0
 
 - name: Render masters variables
   hosts: masters
@@ -590,17 +569,23 @@
             use_local_mirror_registry: true
             mirror_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
             mirror_certificate: "{{ disconnected_registry_cert_formatted | default(disconnected_registry_cert) }}"
-            ocp_registry_namespace: ocp4
+            ocp_registry_namespace: ocp{{ ocp_version_facts_major }}
             ocp_registry_image: openshift
+            gm_image_sources: "{{ lookup('template', 'templates/deploy-ocp-mirrors.j2') | trim }}"
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
 
     - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
       when:
         - ocp_version_facts_release_type in ['nightly', 'engineering-candidate', 'release-candidate']
-        - (ocp_version_facts_minor | int) >= 21
-      ansible.builtin.set_fact:
-        disable_image_policy: true
+      block:
+        - name: Set disable image policy flag for OCP 4.20+
+          ansible.builtin.set_fact:
+            disable_image_policy: >-
+              {{
+                ocp_version_facts_major | int > 4
+                or (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20)
+              }}
 
     - name: Generate boot ISO for agent-based installer
       environment:

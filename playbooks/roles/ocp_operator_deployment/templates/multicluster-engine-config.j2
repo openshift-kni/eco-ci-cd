@@ -1,6 +1,25 @@
+{#
+  MCE operator resource changed between versions:
+  - MCE < 2.10 (stable-2.8, stable-2.9): MultiClusterHub
+  - MCE >= 2.10 (stable-2.10+): MultiClusterEngine
+  Default to MultiClusterEngine for newer/unknown versions
+#}
+{% set channel = operator_item.channel | default('stable-2.10') %}
+{% set legacy_channels = ['stable-2.8', 'stable-2.9'] %}
+{% if channel in legacy_channels %}
+{# Legacy MCE versions (< 2.10) use MultiClusterHub #}
 apiVersion: operator.open-cluster-management.io/v1
 kind: MultiClusterHub
 metadata:
   name: multiclusterhub
   namespace: "{{ operator_item.nsname }}"
 spec: {}
+{% else %}
+{# Modern MCE versions (>= 2.10) use MultiClusterEngine #}
+apiVersion: multicluster.openshift.io/v1
+kind: MultiClusterEngine
+metadata:
+  name: multiclusterengine
+  namespace: "{{ operator_item.nsname }}"
+spec: {}
+{% endif %}

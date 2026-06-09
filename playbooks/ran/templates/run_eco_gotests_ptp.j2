@@ -28,7 +28,7 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   {{ eco_gotests_image }}:{{ eco_gotests_tag }} \
   --timeout={{ test_timeout }} \
-  --keep-going
+  --keep-going || true
 {% endmacro %}
 
 
@@ -36,7 +36,7 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
 
 echo "Cycle 0: default ZTP configuration"
 mkdir -p {{ eco_gotest_base_dir }}_0/report
-{{ podman_run(eco_gotest_base_dir ~ '_0/report') }} || true
+{{ podman_run(eco_gotest_base_dir ~ '_0/report') }}
 
 {% for cycle in ptp_cycle_configs %}
 # Cycle {{ loop.index }}: {{ cycle.name }}
@@ -54,6 +54,6 @@ echo "Waiting 5 minutes"
 sleep 5m
 
 mkdir -p {{ eco_gotest_base_dir }}_{{ loop.index }}/report
-{{ podman_run(eco_gotest_base_dir ~ '_' ~ loop.index ~ '/report') }} || true
+{{ podman_run(eco_gotest_base_dir ~ '_' ~ loop.index ~ '/report') }}
 
 {% endfor %}

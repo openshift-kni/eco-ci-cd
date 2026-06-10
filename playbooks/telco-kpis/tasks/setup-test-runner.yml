@@ -1,0 +1,74 @@
+---
+# Setup test-runner container image on bastion
+# This task ensures the telco-kpis-test-runner:latest container image exists on the bastion
+
+- name: Check if test-runner container image exists
+  containers.podman.podman_image_info:
+    name: telco-kpis-test-runner:latest
+  register: image_info
+  failed_when: false
+
+- name: Set image exists fact
+  ansible.builtin.set_fact:
+    image_exists: "{{ image_info.images | length > 0 }}"
+
+- name: Create temporary directory for Containerfile
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .telco-kpis-build
+  register: build_dir
+  when: not image_exists
+
+- name: Copy Containerfile to bastion
+  ansible.builtin.copy:
+    src: files/Containerfile.test-runner
+    dest: "{{ build_dir.path }}/Containerfile.test-runner"
+    mode: '0644'
+  when: not image_exists
+
+- name: Clone telco-kpis-test-local-scripts repo for report generation script
+  ansible.builtin.git:
+    repo: 'https://gitlab.cee.redhat.com/ccardeno/telco-kpis-test-local-scripts.git'
+    dest: "{{ build_dir.path }}/telco-kpis-test-local-scripts"
+    version: main
+    update: true
+    force: true
+  when: not image_exists
+
+- name: Copy analyze-podman-test-results.py to build directory
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/telco-kpis-test-local-scripts/scripts/python/analyze-podman-test-results/analyze-podman-test-results.py"
+    dest: "{{ build_dir.path }}/analyze-podman-test-results.py"
+    mode: '0755'
+    remote_src: true
+  when: not image_exists
+
+- name: Build test-runner container image
+  containers.podman.podman_image:
+    name: telco-kpis-test-runner
+    tag: latest
+    path: "{{ build_dir.path }}"
+    build:
+      file: "{{ build_dir.path }}/Containerfile.test-runner"
+      format: oci
+    state: build
+  register: build_result
+  when: not image_exists
+  async: 600
+  poll: 10
+
+- name: Cleanup build directory
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}"
+    state: absent
+  when: not image_exists
+
+- name: Verify container image was built successfully
+  containers.podman.podman_image_info:
+    name: telco-kpis-test-runner:latest
+  register: image_verify
+  failed_when: image_verify.images | length == 0
+
+- name: Display success message
+  ansible.builtin.debug:
+    msg: "Container image telco-kpis-test-runner:latest is ready"

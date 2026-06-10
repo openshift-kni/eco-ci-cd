@@ -1,0 +1,160 @@
+---
+# Deploy a local MinIO S3-compatible object storage instance using Podman.
+#
+# The playbook:
+#   1. Tears down any existing MinIO container and data directory
+#   2. Creates a fresh data directory
+#   3. Opens firewall ports for the API (9000) and console (9001)
+#   4. Starts the MinIO container via Podman
+#   5. Downloads and configures the mc (MinIO client) CLI
+#   6. Creates a service account with fixed access/secret keys
+#   7. Creates the target bucket
+#   8. Verifies the console endpoint is reachable
+#
+# Prerequisites:
+#   - Podman installed on the target host
+#   - firewalld running on the target host
+#   - sudo/become privileges for firewall and mc installation
+#
+# Usage:
+#   ansible-playbook playbooks/ran/deploy-minio.yml \
+#     -i inventories/ocp-deployment/build-inventory.py
+#
+# Required variables (set in inventory, vault-encrypted):
+#   minio_root_user:        MinIO root username
+#   minio_root_password:    MinIO root password
+#   minio_access_key:       Service account access key
+#   minio_secret_key:       Service account secret key
+#
+# Optional variables:
+#   minio_work_dir:         Base working directory  (default: /home/telcov10n/minio)
+#   minio_container_name:   Podman container name   (default: minio_local)
+#   minio_image:            MinIO container image   (default: quay.io/minio/minio:latest)
+#   minio_api_port:         S3 API port             (default: 9000)
+#   minio_console_port:     Web console port        (default: 9001)
+#   minio_bucket_name:      Bucket to create        (default: s3-bucket)
+#   minio_mc_url:           Download URL for mc CLI binary
+
+- name: Deploy local MinIO S3 Storage Emulator
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    minio_work_dir: /home/telcov10n/minio
+    minio_container_name: minio_local
+    minio_image: quay.io/minio/minio:latest
+    minio_api_port: 9000
+    minio_console_port: 9001
+    minio_bucket_name: s3-bucket
+    minio_mc_url: https://dl.min.io/client/mc/release/linux-amd64/mc
+
+  tasks:
+
+    - name: Validate sensitive variables are provided by inventory
+      ansible.builtin.assert:
+        that:
+          - minio_root_user is defined and minio_root_user | length > 0
+          - minio_root_password is defined and minio_root_password | length > 0
+          - minio_access_key is defined and minio_access_key | length > 0
+          - minio_secret_key is defined and minio_secret_key | length > 0
+        fail_msg: >-
+          minio_root_user, minio_root_password, minio_access_key, and minio_secret_key
+          must be defined in the inventory (vault-encrypted)
+
+    - name: Remove existing MinIO container
+      containers.podman.podman_container:
+        name: "{{ minio_container_name }}"
+        state: absent
+
+    - name: Remove existing MinIO data directory
+      ansible.builtin.file:
+        path: "{{ minio_work_dir }}"
+        state: absent
+
+    - name: Create MinIO data directory
+      ansible.builtin.file:
+        path: "{{ minio_work_dir }}/s3-volume"
+        state: directory
+        mode: "0755"
+
+    - name: Open MinIO API and console ports in firewall
+      become: true
+      loop:
+        - "{{ minio_api_port }}"
+        - "{{ minio_console_port }}"
+      ansible.posix.firewalld:
+        port: "{{ item }}/tcp"
+        zone: public
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Start MinIO container
+      containers.podman.podman_container:
+        name: "{{ minio_container_name }}"
+        image: "{{ minio_image }}"
+        state: started
+        network: host
+        restart_policy: on-failure
+        detach: true
+        volume:
+          - "{{ minio_work_dir }}/s3-volume:/data:rw,z"
+        env:
+          MINIO_ROOT_USER: "{{ minio_root_user }}"
+          MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+        log_driver: k8s-file
+        log_options:
+          path: "{{ minio_work_dir }}/container.log"
+        command: "server /data --console-address :{{ minio_console_port }}"
+
+    - name: Wait for MinIO API to be ready
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ minio_api_port }}"
+        timeout: 30
+
+    - name: Download mc CLI binary
+      become: true
+      ansible.builtin.get_url:
+        url: "{{ minio_mc_url }}"
+        dest: /usr/local/bin/mc
+        mode: "0755"
+
+    - name: Configure mc alias for local MinIO instance
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/mc alias set myminio/
+          http://{{ ansible_host }}:{{ minio_api_port }}
+          {{ minio_root_user }} {{ minio_root_password }}
+      changed_when: true
+      no_log: true
+
+    - name: Create MinIO service account
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/mc admin user svcacct add
+          --access-key {{ minio_access_key }}
+          --secret-key {{ minio_secret_key }}
+          myminio {{ minio_root_user }}
+      changed_when: true
+      no_log: true
+
+    - name: Create storage bucket
+      ansible.builtin.command:
+        cmd: /usr/local/bin/mc mb myminio/{{ minio_bucket_name }}
+      changed_when: true
+
+    - name: Verify MinIO console is reachable
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ minio_console_port }}"
+        method: GET
+        status_code:
+          - 200
+          - 307
+
+    - name: Print MinIO connection info
+      ansible.builtin.debug:
+        msg:
+          - "MinIO API:     http://{{ ansible_host }}:{{ minio_api_port }}"
+          - "MinIO Console: http://{{ ansible_host }}:{{ minio_console_port }}"
+          - "Bucket:        {{ minio_bucket_name }}"

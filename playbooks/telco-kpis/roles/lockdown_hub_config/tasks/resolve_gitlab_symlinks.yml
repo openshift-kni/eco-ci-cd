@@ -1,0 +1,38 @@
+---
+# playbooks/telco-kpis/roles/lockdown_hub_config/tasks/resolve_gitlab_symlinks.yml
+#
+# Purpose: Resolve GitLab symlink chains to download actual JSON files
+#
+# GitLab's /-/raw/ endpoint returns symlink content (text) instead of following
+# the symlink to the target file. This task detects symlinks and recursively
+# resolves them to download the actual JSON lockdown file.
+#
+# Required vars:
+#   - lockdown_url: Initial URL to fetch (may be a symlink)
+#   - lockdown_dest: Destination path for the resolved JSON file
+#
+# Example symlink chain:
+#   lockdown-hub-x86_64.json -> lockdown-hub-4.21-x86_64.json
+#   lockdown-hub-4.21-x86_64.json -> ../4.21/lockdown-hub-4.21.19-x86_64-on-cluster-timestamp.json
+
+- name: Create symlink resolver script from template
+  ansible.builtin.template:
+    src: resolve_gitlab_symlinks.sh.j2
+    dest: /tmp/resolve_gitlab_symlinks.sh
+    mode: '0755'
+
+- name: Execute symlink resolver script
+  ansible.builtin.command:
+    cmd: /tmp/resolve_gitlab_symlinks.sh
+  register: symlink_resolver_result
+  changed_when: false
+  failed_when: symlink_resolver_result.rc != 0
+
+- name: Display symlink resolution result
+  ansible.builtin.debug:
+    msg: "{{ symlink_resolver_result.stdout_lines }}"
+
+- name: Cleanup resolver script
+  ansible.builtin.file:
+    path: /tmp/resolve_gitlab_symlinks.sh
+    state: absent

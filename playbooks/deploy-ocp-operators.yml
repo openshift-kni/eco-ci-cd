@@ -112,6 +112,31 @@
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
   tasks:
+    # Hub Lockdown Integration (Telco-KPIs)
+    # Parse hub lockdown JSON and use operators from lockdown
+    - name: Parse hub lockdown JSON for operator deployment (Telco-KPIs)
+      ansible.builtin.include_role:
+        name: lockdown_hub_config
+      when: hub_lockdown_uri is defined and hub_lockdown_uri | length > 0
+
+    # Use operators from hub lockdown if provided, otherwise use operators parameter
+    - name: Select operator source (lockdown vs parameter)
+      when: use_hub_lockdown | default(false)
+      block:
+        - name: Use operators from hub lockdown JSON (already enriched)
+          ansible.builtin.set_fact:
+            operators: "{{ hub_lockdown_operators }}"
+
+        - name: Display hub lockdown operators
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Hub Lockdown Operators: ENABLED"
+              - "=========================================="
+              - "Using operators from lockdown JSON:"
+              - "{{ operators | to_nice_json }}"
+              - "=========================================="
+
     - name: Install requirements
       ansible.builtin.pip:
         name:
@@ -224,6 +249,13 @@
       ansible.builtin.debug:
         msg: "Mirror-only mode enabled. Skipping operator installation."
       when: mirror_only | bool
+
+    - name: Apply operator dependency and CRD workarounds (TALM/MCE/ACM)
+      when: not (mirror_only | bool)
+      ansible.builtin.include_role:
+        name: workarounds
+      vars:
+        workarounds_talm_manifestwork_crd_operators: "{{ operator_input }}"
 
     - name: Install Operators
       when: not (mirror_only | bool)

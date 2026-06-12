@@ -1,0 +1,102 @@
+---
+# Workaround: TALM ManifestWork CRD dependency issue
+#
+# Issue: TALM v4.21.4 operator fails to install due to missing ManifestWork CRD
+# Root Cause: TALM requires ManifestWork API (work.open-cluster-management.io/v1) which
+#             is provided by MCE components. However, MCE components only deploy when
+#             MultiClusterEngine CR exists. When MCE is installed with
+#             deploy_default_config=false, no MCE CR is created, causing TALM pod to
+#             crash with CrashLoopBackOff.
+#
+# Affected Versions:
+#   - OCP: 4.21+
+#   - TALM: 4.21.4+
+#   - MCE: 2.10+ (when deploy_default_config=false)
+#
+# Upstream Bug: N/A (by design - dependency ordering issue)
+# Documented: docs/issues/TALM-INSTALL-FAILURE-MCE-DEPENDENCY-2026-06-12.md
+# Tested: dev-kpi-03 (OCP 4.21) - CSV Failed → Succeeded in 30s
+#
+# Removal Plan: Remove when one of the following occurs:
+#   1. TALM no longer requires ManifestWork API at startup
+#   2. ManifestWork CRD is included in TALM operator bundle
+#   3. MCE CR creation is always enabled (deploy_default_config=true becomes default)
+
+- name: Check if MCE operator is installed without deploy_default_config
+  ansible.builtin.set_fact:
+    workarounds_mce_no_cr_deploy: >-
+      {{
+        (workarounds_talm_manifestwork_crd_operators | selectattr('name', 'equalto', 'multicluster-engine') | list | length > 0)
+        and not (workarounds_talm_manifestwork_crd_operators
+        | selectattr('name', 'equalto', 'multicluster-engine')
+        | map(attribute='deploy_default_config')
+        | select('defined')
+        | first
+        | default(false)
+        | bool)
+      }}
+
+- name: Apply ManifestWork CRD for TALM when MCE CR not deployed
+  when: workarounds_mce_no_cr_deploy | bool
+  block:
+    - name: Check if ManifestWork CRD already exists
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: manifestworks.work.open-cluster-management.io
+      register: workarounds_manifestwork_crd_check
+
+    - name: Download ManifestWork CRD from upstream OCM project
+      when: workarounds_manifestwork_crd_check.resources | length == 0
+      ansible.builtin.uri:
+        url: "{{ workarounds_manifestwork_crd_url }}"
+        return_content: true
+        timeout: 30
+      register: workarounds_manifestwork_crd_content
+
+    - name: Apply ManifestWork CRD
+      when: workarounds_manifestwork_crd_check.resources | length == 0
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ workarounds_manifestwork_crd_content.content | from_yaml }}"
+
+    - name: Display ManifestWork CRD workaround applied message
+      when: workarounds_manifestwork_crd_check.resources | length == 0
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          WORKAROUND APPLIED: TALM ManifestWork CRD
+          ========================================
+          Issue: TALM requires ManifestWork API which is normally provided by MCE components.
+          Trigger: MCE operator installed with deploy_default_config=false (no MCE CR created).
+          Action: Applied ManifestWork CRD from upstream OCM project.
+          Result: TALM can now start successfully without waiting for full MCE deployment.
+
+          The CRD will remain available when MultiClusterEngine CR is created later.
+
+          Reference: docs/issues/TALM-INSTALL-FAILURE-MCE-DEPENDENCY-2026-06-12.md
+          ========================================
+
+    - name: Wait for TALM deployment to become ready after CRD creation
+      when: workarounds_manifestwork_crd_check.resources | length == 0
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: cluster-group-upgrades-controller-manager-v2
+        namespace: openshift-operators
+      register: workarounds_talm_deployment_status
+      until: >-
+        workarounds_talm_deployment_status.resources | length > 0 and
+        workarounds_talm_deployment_status.resources[0].status.availableReplicas | default(0) > 0
+      retries: 30
+      delay: 10
+      failed_when: false
+
+    - name: Display TALM deployment readiness status
+      when: workarounds_manifestwork_crd_check.resources | length == 0
+      ansible.builtin.debug:
+        msg: >-
+          TALM deployment ready: {{
+            workarounds_talm_deployment_status.resources | length > 0 and
+            workarounds_talm_deployment_status.resources[0].status.availableReplicas | default(0) > 0
+          }}

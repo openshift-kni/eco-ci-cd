@@ -13,7 +13,7 @@
 # Optional variables:
 #   - test_additional_repos: List of {name, url} dicts for additional git clones
 #   - test_params_display: Parameters display for echo message
-#   - test_junit_pattern: JUnit XML file pattern for artifact-management
+#   - test_junit_pattern: JUnit XML file pattern for artifact_management
 #   - ran_integration_repo: Override for ran-integration repo URL
 #   - duration: Test duration
 #   - baseline_suffix: Baseline suffix (cpu_util only)

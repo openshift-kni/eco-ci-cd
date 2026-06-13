@@ -171,6 +171,14 @@
   ansible.builtin.set_fact:
     oc_mirror_signature_flag: "{{ '--remove-signatures' if (oc_mirror_version is version('4.20', '>')) else '' }}"
 
+- name: Workaround oc-mirror v2 authfile issue
+  no_log: true
+  ansible.builtin.copy:
+    src: "{{ pull_secret_file }}"
+    remote_src: true
+    dest: "$XDG_RUNTIME_DIR/containers/auth.json"
+    mode: "0644"
+
 - name: Run oc-mirror to push operators to internal registry # noqa: command-instead-of-shell
   args:
     chdir: /tmp
@@ -186,6 +194,12 @@
     --workspace file:///{{ ocp_operator_mirror_workspace_path }}
     docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
     --ignore-release-signature {{ oc_mirror_signature_flag }} --v2
+
+- name: Remove authfile workaround oc-mirror v2 authfile issue
+  no_log: true
+  ansible.builtin.file:
+    path: "$XDG_RUNTIME_DIR/containers/auth.json"
+    state: absent
 
 - name: Show oc-mirror result
   ansible.builtin.debug:

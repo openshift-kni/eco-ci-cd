@@ -322,31 +322,50 @@
 
     - name: Mirror OpenShift release (disconnected)
       when: disconnected | bool
-      vars:
-        _ocp_use_major_registry_path: >-
-          {{
-            ocp_version_facts_major | int > 4
-            or (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20)
-          }}
-        mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
-        mor_version: "{{ ocp_version_facts_parsed_release }}"
-        mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
-        mor_cache_dir: "/opt/cache"
-        mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
-        mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
-        mor_registry_path: >-
-          {{ 'ocp' ~ ocp_version_facts_major
-             if _ocp_use_major_registry_path
-             else 'ocp4/openshift' }}
-        mor_auths_file: "{{ pull_secret_file }}"
-        mor_force: true
-        mor_install_type: "abi"
-        mor_is_type: "idms"
-        mor_mirror_disk_images: true
-        mor_mirror_container_images: true
-        mor_write_custom_config: true
-      ansible.builtin.include_role:
-        name: redhatci.ocp.mirror_ocp_release
+      block:
+
+        - name: Workaround oc-mirror v2 authfile issue
+          when: ocp_version_facts_minor | int >= 20 and ocp_version_facts_major | int >= 4 or ocp_version_facts_major | int >= 5
+          no_log: true
+          ansible.builtin.copy:
+            src: "{{ pull_secret_file }}"
+            remote_src: true
+            dest: "$XDG_RUNTIME_DIR/containers/auth.json"
+            mode: "0644"
+
+        - name: Mirror OpenShift release (disconnected)
+          vars:
+            _ocp_use_major_registry_path: >-
+              {{
+                ocp_version_facts_major | int > 4
+                or (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20)
+              }}
+            mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
+            mor_version: "{{ ocp_version_facts_parsed_release }}"
+            mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
+            mor_cache_dir: "/opt/cache"
+            mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
+            mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+            mor_registry_path: >-
+              {{ 'ocp' ~ ocp_version_facts_major
+                if _ocp_use_major_registry_path
+                else 'ocp4/openshift' }}
+            mor_auths_file: "{{ pull_secret_file }}"
+            mor_force: true
+            mor_install_type: "abi"
+            mor_is_type: "idms"
+            mor_mirror_disk_images: true
+            mor_mirror_container_images: true
+            mor_write_custom_config: true
+          ansible.builtin.include_role:
+            name: redhatci.ocp.mirror_ocp_release
+
+        - name: Remove authfile workaround oc-mirror v2 authfile issue
+          when: ocp_version_facts_minor | int >= 20 and ocp_version_facts_major | int >= 4 or ocp_version_facts_major | int >= 5
+          no_log: true
+          ansible.builtin.file:
+            path: "$XDG_RUNTIME_DIR/containers/auth.json"
+            state: absent
 
 - name: Render masters variables
   hosts: masters

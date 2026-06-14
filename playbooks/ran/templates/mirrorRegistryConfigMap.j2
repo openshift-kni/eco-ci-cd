@@ -91,6 +91,9 @@ data:
       [[registry.mirror]]
         location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp4/openshift/release-images"
 
+      [[registry.mirror]]
+        location = "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp4/openshift"
+
     [[registry]]
       prefix = ""
       location = "quay.io/openshift-release-dev/ocp-release"

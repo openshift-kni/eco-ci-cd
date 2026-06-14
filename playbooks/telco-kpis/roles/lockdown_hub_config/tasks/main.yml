@@ -4,10 +4,10 @@
 # Purpose: Parse hub lockdown JSON and set hub deployment configuration
 #
 # This role downloads and parses hub lockdown JSON to extract:
-# - hub.ocp.pull_spec: Exact OCP release image for hub deployment
-# - hub.ocp.major_version, hub.ocp.minor_version: Hub OCP version
-# - hub.acm.*: ACM/MCE configuration for operator deployment
-# - hub.talm.pull_spec, hub.gitops.pull_spec: Operator catalog indexes
+# - hub.ocp.*: Exact OCP release image and version for hub deployment
+# - hub.operators[]: Complete operator list with CSVs, channels, and configurations
+# - hub.catalog_sources[]: CatalogSource images with digests for reproducibility
+# - hub.metadata: Capture metadata (cluster, timestamp, build info)
 #
 # Usage:
 #   - name: Parse hub lockdown if provided
@@ -28,28 +28,11 @@
 - name: Process hub lockdown
   when: use_hub_lockdown | bool
   block:
-    - name: Download hub lockdown JSON
-      ansible.builtin.get_url:
-        url: "{{ hub_lockdown_uri }}"
-        dest: /tmp/lockdown-hub.json
-        mode: '0644'
-        force: true
-      register: hub_lockdown_download
-      retries: 3
-      delay: 5
-      failed_when: false
-
-    - name: Fail if hub lockdown download failed
-      ansible.builtin.fail:
-        msg: "Failed to download hub lockdown JSON from {{ hub_lockdown_uri }}"
-      when: hub_lockdown_download.failed | default(false)
-
-    - name: Validate hub lockdown JSON structure
-      ansible.builtin.command:
-        cmd: jq -e '.hub.ocp' /tmp/lockdown-hub.json
-      changed_when: false
-      register: hub_lockdown_validate
-      failed_when: hub_lockdown_validate.rc != 0
+    - name: Resolve GitLab symlinks and download hub lockdown JSON
+      ansible.builtin.include_tasks: resolve_gitlab_symlinks.yml
+      vars:
+        lockdown_url: "{{ hub_lockdown_uri }}"
+        lockdown_dest: /tmp/lockdown-hub.json
 
     - name: Read hub lockdown JSON from bastion
       ansible.builtin.slurp:
@@ -60,14 +43,24 @@
       ansible.builtin.set_fact:
         hub_lockdown_data: "{{ hub_lockdown_content['content'] | b64decode | from_json }}"
 
+    - name: Validate hub lockdown JSON structure
+      ansible.builtin.assert:
+        that:
+          - hub_lockdown_data.hub is defined
+          - hub_lockdown_data.hub.ocp is defined
+          - hub_lockdown_data.hub.operators is defined
+          - hub_lockdown_data.hub.catalog_sources is defined
+        fail_msg: "Hub lockdown JSON is missing required fields (hub.ocp, hub.operators, hub.catalog_sources)"
+        success_msg: "Hub lockdown JSON structure validated"
+
     - name: Set hub deployment configuration from lockdown
       ansible.builtin.set_fact:
         hub_ocp_pull_spec: "{{ hub_lockdown_data.hub.ocp.pull_spec }}"
         hub_ocp_major_version: "{{ hub_lockdown_data.hub.ocp.major_version }}"
         hub_ocp_minor_version: "{{ hub_lockdown_data.hub.ocp.minor_version }}"
-        hub_acm_config: "{{ hub_lockdown_data.hub.acm | default({}) }}"
-        hub_talm_pull_spec: "{{ hub_lockdown_data.hub.talm.pull_spec | default('') }}"
-        hub_gitops_pull_spec: "{{ hub_lockdown_data.hub.gitops.pull_spec | default('') }}"
+        hub_lockdown_operators: "{{ hub_lockdown_data.hub.operators }}"
+        hub_lockdown_catalog_sources: "{{ hub_lockdown_data.hub.catalog_sources }}"
+        hub_lockdown_metadata: "{{ hub_lockdown_data.hub.metadata | default({}) }}"
 
     - name: Display hub lockdown configuration
       ansible.builtin.debug:
@@ -78,7 +71,11 @@
           - "Hub Lockdown URI: {{ hub_lockdown_uri }}"
           - "Hub OCP Pull Spec: {{ hub_ocp_pull_spec }}"
           - "Hub OCP Version: {{ hub_ocp_major_version }}.{{ hub_ocp_minor_version }}"
-          - "Hub ACM Config: {{ hub_acm_config }}"
-          - "Hub TALM Pull Spec: {{ hub_talm_pull_spec | default('(not set)') }}"
-          - "Hub GitOps Pull Spec: {{ hub_gitops_pull_spec | default('(not set)') }}"
+          - "Operators Count: {{ hub_lockdown_operators | length }}"
+          - "Catalog Sources Count: {{ hub_lockdown_catalog_sources | length }}"
+          - "Captured From Cluster: {{ hub_lockdown_metadata.cluster_name | default('unknown') }}"
+          - "Captured At: {{ hub_lockdown_metadata.capture_timestamp | default('unknown') }}"
+          - "=========================================="
+          - "Operators:"
+          - "{{ hub_lockdown_operators | map(attribute='name') | join(', ') }}"
           - "=========================================="

@@ -1,0 +1,125 @@
+---
+# Generic test execution task file
+# Used by all telco-kpis tests (oslat, ptp, cyclictest, cpu_util, reboot)
+#
+# Required variables (set by test-specific stub files):
+#   - test_name: Test identifier (oslat, ptp, cyclictest, cpu_util, reboot)
+#   - test_display_name: Human-readable test name
+#   - test_description: Test description for script header
+#   - test_command: Bash command to execute test
+#   - spoke_cluster: Spoke cluster name
+#   - spoke_kubeconfig: Path to spoke kubeconfig
+#
+# Optional variables:
+#   - test_additional_repos: List of {name, url} dicts for additional git clones
+#   - test_params_display: Parameters display for echo message
+#   - test_junit_pattern: JUnit XML file pattern for artifact_management
+#   - ran_integration_repo: Override for ran-integration repo URL
+#   - duration: Test duration
+#   - baseline_suffix: Baseline suffix (cpu_util only)
+#   - reboot_count: Reboot count (reboot only)
+
+- name: Ensure test-runner container image exists on bastion
+  ansible.builtin.import_tasks: setup-test-runner.yml
+
+- name: Create artifacts directory on bastion
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .{{ test_name }}-{{ spoke_cluster }}
+    path: /tmp
+  register: artifacts_dir
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "{{ test_display_name }} Test Configuration"
+      - "=========================================="
+      - "Spoke Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Duration: {{ duration | default(test_default_duration | default('N/A')) }}"
+      - "{% if test_name == 'cpu_util' %}Baseline Mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
+      - "{% if test_name == 'reboot' %}Reboot Count: {{ reboot_count | default(test_default_reboot_count | default('N/A')) }}{% endif %}"
+      - "Artifacts: {{ artifacts_dir.path }}"
+      - "=========================================="
+
+- name: Ensure kubeconfig is readable by podman container
+  ansible.builtin.file:
+    path: "{{ spoke_kubeconfig }}"
+    mode: '0644'
+
+- name: Display monitoring instructions for real-time log viewing
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "To monitor test execution in real-time:"
+      - "=========================================="
+      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
+      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
+      - ""
+      - "Or from local:"
+      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
+      - "=========================================="
+      - "Container name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
+      - "Podman logs:    podman logs -f telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
+      - "=========================================="
+
+- name: Template test script to bastion - {{ test_display_name }}
+  ansible.builtin.template:
+    src: templates/run-test.sh.j2
+    dest: "{{ artifacts_dir.path }}/run-{{ test_name }}-test.sh"
+    mode: '0755'
+
+- name: Run test in podman container - {{ test_display_name }}
+  containers.podman.podman_container:
+    name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+    image: telco-kpis-test-runner:latest
+    state: started
+    detach: false
+    rm: true
+    command: /workspace/artifacts/run-{{ test_name }}-test.sh
+    volume:
+      - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
+      - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+  register: test_result
+  failed_when: false
+  changed_when: false
+
+- name: Save container output to log file
+  ansible.builtin.copy:
+    content: "{{ test_result.stdout }}"
+    dest: "{{ artifacts_dir.path }}/podman-run.log"
+    mode: '0644'
+
+- name: Extract container exit code
+  ansible.builtin.set_fact:
+    test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
+
+- name: Display test execution result
+  ansible.builtin.debug:
+    msg:
+      - "Test exit code: {{ test_exit_code }}"
+      - "{{ 'Test PASSED' if test_exit_code | int == 0 else 'Test FAILED' }}"
+      - "{% if test_name == 'cpu_util' %}Baseline mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
+      - "{% if test_name == 'reboot' %}Reboot count: {{ reboot_count | default(test_default_reboot_count) }}{% endif %}"
+
+- name: Manage test artifacts (collect, share, report)
+  ansible.builtin.include_role:
+    name: artifact_management
+  vars:
+    artifact_management_test_name: "{{ test_artifact_name | default(test_name) }}"
+    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+    artifact_management_test_rc: "{{ test_exit_code }}"
+    artifact_management_test_duration: "{{ duration_seconds }}"
+    artifact_management_junit_source_pattern: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
+
+- name: Cleanup artifacts directory on bastion
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}"
+    state: absent
+
+- name: Fail if test failed
+  ansible.builtin.fail:
+    msg: "{{ test_display_name }} test failed with exit code {{ test_exit_code }}"
+  when: test_exit_code | int != 0

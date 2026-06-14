@@ -1,0 +1,138 @@
+---
+# Compare generated hub lockdown with input lockdown
+#
+# This playbook compares two hub lockdown JSON files and reports differences.
+# Used for validation when GENERATE_HUB_LOCKDOWN is enabled along with HUB_LOCKDOWN_URI.
+#
+# Usage:
+#   ansible-playbook playbooks/telco-kpis/compare-hub-lockdown.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "generated_lockdown=/path/to/generated.json input_lockdown_uri=https://..."
+
+- name: Compare Hub Lockdown Files
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    comparison_output: "/tmp/lockdown-comparison.txt"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - generated_lockdown is defined
+          - input_lockdown_uri is defined
+        fail_msg: "Required variables: generated_lockdown, input_lockdown_uri"
+
+    - name: Resolve GitLab symlinks and download input lockdown JSON
+      ansible.builtin.include_role:
+        name: lockdown_hub_config
+        tasks_from: resolve_gitlab_symlinks.yml
+      vars:
+        lockdown_url: "{{ input_lockdown_uri }}"
+        lockdown_dest: /tmp/input-lockdown.json
+
+    - name: Check if generated lockdown exists
+      ansible.builtin.stat:
+        path: "{{ generated_lockdown }}"
+      register: generated_stat
+
+    - name: Fail if generated lockdown not found
+      ansible.builtin.fail:
+        msg: "Generated lockdown file not found: {{ generated_lockdown }}"
+      when: not generated_stat.stat.exists
+
+    - name: Compare lockdown files using jd (JSON diff)
+      ansible.builtin.shell: |
+        set -o pipefail
+
+        # Try jd first (better JSON diff tool)
+        if command -v jd &>/dev/null; then
+          jd -set /tmp/input-lockdown.json {{ generated_lockdown }}
+        else
+          # Fallback to jq diff
+          echo "=== Input Lockdown (from {{ input_lockdown_uri }}) ==="
+          jq -S . /tmp/input-lockdown.json
+          echo ""
+          echo "=== Generated Lockdown ==="
+          jq -S . {{ generated_lockdown }}
+          echo ""
+          echo "=== Differences (- input, + generated) ==="
+          diff -u <(jq -S . /tmp/input-lockdown.json) <(jq -S . {{ generated_lockdown }}) || true
+        fi
+      args:
+        executable: /bin/bash
+      register: lockdown_diff
+      changed_when: false
+      failed_when: false
+
+    - name: Save comparison output
+      ansible.builtin.copy:
+        content: "{{ lockdown_diff.stdout }}"
+        dest: "{{ comparison_output }}"
+        mode: '0644'
+
+    - name: Normalize and checksum input lockdown (excluding metadata)
+      ansible.builtin.command:
+        cmd: jq -S 'del(.hub.metadata)' /tmp/input-lockdown.json
+      register: input_normalized
+      changed_when: false
+
+    - name: Normalize and checksum generated lockdown (excluding metadata)
+      ansible.builtin.command:
+        cmd: jq -S 'del(.hub.metadata)' {{ generated_lockdown }}
+      register: generated_normalized
+      changed_when: false
+
+    - name: Set lockdown match result based on normalized content
+      ansible.builtin.set_fact:
+        lockdown_match:
+          rc: "{{ 0 if input_normalized.stdout == generated_normalized.stdout else 1 }}"
+
+    - name: Display comparison results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Hub Lockdown Comparison"
+          - "=========================================="
+          - "Input Lockdown: {{ input_lockdown_uri }}"
+          - "Generated Lockdown: {{ generated_lockdown }}"
+          - "Match Status: {{ 'IDENTICAL ✓' if lockdown_match.rc == 0 else 'DIFFERENT ⚠' }}"
+          - "=========================================="
+
+    - name: Display diff output
+      ansible.builtin.debug:
+        msg: "{{ lockdown_diff.stdout_lines }}"
+      when: lockdown_match.rc != 0
+
+    - name: Warn if lockdowns don't match
+      ansible.builtin.debug:
+        msg:
+          - "⚠⚠⚠ WARNING ⚠⚠⚠"
+          - "Generated lockdown differs from input lockdown!"
+          - "This may indicate:"
+          - "  - Operator versions were upgraded automatically"
+          - "  - CatalogSource digests changed"
+          - "  - Different operator configuration was deployed"
+          - ""
+          - "Review the diff above to understand the differences."
+          - "Consider updating the input lockdown JSON if the generated version is correct."
+      when: lockdown_match.rc != 0
+
+    - name: Copy comparison output to artifacts (only when ARTIFACT_DIR is explicitly set)
+      when:
+        - lockdown_match.rc != 0
+        - lookup('env', 'ARTIFACT_DIR') | length > 0
+      block:
+        - name: Ensure artifacts directory exists
+          ansible.builtin.file:
+            path: "{{ lookup('env', 'ARTIFACT_DIR') }}"
+            state: directory
+            mode: '0755'
+
+        - name: Copy comparison output to artifacts
+          ansible.builtin.copy:
+            src: "{{ comparison_output }}"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') }}/lockdown-comparison.txt"
+            mode: '0644'
+            remote_src: true

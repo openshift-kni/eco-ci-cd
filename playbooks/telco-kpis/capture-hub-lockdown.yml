@@ -1,0 +1,64 @@
+---
+# Capture hub lockdown JSON for reproducible operator deployments
+#
+# This playbook generates a complete snapshot of installed hub operators
+# including catalog digests, operator CSVs, and deployment metadata.
+#
+# Usage:
+#   ansible-playbook playbooks/telco-kpis/capture-hub-lockdown.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "hub_cluster=dev-kpi-01 ocp_version=4.17 kubeconfig=/path/to/kubeconfig"
+
+- name: Capture Hub Lockdown State
+  hosts: bastion
+  gather_facts: true
+
+  vars:
+    lockdown_output_file: "/tmp/hub-lockdown-{{ hub_cluster }}-{{ ansible_date_time.epoch }}.json"
+    jenkins_build_number: ""
+    jenkins_job_name: ""
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - hub_cluster is defined
+          - ocp_version is defined
+          - kubeconfig is defined
+        fail_msg: "Required variables: hub_cluster, ocp_version, kubeconfig"
+
+    - name: Include hub lockdown capture role
+      ansible.builtin.include_role:
+        name: hub_lockdown_capture
+      vars:
+        output_file: "{{ lockdown_output_file }}"
+        cluster_name: "{{ hub_cluster }}"
+        cluster_kubeconfig: "{{ kubeconfig }}"
+        cluster_ocp_version: "{{ ocp_version }}"
+        build_number: "{{ jenkins_build_number }}"
+        job_name: "{{ jenkins_job_name }}"
+
+    - name: Ensure artifacts directory exists
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Fetch lockdown to artifacts directory
+      ansible.builtin.fetch:
+        src: "{{ lockdown_output_file }}"
+        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/"
+        flat: true
+
+    - name: Display lockdown file location
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Hub Lockdown Captured Successfully"
+          - "=========================================="
+          - "Hub Cluster: {{ hub_cluster }}"
+          - "OCP Version: {{ ocp_version }}"
+          - "Output File: {{ lockdown_output_file | basename }}"
+          - "Artifact Location: {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ lockdown_output_file | basename }}"
+          - "=========================================="

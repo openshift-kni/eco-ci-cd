@@ -1,0 +1,88 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# Resolve GitLab symlink chains to download actual JSON files
+#
+# GitLab's /-/raw/ endpoint returns symlink content instead of following
+# symlinks. This script detects symlinks and recursively resolves them.
+
+set -euo pipefail
+
+INITIAL_URL="{{ lockdown_url }}"
+DEST_FILE="{{ lockdown_dest }}"
+MAX_DEPTH=5
+TEMP_FILE="/tmp/lockdown-resolve-$$.tmp"
+
+current_url="$INITIAL_URL"
+depth=0
+
+echo "Starting symlink resolution from: $current_url"
+
+while [ $depth -lt $MAX_DEPTH ]; do
+    # Download current URL
+    if ! curl -sfL "$current_url" -o "$TEMP_FILE"; then
+        echo "ERROR: Failed to download from $current_url" >&2
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+
+    # Check if content is JSON (starts with { or [)
+    first_char=$(head -c 1 "$TEMP_FILE" 2>/dev/null || echo "")
+
+    if [ "$first_char" = "{" ] || [ "$first_char" = "[" ]; then
+        # It's JSON - we've resolved to the actual file
+        mv "$TEMP_FILE" "$DEST_FILE"
+        echo "✓ Resolved to actual JSON after $depth symlink hop(s)"
+        echo "✓ Downloaded: $(basename "$current_url")"
+        echo "✓ Saved to: $DEST_FILE"
+        exit 0
+    fi
+
+    # It's a symlink - read the target path
+    symlink_target=$(cat "$TEMP_FILE" | tr -d '\n' | tr -d '\r' | xargs)
+
+    if [ -z "$symlink_target" ]; then
+        echo "ERROR: Empty symlink target from $current_url" >&2
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+
+    echo "  [$depth] Symlink detected: $symlink_target"
+
+    # Get base URL (remove filename from current URL)
+    base_url=$(dirname "$current_url")
+
+    # Resolve relative path
+    if [[ "$symlink_target" == ../* ]]; then
+        # Handle ../ relative paths
+        temp_target="$symlink_target"
+        temp_base="$base_url"
+
+        # Remove directory levels for each ../
+        while [[ "$temp_target" == ../* ]]; do
+            temp_base=$(dirname "$temp_base")
+            temp_target="${temp_target#../}"
+        done
+
+        current_url="$temp_base/$temp_target"
+
+    elif [[ "$symlink_target" == /* ]]; then
+        # Absolute path (relative to repo root)
+        # Extract repo base: https://host/user/repo/-/raw/branch/
+        repo_base=$(echo "$current_url" | sed -E 's|(https://[^/]+/[^/]+/[^/]+/-/raw/[^/]+/).*|\1|')
+        current_url="${repo_base}${symlink_target#/}"
+
+    else
+        # Relative path in same directory
+        current_url="$base_url/$symlink_target"
+    fi
+
+    echo "  [$depth] Resolved to: $current_url"
+
+    depth=$((depth + 1))
+done
+
+echo "ERROR: Maximum symlink depth ($MAX_DEPTH) exceeded" >&2
+echo "ERROR: Last URL: $current_url" >&2
+rm -f "$TEMP_FILE"
+exit 1

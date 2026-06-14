@@ -1,0 +1,16 @@
+---
+# Main task file for workarounds role
+#
+# This role applies known workarounds for operator deployment and infrastructure issues.
+# Each workaround is documented with:
+# - Issue description and root cause
+# - Affected OCP/operator versions
+# - Upstream bug reference (if available)
+# - Expected removal timeline
+#
+# Workarounds are applied conditionally based on detected conditions.
+
+- name: Apply TALM ManifestWork CRD workaround (TALM requires ManifestWork API from MCE)
+  ansible.builtin.include_tasks: talm-manifestwork-crd.yml
+  when:
+    - "'topology-aware-lifecycle-manager' in (workarounds_talm_manifestwork_crd_operators | map(attribute='name') | list)"

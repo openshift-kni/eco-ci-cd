@@ -1,0 +1,217 @@
+---
+# playbooks/telco-kpis/roles/hub_lockdown_capture/tasks/main.yml
+#
+# Purpose: Capture complete hub lockdown state for reproducible deployments
+#
+# This role extracts:
+# - OCP release pull spec and version
+# - CatalogSource images with digests
+# - Operator subscriptions with installed CSVs
+# - Operator metadata (channels, namespaces, configs)
+#
+# Required vars:
+#   - cluster_kubeconfig: Path to hub cluster kubeconfig
+#   - cluster_name: Hub cluster name
+#   - cluster_ocp_version: OCP version (e.g., "4.17")
+#   - output_file: Path to output JSON file
+
+- name: Display capture configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Capturing Hub Lockdown State"
+      - "=========================================="
+      - "Hub Cluster: {{ cluster_name }}"
+      - "OCP Version: {{ cluster_ocp_version }}"
+      - "Output File: {{ output_file }}"
+      - "=========================================="
+
+- name: Get OCP cluster version
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: cluster_version_info
+
+- name: Extract OCP pull spec and version
+  ansible.builtin.set_fact:
+    ocp_pull_spec: "{{ cluster_version_info.resources[0].status.desired.image }}"
+    ocp_version_full: "{{ cluster_version_info.resources[0].status.desired.version }}"
+
+- name: Parse OCP version components
+  ansible.builtin.set_fact:
+    ocp_major: "{{ ocp_version_full.split('.')[0] }}"
+    ocp_minor: "{{ ocp_version_full.split('.')[1] }}"
+
+- name: Get all CatalogSources
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+  register: catalog_sources_raw
+
+- name: Build CatalogSources list
+  ansible.builtin.set_fact:
+    lockdown_catalogs: []
+
+- name: Extract catalog details
+  ansible.builtin.set_fact:
+    lockdown_catalogs: >-
+      {{
+        lockdown_catalogs + [{
+          'name': item.metadata.name,
+          'image': item.spec.image | default(''),
+          'digest': (item.spec.image.split('@')[1] if '@sha256:' in item.spec.image else ''),
+          'full_reference': item.spec.image | default('')
+        }]
+      }}
+  loop: "{{ catalog_sources_raw.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Get all operator Subscriptions
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+  register: subscriptions_raw
+
+- name: Get all OperatorGroups
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cluster_kubeconfig }}"
+    api_version: operators.coreos.com/v1
+    kind: OperatorGroup
+  register: operator_groups_raw
+
+- name: Build operators list
+  ansible.builtin.set_fact:
+    lockdown_operators: []
+
+- name: Compute operator group name for subscription
+  ansible.builtin.set_fact:
+    _current_og_name: >-
+      {{
+        operator_groups_raw.resources
+        | selectattr('metadata.namespace', 'equalto', subscription_item.metadata.namespace)
+        | map(attribute='metadata.name')
+        | first
+        | default('')
+      }}
+  loop: "{{ subscriptions_raw.resources }}"
+  loop_control:
+    loop_var: subscription_item
+    label: "{{ subscription_item.spec.name }}"
+
+- name: Compute operator group spec for subscription
+  ansible.builtin.set_fact:
+    _current_og_spec: >-
+      {{
+        operator_groups_raw.resources
+        | selectattr('metadata.namespace', 'equalto', subscription_item.metadata.namespace)
+        | map(attribute='spec')
+        | first
+        | default({})
+        | dict2items
+        | selectattr('key', 'equalto', 'targetNamespaces')
+        | map(attribute='value')
+        | first
+        | default({})
+        | ternary(
+            {'targetNamespaces': (
+              operator_groups_raw.resources
+              | selectattr('metadata.namespace', 'equalto', subscription_item.metadata.namespace)
+              | map(attribute='spec.targetNamespaces')
+              | first
+              | default([])
+            )},
+            {}
+          )
+      }}
+  loop: "{{ subscriptions_raw.resources }}"
+  loop_control:
+    loop_var: subscription_item
+    label: "{{ subscription_item.spec.name }}"
+
+- name: Extract operator details from subscriptions
+  ansible.builtin.set_fact:
+    lockdown_operators: >-
+      {{
+        lockdown_operators + [{
+          'name': item.spec.name,
+          'namespace': item.metadata.namespace,
+          'catalog': item.spec.source,
+          'channel': item.spec.channel,
+          'subscription_name': item.metadata.name,
+          'starting_csv': item.spec.startingCSV | default(''),
+          'installed_csv': item.status.currentCSV | default(''),
+          'install_plan_approval': item.spec.installPlanApproval | default('Automatic'),
+          'og_name': _current_og_name,
+          'og_spec': _current_og_spec,
+          'fbc_iib_repo': 'latest'
+        }]
+      }}
+  loop: "{{ subscriptions_raw.resources }}"
+  loop_control:
+    label: "{{ item.spec.name }}"
+
+- name: Resolve upstream FBC digest for TALM (topology-aware-lifecycle-manager)
+  when: lockdown_operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | list | length > 0
+  block:
+    - name: Construct upstream FBC image reference for TALM
+      ansible.builtin.set_fact:
+        talm_fbc_upstream_tag: "quay.io/redhat-user-workloads/telco-5g-tenant/topology-aware-lifecycle-manager-fbc-{{ ocp_major }}-{{ ocp_minor }}:latest"
+
+    - name: Resolve upstream FBC digest using skopeo
+      ansible.builtin.shell: |
+        skopeo inspect docker://{{ talm_fbc_upstream_tag }} --format '{% raw %}{{ .Digest }}{% endraw %}'
+      register: talm_fbc_digest_result
+      changed_when: false
+      failed_when: false
+
+    - name: Construct FBC upstream source with digest
+      when: talm_fbc_digest_result.rc == 0 and talm_fbc_digest_result.stdout | length > 0
+      ansible.builtin.set_fact:
+        talm_fbc_upstream_source: >-
+          quay.io/redhat-user-workloads/telco-5g-tenant/topology-aware-lifecycle-manager-fbc-{{ ocp_major }}-{{ ocp_minor }}@{{
+          talm_fbc_digest_result.stdout }}
+
+    - name: Update TALM operator with upstream FBC source
+      when: talm_fbc_upstream_source is defined
+      ansible.builtin.set_fact:
+        lockdown_operators: >-
+          {{
+            lockdown_operators
+            | map('combine',
+                {'fbc_upstream_source': talm_fbc_upstream_source}
+                if item.name == 'topology-aware-lifecycle-manager'
+                else {})
+            | list
+          }}
+      loop: "{{ lockdown_operators }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.name }}"
+
+- name: Generate hub lockdown JSON from template
+  ansible.builtin.template:
+    src: hub-lockdown.json.j2
+    dest: "{{ output_file }}"
+    mode: '0644'
+
+- name: Display captured lockdown summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Hub Lockdown Capture Complete"
+      - "=========================================="
+      - "OCP Version: {{ ocp_version_full }}"
+      - "OCP Pull Spec: {{ ocp_pull_spec }}"
+      - "Catalogs Captured: {{ lockdown_catalogs | length }}"
+      - "Operators Captured: {{ lockdown_operators | length }}"
+      - "Output: {{ output_file }}"
+      - "=========================================="
+      - "Operators:"
+      - "{{ lockdown_operators | map(attribute='name') | join(', ') }}"
+      - "=========================================="

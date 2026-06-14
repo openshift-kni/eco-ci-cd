@@ -1,0 +1,47 @@
+{
+  "hub": {
+    "ocp": {
+      "pull_spec": "{{ ocp_pull_spec }}",
+      "major_version": "{{ ocp_major }}",
+      "minor_version": "{{ ocp_minor }}",
+      "full_version": "{{ ocp_version_full }}"
+    },
+    "operators": [
+{% for op in lockdown_operators %}
+      {
+        "name": "{{ op.name }}",
+        "namespace": "{{ op.namespace }}",
+        "catalog": "{{ op.catalog }}",
+        "channel": "{{ op.channel }}",
+        "subscription_name": "{{ op.subscription_name }}",
+        "starting_csv": "{{ op.starting_csv }}",
+        "installed_csv": "{{ op.installed_csv }}",
+        "install_plan_approval": "{{ op.install_plan_approval }}",
+        "og_name": "{{ op.og_name }}",
+        "og_spec": {{ op.og_spec | to_json }}{% if op.fbc_iib_repo is defined %},
+        "fbc_iib_repo": "{{ op.fbc_iib_repo }}"{% endif %}{% if op.fbc_upstream_source is defined %},
+        "fbc_upstream_source": "{{ op.fbc_upstream_source }}"{% endif %}
+
+      }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "catalog_sources": [
+{% for catalog in lockdown_catalogs %}
+      {
+        "name": "{{ catalog.name }}",
+        "image": "{{ catalog.image }}",
+        "digest": "{{ catalog.digest }}",
+        "full_reference": "{{ catalog.full_reference }}"
+      }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "metadata": {
+      "cluster_name": "{{ cluster_name }}",
+      "capture_timestamp": "{{ ansible_date_time.iso8601 }}",
+      "build_number": "{{ build_number | default('') }}",
+      "job_name": "{{ job_name | default('') }}"
+    }
+  }
+}

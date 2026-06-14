@@ -1,0 +1,497 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook deploys the External Secrets Operator (ESO) on a Hub
+# cluster following the telco-reference RDS configuration. ESO integrates
+# external secret management systems (e.g. HashiCorp Vault) and synchronizes
+# secrets from external APIs to Kubernetes secrets.
+#
+# The playbook creates resources aligned to the telco-hub reference CRs:
+#   - Namespace with management workload annotation (sync-wave -45)
+#   - OperatorGroup with bundle install timeout (sync-wave -40)
+#   - Subscription to stable-v1 channel (sync-wave -40)
+#   - ExternalSecretsConfig operand CR (sync-wave -30)
+#   - ClusterSecretStore for Vault backend (sync-wave -30)
+#
+# It supports both connected and disconnected (mirrored) flows, operator
+# teardown, and mirror-only mode.
+
+## Prerequisites:
+# - Ansible 2.9+ installed on the control node
+# - SSH access to bastion hosts
+# - Installed OpenShift cluster (4.20+, 4.22+ recommended)
+# - KUBECONFIG file
+# - Internal registry URL/credentials for disconnected mode (if disconnected=true)
+# - skopeo installed on the control node (for disconnected mode)
+# - redhatci.ocp Ansible collection installed (ansible-galaxy collection install redhatci.ocp)
+
+## Roles Used:
+# - ocp_operator_mirror (disconnected mirroring)
+# - ocp_operator_deployment (installs operators)
+
+## Variables:
+# - teardown (bool): remove the operator and its CRs from the cluster, default false
+# - disconnected (bool): mirror & use internal registry, default false
+# - mirror_only (bool): only mirror operators without installing, default false
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - version (str): OCP major.minor for catalog index images (e.g. 4.22)
+# - catalog_source (str): catalog source name, default "redhat-operators-disconnected"
+# - create_cluster_secret_store (bool): create ClusterSecretStore CR, default true
+# - vault_server_url (str): Vault server URL, default "https://vault.example.com:8200"
+# - vault_path (str): Vault KV path, default "secret"
+# - vault_version (str): Vault KV version, default "v2"
+# - vault_token_secret_name (str): name of secret containing vault token, default "vault-token"
+# - vault_token_secret_key (str): key in secret containing vault token, default "token"
+# - skip_registry_cleanup (bool): skip cleaning internal registry before mirroring, default true
+# - mirror_registry_url (str): internal registry URL, required when disconnected=true
+# - mirror_registry_user (str): username for mirror registry, required when disconnected=true
+# - mirror_registry_password (str): password for mirror registry, required when disconnected=true
+# - pull_secret_file (str): path to pull secret JSON file, required when disconnected=true
+# - pull_secret_string (str): base64-encoded pull secret (alternative to pull_secret_file)
+
+## Usage:
+
+# Example 1: Install ESO operator (connected environment)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22"'
+
+# Example 2: Mirror AND install (disconnected environment)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 3: Custom Vault configuration
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22" \
+#   vault_server_url="https://vault.internal.example.com:8200" vault_path="kv-v2"'
+
+# Example 4: Mirror only (no installation)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true mirror_only=true version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 5: Remove operator
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" teardown=true'
+---
+- name: Deploy External Secrets Operator (telco-reference aligned)
+  hosts: bastion
+  gather_facts: true
+  vars:
+    teardown: false
+    disconnected: false
+    mirror_only: false
+    create_cluster_secret_store: true
+    catalog_source: redhat-operators-disconnected
+    vault_server_url: "https://vault.example.com:8200"
+    vault_path: "secret"
+    vault_version: "v2"
+    vault_token_secret_name: "vault-token"
+    vault_token_secret_key: "token"
+    _eso_ns: external-secrets-operator
+    _operand_ns: external-secrets
+    operators:
+      - name: openshift-external-secrets-operator
+        catalog: redhat-operators
+        nsname: "{{ _eso_ns }}"
+        channel: stable-v1
+        deploy_default_config: false
+        og_spec: {}
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes==33.1.0
+          - openshift
+        state: present
+
+    # ------------------------------------------------------------------
+    # Teardown
+    # ------------------------------------------------------------------
+    - name: Remove operator
+      when: teardown | bool
+      block:
+        - name: Get all ExternalSecret resources
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+          register: _external_secrets
+
+        - name: Delete ExternalSecret resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ item.metadata.namespace }}"
+            state: absent
+          loop: "{{ _external_secrets.resources }}"
+          loop_control:
+            label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+          when: _external_secrets.resources | length > 0
+
+        - name: Wait for ExternalSecrets to clear
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+          register: _remaining_es
+          until: _remaining_es.resources | length == 0
+          retries: 12
+          delay: 10
+          when: _external_secrets.resources | length > 0
+
+        - name: Delete ClusterSecretStore custom resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: ClusterSecretStore
+            name: ztp-secret-provider
+            state: absent
+
+        - name: Get SecretStore resources in ESO namespace
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: SecretStore
+            namespace: "{{ _eso_ns }}"
+          register: _secret_stores
+
+        - name: Delete SecretStore resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: SecretStore
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          loop: "{{ _secret_stores.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: _secret_stores.resources | length > 0
+
+        - name: Delete ExternalSecretsConfig
+          kubernetes.core.k8s:
+            api_version: operator.openshift.io/v1alpha1
+            kind: ExternalSecretsConfig
+            name: cluster
+            state: absent
+
+        - name: Wait for operand pods to terminate
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ _operand_ns }}"
+            label_selectors:
+              - app.kubernetes.io/name=external-secrets
+          register: _operand_pods_remaining
+          until: _operand_pods_remaining.resources | length == 0
+          retries: 30
+          delay: 10
+          ignore_errors: true
+
+        - name: Get ClusterServiceVersions in operator namespace
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _eso_ns }}"
+          register: _eso_csvs
+
+        - name: Delete operator ClusterServiceVersions
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          loop: >-
+            {{ _eso_csvs.resources
+               | selectattr('metadata.name', 'search', 'external-secrets-operator')
+               | list }}
+          loop_control:
+            label: "{{ item.metadata.name }}"
+
+        - name: Delete operator Subscription
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+
+        - name: Delete OperatorGroup
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+
+        - name: Delete operator Namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ _eso_ns }}"
+            state: absent
+
+    # ------------------------------------------------------------------
+    # Pull secret resolution (disconnected)
+    # ------------------------------------------------------------------
+    - name: Resolve pull secret
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Fail if no pull secret is provided
+          ansible.builtin.fail:
+            msg: >-
+              A pull secret is required for disconnected mirroring.
+              Provide either pull_secret_file (path to JSON file)
+              or pull_secret_string (base64-encoded JSON).
+          when:
+            - pull_secret_file is not defined
+            - pull_secret_string is not defined
+
+        - name: Read pull secret from file
+          when: pull_secret_file is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ lookup('file', pull_secret_file) | from_json }}"
+
+        - name: Decode pull secret from string
+          when: pull_secret_file is not defined and pull_secret_string is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+
+    # ------------------------------------------------------------------
+    # Tool availability (disconnected)
+    # ------------------------------------------------------------------
+    - name: Ensure skopeo is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if skopeo is installed
+          ansible.builtin.command: which skopeo
+          register: _skopeo_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if skopeo is not installed
+          when: _skopeo_check.rc != 0
+          ansible.builtin.fail:
+            msg: >-
+              skopeo is required for disconnected mirroring but was not found.
+              Install it with: sudo dnf install -y skopeo
+
+    - name: Ensure oc-mirror is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if oc-mirror is installed
+          ansible.builtin.command: which oc-mirror
+          register: _oc_mirror_check
+          changed_when: false
+          failed_when: false
+
+        - name: Download oc-mirror archive
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.get_url:
+            url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/oc-mirror.tar.gz"
+            dest: "/tmp/oc-mirror.tar.gz"
+            mode: '0644'
+
+        - name: Extract oc-mirror archive
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.unarchive:
+            src: "/tmp/oc-mirror.tar.gz"
+            dest: /tmp
+            remote_src: true
+
+        - name: Install oc-mirror binary
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.copy:
+            remote_src: true
+            src: /tmp/oc-mirror
+            dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+            mode: '0755'
+
+    # ------------------------------------------------------------------
+    # Mirror operators (disconnected)
+    # ------------------------------------------------------------------
+    - name: Mirror operators to internal registry
+      when: not (teardown | bool) and (disconnected | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: "{{ mirror_registry_url }}"
+        ocp_operator_mirror_registry_user: "{{ mirror_registry_user }}"
+        ocp_operator_mirror_registry_password: "{{ mirror_registry_password }}"
+        ocp_operator_mirror_pull_secret: "{{ _pull_secret }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_skip_internal_registry_cleanup: "{{ skip_registry_cleanup | default(true) }}"
+        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default('operators') }}"
+        ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base | default(omit) }}"
+        ocp_operator_mirror_art_images_share: "{{ art_share_image | default(omit) }}"
+
+    - name: Select operators source
+      when: not (teardown | bool)
+      ansible.builtin.set_fact:
+        operator_input: >-
+          {{
+            ocp_operators_mirror_disconnected_config
+            if (((ocp_operators_mirror_disconnected_config | default([])) | length) > 0)
+            else (operators | from_json if (operators is string) else operators)
+          }}
+
+    - name: Display mirror-only mode message
+      ansible.builtin.debug:
+        msg: "Mirror-only mode enabled. Skipping operator installation."
+      when: not (teardown | bool) and (mirror_only | bool)
+
+    # ------------------------------------------------------------------
+    # Clean up stale subscription
+    # ------------------------------------------------------------------
+    - name: Clean up failed ESO subscription if present
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Check for existing ESO subscription
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+          register: _existing_sub
+
+        - name: Remove stale subscription with failed bundle unpack
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          when:
+            - _existing_sub.resources | length > 0
+            - _existing_sub.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'BundleUnpackFailed')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0
+
+    # ------------------------------------------------------------------
+    # Create namespace (telco-reference: sync-wave -45)
+    # ------------------------------------------------------------------
+    - name: Create ESO namespace with management workload annotation
+      when: not (teardown | bool) and not (mirror_only | bool)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            annotations:
+              argocd.argoproj.io/sync-wave: "-45"
+              workload.openshift.io/allowed: management
+            name: "{{ _eso_ns }}"
+
+    # ------------------------------------------------------------------
+    # Install operator (telco-reference: sync-wave -40)
+    # ------------------------------------------------------------------
+    - name: Install operators
+      when: not (teardown | bool) and not (mirror_only | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_deployment
+      vars:
+        ocp_operator_deployment_version: "{{ version }}"
+        ocp_operator_deployment_operators: "{{ operator_input }}"
+        ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
+        ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"
+
+    # ------------------------------------------------------------------
+    # Configure operator CRs (telco-reference: sync-wave -30)
+    # ------------------------------------------------------------------
+    - name: Configure operator custom resources
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Wait for ESO operator CSV to succeed
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _eso_ns }}"
+          register: _csv_info
+          until:
+            - _csv_info.resources | length > 0
+            - _csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | length > 0
+            - (_csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | first).status.phase == 'Succeeded'
+          retries: 30
+          delay: 10
+
+        - name: Create ExternalSecretsConfig operand
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operator.openshift.io/v1alpha1
+              kind: ExternalSecretsConfig
+              metadata:
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+                name: cluster
+              spec: {}
+
+        - name: Wait for external-secrets operand pods to be ready
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ _operand_ns }}"
+            label_selectors:
+              - app.kubernetes.io/name=external-secrets
+          register: _operand_pods
+          until:
+            - _operand_pods.resources | length > 0
+            - _operand_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length == _operand_pods.resources | length
+          retries: 30
+          delay: 10
+
+        - name: Create ClusterSecretStore for ZTP secret provider
+          when: create_cluster_secret_store | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: external-secrets.io/v1
+              kind: ClusterSecretStore
+              metadata:
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+                name: ztp-secret-provider
+              spec:
+                provider:
+                  vault:
+                    server: "{{ vault_server_url }}"
+                    path: "{{ vault_path }}"
+                    version: "{{ vault_version }}"
+                    auth:
+                      tokenSecretRef:
+                        name: "{{ vault_token_secret_name }}"
+                        key: "{{ vault_token_secret_key }}"
+                        namespace: "{{ _eso_ns }}"
+
+        - name: Display ESO configuration summary
+          ansible.builtin.debug:
+            msg: >-
+              External Secrets Operator configured:
+              namespace={{ _eso_ns }},
+              ClusterSecretStore={{ 'ztp-secret-provider' if (create_cluster_secret_store | bool) else 'not created' }},
+              vault_server={{ vault_server_url }}
+
+        - name: Display Vault token secret reminder
+          when: create_cluster_secret_store | bool
+          ansible.builtin.debug:
+            msg: >-
+              IMPORTANT: You must manually create the Vault token secret in the
+              {{ _eso_ns }} namespace. The secret must NOT be stored in git. Example:
+              oc create secret generic {{ vault_token_secret_name }}
+              --from-literal={{ vault_token_secret_key }}=<your-vault-token>
+              -n {{ _eso_ns }}

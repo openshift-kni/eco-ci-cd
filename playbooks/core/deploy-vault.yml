@@ -1,0 +1,647 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook deploys HashiCorp Vault on an OpenShift cluster in dev mode.
+# Vault is used as the secret store backend for External Secrets Operator (ESO) in ZTP deployments.
+# Dev mode is intended for testing and development only - it runs in-memory and is NOT suitable for production.
+#
+# IMPORTANT
+# This playbook deploys Vault ONLY for ESO testing purposes and
+# IS NOT FIT FOR PRODUCTION USE. This deployment:
+# - Uses dev mode (in-memory only, no persistence)
+# - Does NOT use IPC_LOCK capability (not needed for dev mode, blocked by OpenShift SCCs)
+# - Sets SKIP_SETCAP=true to bypass capability checks
+# - Uses anyuid SCC (sufficient for dev mode without IPC_LOCK)
+# - Is not production-secure
+# The focus is testing ESO functionality (secret sync, error handling, scale), not Vault security.
+
+## Prerequisites:
+# - Ansible installed on the control node
+# - SSH access to bastion hosts
+# - KUBECONFIG file for the target cluster
+# - `kubernetes` Python module installed
+#
+# Tested with:
+# - Ansible 8.7.0 (ansible-core 2.15.13)
+# - kubernetes Python module 35.0.0
+# - kubernetes.core Ansible collection 2.4.2
+# - OpenShift 4.21.14 (SNO hub), 4.22.0-ec.3 (HA spoke)
+# - ACM 2.16.1, MCE 2.11.1, GitOps 1.20.3, TALM 4.21.3
+# - HashiCorp Vault 1.15.6-ubi (Red Hat certified image)
+# - Sonatype Nexus registry (push: 5000, pull: 5005)
+
+## Variables
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - vault_namespace (str): namespace to deploy Vault, default is "vault"
+# - vault_image (str): Vault container image, default is "registry.connect.redhat.com/hashicorp/vault:1.15.6-ubi"
+# - vault_service_name (str): name of the Vault service, default is "vault-server"
+# - vault_route_name (str): name of the Vault route, default is "vault"
+# - vault_expose_route (bool): create an external Route for Vault, default is false
+#   ESO connects via the in-cluster Service; the Route is only needed for manual debugging
+# - populate_test_secrets (bool): populate Vault with test BMC and pull secrets, default is false
+#   When true, seeds Vault with the same secret structure that ESO ClusterSecretStore and
+#   ExternalSecret CRs expect for ZTP spoke provisioning: per-host BMC credentials at
+#   secret/<hostname>/bmc and a cluster pull secret at secret/<cluster>/pull-secret.
+#   This allows end-to-end ESO testing without a real secret backend.
+# - bmc_hostnames (list): BMC hostnames to create secrets for (required if populate_test_secrets=true)
+# - bmc_username (str): BMC username stored in each host's secret
+# - bmc_password (str): BMC password stored in each host's secret
+# - test_cluster_name (str): cluster name for the pull secret path, default is "test-cluster"
+# - teardown (bool): set true to remove Vault and its resources from the cluster, default is false
+# - disconnected (bool): set true to mirror Vault image to internal registry, default is false
+# - mirror_registry_url (str): internal registry URL for pulling images (e.g., registry.example.com:5005)
+# - mirror_registry_push_url (str): internal registry URL for pushing images (e.g., registry.example.com:5000)
+#   If not specified, uses mirror_registry_url for both push and pull
+# - mirror_registry_user (str): username for internal mirror registry (required when disconnected=true)
+# - mirror_registry_password (str): password for internal mirror registry (required when disconnected=true)
+# - mirror_registry_tls_verify (bool): verify TLS when pushing to mirror registry, default is true
+# - pull_secret_file (str): path to pull secret JSON file for source registry authentication (optional)
+# - vault_source_image (str): source image to mirror from, default is "registry.connect.redhat.com/hashicorp/vault"
+# - vault_tag (str): Vault image tag, default is "1.15.6-ubi"
+
+## Usage:
+
+# Example 1: Deploy Vault in dev mode
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig"'
+
+# Example 2: Deploy Vault and populate test secrets
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" populate_test_secrets=true \
+#   bmc_hostnames=["worker-0","worker-1","worker-2","worker-3","master-0","master-1","master-2"]'
+
+# Example 3: Remove Vault
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" teardown=true'
+
+# Example 4: Deploy in disconnected mode (auto-mirror to internal registry)
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true \
+#   mirror_registry_url="registry.kni-qe-3.lab.eng.rdu2.redhat.com:5005" \
+#   pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 5: Custom Vault image
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" vault_image="registry.example.com:5005/hashicorp/vault:1.15.0"'
+
+# Example 6: Deploy with external Route for debugging
+# ansible-playbook ./playbooks/core/deploy-vault.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" vault_expose_route=true'
+---
+- name: Deploy HashiCorp Vault in Dev Mode
+  hosts: bastion
+  gather_facts: true
+  vars:
+    teardown: false
+    populate_test_secrets: false
+    disconnected: false
+    vault_namespace: vault
+    vault_service_name: vault-server
+    vault_route_name: vault
+    vault_expose_route: false
+    vault_source_image: registry.connect.redhat.com/hashicorp/vault
+    vault_tag: 1.15.6-ubi
+    vault_image: "{{ vault_source_image }}:{{ vault_tag }}"
+    vault_dev_root_token: root
+    bmc_username: "admin"
+    bmc_password: "rosebud"
+    test_cluster_name: test-cluster
+    bmc_hostnames: []
+    mirror_registry_tls_verify: true
+    _dest_authfile: "/tmp/.vault-mirror-auth-{{ ansible_date_time.epoch }}.json"
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Validate vault_namespace format
+      ansible.builtin.assert:
+        that:
+          - vault_namespace is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        fail_msg: "vault_namespace must be a valid Kubernetes namespace name (lowercase alphanumeric and hyphens, max 63 chars)"
+
+    - name: Validate test_cluster_name format
+      when: populate_test_secrets | bool
+      ansible.builtin.assert:
+        that:
+          - test_cluster_name is match('^[a-zA-Z0-9._-]+$')
+        fail_msg: "test_cluster_name must contain only alphanumeric characters, dots, underscores, and hyphens"
+
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes
+        state: present
+
+    - name: Mirror Vault image to internal registry (disconnected mode)
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Validate required variables for disconnected mode
+          ansible.builtin.assert:
+            that:
+              - mirror_registry_url is defined
+              - mirror_registry_url | length > 0
+              - mirror_registry_user is defined
+              - mirror_registry_user | length > 0
+              - mirror_registry_password is defined
+              - mirror_registry_password | length > 0
+            fail_msg: "mirror_registry_url, mirror_registry_user, and mirror_registry_password must be provided when disconnected=true"
+
+        - name: Check if skopeo is installed
+          ansible.builtin.command: which skopeo
+          register: skopeo_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if skopeo is not installed
+          when: skopeo_check.rc != 0
+          ansible.builtin.fail:
+            msg: >-
+              skopeo is required for disconnected mirroring but was not found.
+              Install it with: sudo dnf install -y skopeo
+
+        - name: Set mirror registry URLs
+          ansible.builtin.set_fact:
+            _mirror_push_url: "{{ mirror_registry_push_url | default(mirror_registry_url) }}"
+            _mirror_pull_url: "{{ mirror_registry_url }}"
+
+        - name: Set mirrored image names
+          ansible.builtin.set_fact:
+            _vault_mirror_push_image: "{{ _mirror_push_url }}/hashicorp/vault:{{ vault_tag }}"
+            _vault_mirror_pull_image: "{{ _mirror_pull_url }}/hashicorp/vault:{{ vault_tag }}"
+
+        - name: Check if Vault image already exists in mirror registry
+          ansible.builtin.command:
+            cmd: skopeo inspect docker://{{ _vault_mirror_pull_image }}
+          register: _image_check
+          changed_when: false
+          failed_when: false
+
+        - name: Display image check result
+          ansible.builtin.debug:
+            msg: >-
+              Image {{ _vault_mirror_pull_image }} {% if _image_check.rc == 0 %}already exists in mirror registry (skipping mirror){% else %}not found, will mirror{% endif %}
+
+        - name: Mirror Vault image to internal registry
+          when: _image_check.rc != 0
+          block:
+            - name: Write temporary auth file for mirror registry
+              no_log: true
+              ansible.builtin.copy:
+                content: |
+                  {
+                    "auths": {
+                      "{{ _mirror_push_url }}": {
+                        "auth": "{{ (mirror_registry_user ~ ':' ~ mirror_registry_password) | b64encode }}"
+                      }
+                    }
+                  }
+                dest: "{{ _dest_authfile }}"
+                mode: '0600'
+
+            - name: Display mirror command
+              ansible.builtin.debug:
+                msg: >-
+                  Mirroring Vault image from {{ vault_source_image }}:{{ vault_tag }}
+                  to push URL: {{ _vault_mirror_push_image }}
+                  (will use pull URL for deployment: {{ _vault_mirror_pull_image }})
+
+            - name: Execute skopeo copy
+              no_log: true
+              ansible.builtin.command:
+                cmd: >-
+                  skopeo copy
+                  {% if pull_secret_file is defined and pull_secret_file | length > 0 %}--src-authfile {{ pull_secret_file }}{% endif %}
+                  --dest-authfile {{ _dest_authfile }}
+                  --dest-tls-verify={{ mirror_registry_tls_verify | bool }}
+                  docker://{{ vault_source_image }}:{{ vault_tag }}
+                  docker://{{ _vault_mirror_push_image }}
+              register: _mirror_result
+              changed_when: true
+
+            - name: Display mirror result
+              ansible.builtin.debug:
+                msg: "Image mirrored successfully. Push URL: {{ _vault_mirror_push_image }}, Pull URL: {{ _vault_mirror_pull_image }}"
+
+          always:
+            - name: Remove temporary auth file
+              ansible.builtin.file:
+                path: "{{ _dest_authfile }}"
+                state: absent
+
+        - name: Set vault_image to use mirrored pull URL
+          ansible.builtin.set_fact:
+            vault_image: "{{ _vault_mirror_pull_image }}"
+
+        - name: Display final Vault image
+          ansible.builtin.debug:
+            msg: "Using Vault image: {{ vault_image }}"
+
+    - name: Remove Vault deployment
+      when: teardown | bool
+      block:
+        - name: Delete Vault route
+          kubernetes.core.k8s:
+            api_version: route.openshift.io/v1
+            kind: Route
+            name: "{{ vault_route_name }}"
+            namespace: "{{ vault_namespace }}"
+            state: absent
+          register: _delete_route
+          failed_when: false
+
+        - name: Warn if route deletion failed unexpectedly
+          when: _delete_route is failed
+          ansible.builtin.debug:
+            msg: "WARNING: Failed to delete Vault route: {{ _delete_route.msg | default('unknown error') }}"
+
+        - name: Delete Vault service
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Service
+            name: "{{ vault_service_name }}"
+            namespace: "{{ vault_namespace }}"
+            state: absent
+          register: _delete_service
+          failed_when: false
+
+        - name: Warn if service deletion failed unexpectedly
+          when: _delete_service is failed
+          ansible.builtin.debug:
+            msg: "WARNING: Failed to delete Vault service: {{ _delete_service.msg | default('unknown error') }}"
+
+        - name: Delete Vault deployment
+          kubernetes.core.k8s:
+            api_version: apps/v1
+            kind: Deployment
+            name: vault
+            namespace: "{{ vault_namespace }}"
+            state: absent
+
+        - name: Remove anyuid SCC from vault ServiceAccount
+          ansible.builtin.command:
+            cmd: oc adm policy remove-scc-from-user anyuid -z vault -n {{ vault_namespace | quote }}
+          register: _scc_remove
+          changed_when: "'removed' in _scc_remove.stdout"
+          failed_when: false
+
+        - name: Delete vault ServiceAccount
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: ServiceAccount
+            name: vault
+            namespace: "{{ vault_namespace }}"
+            state: absent
+          register: _delete_sa
+          failed_when: false
+
+        - name: Warn if ServiceAccount deletion failed unexpectedly
+          when: _delete_sa is failed
+          ansible.builtin.debug:
+            msg: "WARNING: Failed to delete vault ServiceAccount: {{ _delete_sa.msg | default('unknown error') }}"
+
+        - name: Wait for Vault pods to be deleted
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ vault_namespace }}"
+            label_selectors:
+              - app=vault
+          register: _vault_pods_remaining
+          until: _vault_pods_remaining.resources | length == 0
+          retries: 30
+          delay: 10
+          failed_when: false
+
+        - name: Warn if pods still remain
+          when: _vault_pods_remaining.resources | length > 0
+          ansible.builtin.debug:
+            msg: "WARNING: {{ _vault_pods_remaining.resources | length }} Vault pod(s) still remain after timeout"
+
+        - name: Delete Vault namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ vault_namespace }}"
+            state: absent
+
+        - name: Display teardown completion message
+          ansible.builtin.debug:
+            msg: "Vault has been removed from namespace {{ vault_namespace }}"
+
+    - name: Deploy Vault
+      when: not (teardown | bool)
+      block:
+        - name: Create Vault namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ vault_namespace }}"
+                labels:
+                  name: "{{ vault_namespace }}"
+
+        - name: Create vault ServiceAccount
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                name: vault
+                namespace: "{{ vault_namespace }}"
+
+        - name: Wait for vault ServiceAccount to be ready
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ServiceAccount
+            name: vault
+            namespace: "{{ vault_namespace }}"
+          register: _vault_sa
+          until: _vault_sa.resources | length > 0
+          retries: 10
+          delay: 5
+
+        - name: Grant anyuid SCC to vault ServiceAccount using oc adm policy
+          ansible.builtin.command:
+            cmd: oc adm policy add-scc-to-user anyuid -z vault -n {{ vault_namespace | quote }}
+          register: _scc_grant
+          changed_when: "'added' in _scc_grant.stdout or 'already' not in _scc_grant.stdout"
+          failed_when: _scc_grant.rc != 0
+
+        - name: Display SCC grant result
+          ansible.builtin.debug:
+            msg: "{{ _scc_grant.stdout }}"
+
+        - name: Wait for SCC assignment to propagate
+          ansible.builtin.pause:
+            seconds: 5
+
+        - name: Create Vault deployment
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: vault
+                namespace: "{{ vault_namespace }}"
+                labels:
+                  app: vault
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: vault
+                template:
+                  metadata:
+                    labels:
+                      app: vault
+                  spec:
+                    serviceAccountName: vault
+                    securityContext:
+                      runAsNonRoot: true
+                      seccompProfile:
+                        type: RuntimeDefault
+                    containers:
+                      - name: vault
+                        image: "{{ vault_image }}"
+                        args:
+                          - server
+                          - -dev
+                          - -dev-root-token-id={{ vault_dev_root_token }}
+                          - -dev-listen-address=0.0.0.0:8200
+                        ports:
+                          - containerPort: 8200
+                            name: http
+                            protocol: TCP
+                        env:
+                          - name: HOME
+                            value: /tmp
+                          - name: VAULT_DEV_ROOT_TOKEN_ID
+                            value: "{{ vault_dev_root_token }}"
+                          - name: VAULT_ADDR
+                            value: http://127.0.0.1:8200
+                          - name: SKIP_SETCAP
+                            value: "true"
+                        resources:
+                          requests:
+                            memory: "256Mi"
+                            cpu: "250m"
+                          limits:
+                            memory: "512Mi"
+                            cpu: "500m"
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                        readinessProbe:
+                          httpGet:
+                            path: /v1/sys/health?standbyok=true
+                            port: 8200
+                            scheme: HTTP
+                          initialDelaySeconds: 5
+                          periodSeconds: 10
+                        livenessProbe:
+                          httpGet:
+                            path: /v1/sys/health?standbyok=true
+                            port: 8200
+                            scheme: HTTP
+                          initialDelaySeconds: 10
+                          periodSeconds: 10
+
+        - name: Wait for Vault deployment to be ready
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            name: vault
+            namespace: "{{ vault_namespace }}"
+          register: _vault_deployment
+          until:
+            - _vault_deployment.resources | length > 0
+            - _vault_deployment.resources[0].status.availableReplicas | default(0) >= 1
+          retries: 30
+          delay: 10
+
+        - name: Create Vault service
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "{{ vault_service_name }}"
+                namespace: "{{ vault_namespace }}"
+                labels:
+                  app: vault
+              spec:
+                type: ClusterIP
+                ports:
+                  - name: http
+                    port: 8200
+                    targetPort: 8200
+                    protocol: TCP
+                selector:
+                  app: vault
+
+        - name: Create Vault route
+          when: vault_expose_route | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: route.openshift.io/v1
+              kind: Route
+              metadata:
+                name: "{{ vault_route_name }}"
+                namespace: "{{ vault_namespace }}"
+                labels:
+                  app: vault
+              spec:
+                to:
+                  kind: Service
+                  name: "{{ vault_service_name }}"
+                port:
+                  targetPort: http
+                tls:
+                  termination: edge
+                  insecureEdgeTerminationPolicy: Redirect
+
+        - name: Wait for Vault pods to be running
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ vault_namespace }}"
+            label_selectors:
+              - app=vault
+          register: _vault_pods
+          until:
+            - _vault_pods.resources | length > 0
+            - _vault_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length == _vault_pods.resources | length
+          retries: 30
+          delay: 10
+
+        - name: Get Vault route
+          when: vault_expose_route | bool
+          kubernetes.core.k8s_info:
+            api_version: route.openshift.io/v1
+            kind: Route
+            name: "{{ vault_route_name }}"
+            namespace: "{{ vault_namespace }}"
+          register: _vault_route
+
+        - name: Display Vault deployment information
+          ansible.builtin.debug:
+            msg:
+              - "Vault deployed successfully in dev mode"
+              - "Namespace: {{ vault_namespace }}"
+              - "Service: {{ vault_service_name }}.{{ vault_namespace }}.svc.cluster.local:8200"
+              - "Root Token: [stored in vault_dev_root_token variable]"
+              - "WARNING: Dev mode is NOT suitable for production - data stored in memory only"
+
+        - name: Display Vault route information
+          when: vault_expose_route | bool and _vault_route.resources | length > 0
+          ansible.builtin.debug:
+            msg: "Route: https://{{ _vault_route.resources[0].spec.host }}"
+
+    - name: Populate Vault with test secrets
+      when: not (teardown | bool) and (populate_test_secrets | bool)
+      block:
+        - name: Normalize bmc_hostnames to a list
+          ansible.builtin.set_fact:
+            _bmc_hostnames: "{{ bmc_hostnames if bmc_hostnames is not string else bmc_hostnames | from_json }}"
+
+        - name: Validate required variables for test secret population
+          ansible.builtin.assert:
+            that:
+              - _bmc_hostnames | length > 0
+            fail_msg: "bmc_hostnames must be provided when populate_test_secrets=true"
+
+        - name: Validate bmc_hostnames entries
+          ansible.builtin.assert:
+            that:
+              - item is match('^[a-zA-Z0-9._-]+$')
+            fail_msg: "bmc_hostname '{{ item }}' contains invalid characters (only alphanumeric, dots, underscores, hyphens allowed)"
+          loop: "{{ _bmc_hostnames }}"
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Get Vault pod name
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ vault_namespace }}"
+            label_selectors:
+              - app=vault
+          register: _vault_pod_info
+
+        - name: Set Vault pod name fact
+          ansible.builtin.set_fact:
+            vault_pod_name: "{{ _vault_pod_info.resources[0].metadata.name }}"
+
+        - name: Enable KV secrets engine v2
+          kubernetes.core.k8s_exec:
+            namespace: "{{ vault_namespace }}"
+            pod: "{{ vault_pod_name }}"
+            command: env VAULT_TOKEN={{ vault_dev_root_token }} VAULT_ADDR=http://127.0.0.1:8200 vault secrets enable -path=secret kv-v2
+          register: _kv_enable
+          changed_when: _kv_enable.return_code | default(1) == 0
+          failed_when:
+            - _kv_enable.return_code | default(1) != 0
+            - "'path is already in use' not in (_kv_enable.stderr | default(''))"
+
+        - name: Populate BMC secrets for each hostname
+          kubernetes.core.k8s_exec:
+            namespace: "{{ vault_namespace }}"
+            pod: "{{ vault_pod_name }}"
+            command: env VAULT_TOKEN={{ vault_dev_root_token }} VAULT_ADDR=http://127.0.0.1:8200 vault kv put secret/{{ item }}/bmc username={{ bmc_username }} password={{ bmc_password }}
+          changed_when: true
+          loop: "{{ _bmc_hostnames }}"
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Create sample pull secret JSON
+          ansible.builtin.set_fact:
+            sample_pull_secret: |
+              {
+                "auths": {
+                  "registry.example.com": {
+                    "auth": "rosebud",
+                    "email": "test@example.com"
+                  }
+                }
+              }
+
+        - name: Populate pull secret for test cluster
+          kubernetes.core.k8s_exec:
+            namespace: "{{ vault_namespace }}"
+            pod: "{{ vault_pod_name }}"
+            command: >-
+              sh -c "export VAULT_TOKEN={{ vault_dev_root_token }} &&
+              export VAULT_ADDR=http://127.0.0.1:8200 &&
+              echo '{{ sample_pull_secret | b64encode }}' | base64 -d | vault kv put secret/{{ test_cluster_name }}/pull-secret .dockerconfigjson=-"
+          changed_when: true
+
+        - name: Verify secrets were created
+          kubernetes.core.k8s_exec:
+            namespace: "{{ vault_namespace }}"
+            pod: "{{ vault_pod_name }}"
+            command: env VAULT_TOKEN={{ vault_dev_root_token }} VAULT_ADDR=http://127.0.0.1:8200 vault kv list secret/
+          changed_when: false
+          register: _vault_secrets_list
+
+        - name: Display populated secrets
+          ansible.builtin.debug:
+            msg:
+              - "Test secrets populated successfully"
+              - "BMC secrets created for: {{ _bmc_hostnames | join(', ') }}"
+              - "Pull secret created for cluster: {{ test_cluster_name }}"
+              - "Vault secrets list:"
+              - "{{ _vault_secrets_list.stdout }}"

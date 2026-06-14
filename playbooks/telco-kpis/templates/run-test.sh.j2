@@ -1,0 +1,81 @@
+#!/bin/bash
+################################################################################
+# Script: run-{{ test_name }}-test.sh
+# Purpose: Execute {{ test_display_name | default(test_name | upper) }} test inside telco-kpis-test-runner container
+# Generated from: playbooks/telco-kpis/templates/run-test.sh.j2
+#
+# Description:
+{% for line in test_description.splitlines() %}
+#   {{ line }}
+{% endfor %}
+#
+# Environment Variables (set by container/playbook):
+#   KUBECONFIG           - Path to kubeconfig file
+#   GIT_SSL_NO_VERIFY    - Disable SSL verification for git operations
+{% if test_use_ran_metrics | default(true) %}
+#   RAN_METRICS_URL      - Pushgateway URL for metrics
+{% endif %}
+#   WORKSPACE            - Working directory for test execution
+{% if test_use_scripts_dir | default(true) %}
+#   SCRIPTS_DIR          - Directory containing test scripts
+{% endif %}
+#
+# Artifacts:
+#   Test results are written to /workspace/artifacts/ which is mounted
+#   from the bastion host's artifacts directory.
+#
+################################################################################
+
+set -e
+
+# Copy kubeconfig to writable location (mounted as read-only)
+cp /tmp/kubeconfig-ro /tmp/kubeconfig
+export KUBECONFIG=/tmp/kubeconfig
+
+# Configure git{% if test_use_ran_metrics | default(true) %} and metrics{% endif %}
+
+export GIT_SSL_NO_VERIFY=true
+{% if test_use_ran_metrics | default(true) %}
+export RAN_METRICS_URL=https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/
+{% endif %}
+
+# Clone ran-integration repository
+echo "Cloning ran-integration repository..."
+git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration
+cd /workspace/ran-integration{% if test_working_subdir is defined %}/{{ test_working_subdir }}{% endif %}
+
+
+{% if test_additional_repos is defined and test_additional_repos | length > 0 %}
+# Clone additional repositories
+{% for repo in test_additional_repos %}
+echo "Cloning {{ repo.name }} repository..."
+git clone --depth 1 {{ repo.url }} {{ repo.name }}
+{% endfor %}
+
+{% endif %}
+# Set up environment
+export WORKSPACE=/workspace/ran-integration
+{% if test_use_scripts_dir | default(true) %}
+export SCRIPTS_DIR=/workspace/ran-integration/scripts
+{% endif %}
+
+{% if test_pre_command is defined %}
+# Test-specific pre-execution setup
+{{ test_pre_command }}
+
+{% endif %}
+# Create artifacts symlink for test output
+echo "Creating artifacts symlink..."
+ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+# Execute {{ test_display_name | default(test_name | upper) }} test
+echo "Starting {{ test_display_name | default(test_name | upper) }} test{{ test_params_display | default('') }}..."
+{% if test_command_prefix is defined %}
+{{ test_command_prefix }}
+{% endif %}
+set +e
+{{ test_command }}
+exit_code=$?
+
+echo "{{ test_display_name | default(test_name | upper) }} test completed with exit code: $exit_code"
+exit $exit_code

@@ -4,103 +4,22 @@
 # Purpose: Measure OS latency on isolated CPUs with PerformanceProfile
 # Duration: Configurable via duration parameter (default: 10m)
 
-- name: Ensure test-runner container image exists on bastion
-  ansible.builtin.import_tasks: setup-test-runner.yml
-
-- name: Create artifacts directory on bastion
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: .oslat-{{ spoke_cluster }}
-    path: /tmp
-  register: artifacts_dir
-
-- name: Display test configuration
-  ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "OSLAT Test Configuration"
-      - "=========================================="
-      - "Spoke Cluster: {{ spoke_cluster }}"
-      - "Kubeconfig: {{ spoke_kubeconfig }}"
-      - "Duration: {{ duration | default(telco_kpis_default_duration_oslat) }}"
-      - "Artifacts: {{ artifacts_dir.path }}"
-      - "=========================================="
-
-- name: Ensure kubeconfig is readable by podman container
-  ansible.builtin.file:
-    path: "{{ spoke_kubeconfig }}"
-    mode: '0644'
-
-- name: Display monitoring instructions for real-time log viewing
-  ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "To monitor test execution in real-time:"
-      - "=========================================="
-      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
-      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
-      - ""
-      - "Or from local:"
-      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
-      - "=========================================="
-      - "Container name: telco-kpis-oslat-{{ spoke_cluster }}"
-      - "Podman logs:    podman logs -f telco-kpis-oslat-{{ spoke_cluster }}"
-      - "=========================================="
-
-- name: Template OSLAT test script to bastion
-  ansible.builtin.template:
-    src: templates/run-oslat-test.sh.j2
-    dest: "{{ artifacts_dir.path }}/run-oslat-test.sh"
-    mode: '0755'
-
-- name: Run OSLAT test in podman container
-  containers.podman.podman_container:
-    name: telco-kpis-oslat-{{ spoke_cluster }}
-    image: telco-kpis-test-runner:latest
-    state: started
-    detach: false
-    rm: true
-    command: /workspace/artifacts/run-oslat-test.sh
-    volume:
-      - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
-      - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
-  register: oslat_result
-  failed_when: false
-  changed_when: false
-
-- name: Save container output to log file
-  ansible.builtin.copy:
-    content: "{{ oslat_result.stdout }}"
-    dest: "{{ artifacts_dir.path }}/podman-run.log"
-    mode: '0644'
-
-- name: Extract container exit code
+- name: Set OSLAT test variables
   ansible.builtin.set_fact:
-    oslat_exit_code: "{{ oslat_result.container.State.ExitCode | default(0) }}"
+    test_name: "oslat"
+    test_display_name: "OSLAT"
+    test_description: |
+      This script runs the OSLAT test to measure OS-level latency on isolated
+      CPUs configured with PerformanceProfile. It clones required repositories,
+      sets up the test environment, executes the test, and captures results.
+    test_default_duration: "{{ telco_kpis_default_duration_oslat }}"
+    test_command: "bash scripts/test_oslat.sh oslat={{ duration | default(telco_kpis_default_duration_oslat) }}"
+    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_oslat) }})"
+    test_additional_repos:
+      - name: oslat
+        url: "{{ telco_kpis_oslat_repo | default('https://gitlab.cee.redhat.com/ran/oslat.git') }}"
+    test_junit_pattern: "oslat_report.xml"
+    ran_integration_repo: "{{ telco_kpis_ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
 
-- name: Display test execution result
-  ansible.builtin.debug:
-    msg:
-      - "Test exit code: {{ oslat_exit_code }}"
-      - "{{ 'Test PASSED' if oslat_exit_code | int == 0 else 'Test FAILED' }}"
-
-- name: Manage test artifacts (collect, share, report)
-  ansible.builtin.include_role:
-    name: artifact-management
-  vars:
-    artifact_management_test_name: "oslat"
-    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
-    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
-    artifact_management_test_rc: "{{ oslat_exit_code }}"
-    artifact_management_test_duration: "{{ duration_seconds }}"
-    artifact_management_junit_source_pattern: "oslat_report.xml"
-
-- name: Cleanup artifacts directory on bastion
-  ansible.builtin.file:
-    path: "{{ artifacts_dir.path }}"
-    state: absent
-
-- name: Fail if test failed
-  ansible.builtin.fail:
-    msg: "OSLAT test failed with exit code {{ oslat_exit_code }}"
-  when: oslat_exit_code | int != 0
+- name: Execute OSLAT test
+  ansible.builtin.import_tasks: run-test.yml

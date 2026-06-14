@@ -1,0 +1,61 @@
+#!/bin/bash
+################################################################################
+# Script: run-rfc2544-test.sh
+# Purpose: Execute RFC2544 test inside telco-kpis-test-runner container
+# Generated from: playbooks/telco-kpis/templates/run-rfc2544-test.sh.j2
+#
+# Description:
+#   This script runs the RFC2544 test to measure network throughput and latency
+#   using Spirent traffic generator. It clones required repositories, sets up
+#   the test environment, executes the test, and captures results.
+#
+# Environment Variables (set by container/playbook):
+#   KUBECONFIG           - Path to kubeconfig file
+#   GIT_SSL_NO_VERIFY    - Disable SSL verification for git operations
+#   WORKSPACE            - Working directory for test execution
+#
+# Artifacts:
+#   Test results are written to /workspace/artifacts/ which is mounted
+#   from the bastion host's artifacts directory.
+#
+################################################################################
+
+set -e
+
+# Copy kubeconfig to writable location (mounted as read-only)
+cp /tmp/kubeconfig-ro /tmp/kubeconfig
+export KUBECONFIG=/tmp/kubeconfig
+
+# Configure git
+export GIT_SSL_NO_VERIFY=true
+
+# Clone ran-integration repository
+echo "Cloning ran-integration repository..."
+git clone --depth 1 {{ ran_integration_repo | default("https://gitlab.cee.redhat.com/ran/ran-integration.git") }} /workspace/ran-integration
+cd /workspace/ran-integration/scripts/test_rfc2544
+
+# Set up environment
+export WORKSPACE=/workspace/ran-integration
+
+# Install stcrestclient Python package
+echo "Installing stcrestclient Python package..."
+pip3 install --user stcrestclient || true
+
+# Create artifacts symlink for test output
+echo "Creating artifacts symlink..."
+ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+# Execute RFC2544 test
+echo "Starting RFC2544 test..."
+echo "RFC2544_PARAMS: {{ rfc2544_params }}"
+
+# WORKAROUND: Spirent XML has ErrorHandler=PAUSE_ON_ERROR which stalls automated runs
+# Patch to STOP_ON_ERROR for automated execution
+sed -i "s/    subscribe_results(stc)/    subscribe_results(stc)\\n    stc.config(\"sequencer1\", ErrorHandler=\"STOP_ON_ERROR\"); stc.apply(); print(\"WARNING: patched ErrorHandler to STOP_ON_ERROR (workaround)\", file=sys.stderr)/" main.py
+
+set +e
+python3 main.py "{{ rfc2544_params }}" 2>&1 | tee /workspace/artifacts/rfc2544-output.log
+exit_code=$?
+
+echo "RFC2544 test completed with exit code: $exit_code"
+exit $exit_code

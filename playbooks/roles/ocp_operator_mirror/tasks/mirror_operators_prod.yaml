@@ -174,7 +174,7 @@
 - name: Workaround oc-mirror v2 authfile issue
   no_log: true
   ansible.builtin.copy:
-    src: "{{ pull_secret_file }}"
+    src: "{{ ocp_operator_mirror_pull_secret_path }}"
     remote_src: true
     dest: "$XDG_RUNTIME_DIR/containers/auth.json"
     mode: "0644"

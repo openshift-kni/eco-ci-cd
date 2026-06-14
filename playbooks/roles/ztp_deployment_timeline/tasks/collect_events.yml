@@ -1,0 +1,282 @@
+---
+# Collect timeline events from various ACM/ZTP resources
+
+- name: Initialize events list
+  ansible.builtin.set_fact:
+    timeline_events: []
+
+# ClusterInstance events
+- name: Add ClusterInstance creation event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ clusterinstance_resource.metadata.creationTimestamp }}"
+      event: "ZTP.ClusterInstanceCreated"
+      event_description: "ClusterInstance {{ spoke_cluster }} created by SiteConfig v2 operator"
+      milestone: "0-GITOPS_APPLICATION"
+  when: has_clusterinstance
+
+- name: Add ClusterInstance conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "ClusterInstance.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default('') }}"
+      milestone: "0-GITOPS_APPLICATION"
+  loop: "{{ clusterinstance_resource.status.conditions | default([]) }}"
+  when:
+    - has_clusterinstance
+    - clusterinstance_resource.status.conditions is defined
+
+# ManagedCluster events
+- name: Add ManagedCluster creation event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ managedcluster_query.resources[0].metadata.creationTimestamp }}"
+      event: "ZTP.ManagedClusterCreated"
+      event_description: "ManagedCluster created by GitOps - Start of deployment for {{ spoke_cluster }}"
+      milestone: "1-GITOPS_SYNC"
+  when: has_managedcluster
+
+# AgentClusterInstall events (AI deployments)
+- name: Add AgentClusterInstall creation event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ agentclusterinstall_query.resources[0].metadata.creationTimestamp }}"
+      event: "AgentClusterInstall.Created"
+      event_description: "AgentClusterInstall {{ spoke_cluster }} created"
+      milestone: "2-CLUSTER_INSTALL"
+  when: has_agentclusterinstall
+
+- name: Add AgentClusterInstall conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "AgentClusterInstall.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default(item.reason | default('')) }}"
+      milestone: "2-CLUSTER_INSTALL"
+  loop: "{{ agentclusterinstall_query.resources[0].status.conditions | default([]) }}"
+  when:
+    - has_agentclusterinstall
+    - agentclusterinstall_query.resources[0].status.conditions is defined
+
+# ImageBasedInstall events (IBI deployments)
+- name: Add ImageBasedInstall creation event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ imagebasedinstall_query.resources[0].metadata.creationTimestamp }}"
+      event: "ImageBasedInstall.Created"
+      event_description: "ImageBasedInstall {{ spoke_cluster }} created"
+      milestone: "2-CLUSTER_INSTALL"
+  when: has_imagebasedinstall
+
+- name: Add ImageBasedInstall conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "ImageBasedInstall.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default(item.reason | default('')) }}"
+      milestone: "2-CLUSTER_INSTALL"
+  loop: "{{ imagebasedinstall_query.resources[0].status.conditions | default([]) }}"
+  when:
+    - has_imagebasedinstall
+    - imagebasedinstall_query.resources[0].status.conditions is defined
+
+# Query and add InfraEnv events (AI deployments only)
+- name: Query InfraEnv
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: infraenv_query
+  failed_when: false
+  when: ztp_deployment_timeline_deployment_method == 'AI'
+
+- name: Add InfraEnv creation event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ infraenv_query.resources[0].metadata.creationTimestamp }}"
+      event: "InfraEnv.Created"
+      event_description: "InfraEnv {{ infraenv_query.resources[0].metadata.name }} created for discovery ISO"
+      milestone: "3-DISCOVERY"
+  when:
+    - ztp_deployment_timeline_deployment_method == 'AI'
+    - infraenv_query.resources | default([]) | length > 0
+
+- name: Add InfraEnv conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "InfraEnv.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default(item.reason | default('')) }}"
+      milestone: "3-DISCOVERY"
+  loop: "{{ infraenv_query.resources[0].status.conditions | default([]) }}"
+  when:
+    - ztp_deployment_timeline_deployment_method == 'AI'
+    - infraenv_query.resources | default([]) | length > 0
+    - infraenv_query.resources[0].status.conditions is defined
+
+# Query and add Agent events (AI deployments only)
+- name: Query Agents
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: agents_query
+  failed_when: false
+  when: ztp_deployment_timeline_deployment_method == 'AI'
+
+- name: Add Agent registration events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.metadata.creationTimestamp }}"
+      event: "Agent.Registered"
+      event_description: "Agent {{ item.metadata.name }} registered"
+      milestone: "3-DISCOVERY"
+  loop: "{{ agents_query.resources | default([]) }}"
+  when: ztp_deployment_timeline_deployment_method == 'AI'
+
+- name: Add Agent conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.1.lastTransitionTime }}"
+      event: "Agent.Condition.{{ item.1.type }}"
+      event_description: "{{ item.1.status }}: {{ item.1.message | default(item.1.reason | default('')) }}"
+      milestone: "3-DISCOVERY"
+  loop: "{{ agents_query.resources | default([]) | subelements('status.conditions', skip_missing=True) }}"
+  when: ztp_deployment_timeline_deployment_method == 'AI'
+
+# Query and add ManagedCluster conditions
+- name: Add ManagedCluster conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "ManagedCluster.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default(item.reason | default('')) }}"
+      milestone: "6-IMPORT"
+  loop: "{{ managedcluster_query.resources[0].status.conditions | default([]) }}"
+  when:
+    - has_managedcluster
+    - managedcluster_query.resources[0].status.conditions is defined
+
+# Query and add ManifestWork events
+- name: Query ManifestWorks
+  kubernetes.core.k8s_info:
+    api_version: work.open-cluster-management.io/v1
+    kind: ManifestWork
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: manifestworks_query
+  failed_when: false
+
+- name: Add ManifestWork creation events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.metadata.creationTimestamp }}"
+      event: "ManifestWork.Created.{{ item.metadata.name }}"
+      event_description: "ManifestWork {{ item.metadata.name }} created"
+      milestone: "7-MANIFESTWORK"
+  loop: "{{ manifestworks_query.resources | default([]) }}"
+
+# Query and add Policy events
+- name: Query Policies
+  kubernetes.core.k8s_info:
+    api_version: policy.open-cluster-management.io/v1
+    kind: Policy
+    namespace: "{{ spoke_cluster }}"
+    kubeconfig: "{{ hub_kubeconfig }}"
+  register: policies_query
+  failed_when: false
+
+- name: Add Policy compliance events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.status.compliant | default('Unknown') }}"
+      event: "Policy.{{ item.metadata.name }}"
+      event_description: "{{ item.status.compliant | default('Unknown') }}"
+      milestone: "8-POLICY"
+  loop: "{{ policies_query.resources | default([]) }}"
+  when: item.status.compliant is defined
+
+# Add TALM CGU events
+- name: Add TALM CGU conditions as events
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ item.lastTransitionTime }}"
+      event: "TALM.CGU.Condition.{{ item.type }}"
+      event_description: "{{ item.status }}: {{ item.message | default(item.reason | default('')) }}"
+      milestone: "9-TALM_CGU_COMPLETION"
+  loop: "{{ talm_cgu_query.resources[0].status.conditions | default([]) }}"
+  when:
+    - has_talm_cgu
+    - talm_cgu_query.resources[0].status.conditions is defined
+
+- name: Add TALM CGU completion event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ ztp_deployment_timeline_end_time }}"
+      event: "TALM.CGU.Completed"
+      event_description: "ClusterGroupUpgrade {{ spoke_cluster }} completed - cluster ready for workloads"
+      milestone: "9-TALM_CGU_COMPLETION"
+  when: ztp_deployment_timeline_end_time != ""
+
+# Check for ztp-done label
+- name: Check if ztp-done label is present
+  ansible.builtin.set_fact:
+    has_ztp_done_label: "{{ managedcluster_query.resources[0].metadata.labels['ztp-done'] is defined }}"
+  when: has_managedcluster
+
+- name: Add ztp-done label event
+  ansible.builtin.set_fact:
+    timeline_events: "{{ timeline_events + [event_item] }}"
+  vars:
+    event_item:
+      timestamp: "{{ managedcluster_query.resources[0].metadata.creationTimestamp }}"
+      event: "ZTP.ZtpDoneLabelPresent"
+      event_description: "ztp-done label is present on cluster"
+      milestone: "10-ZTP_DONE"
+  when:
+    - has_managedcluster
+    - has_ztp_done_label | default(false)
+
+# Sort events by timestamp
+- name: Sort timeline events by timestamp
+  ansible.builtin.set_fact:
+    ztp_deployment_timeline_events: "{{ timeline_events | sort(attribute='timestamp') }}"
+
+- name: Display events collected
+  ansible.builtin.debug:
+    msg: "Collected {{ ztp_deployment_timeline_events | length }} timeline events"

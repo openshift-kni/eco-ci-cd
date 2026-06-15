@@ -1,0 +1,115 @@
+---
+# Molecule verify phase - validates generated remove-iptables templates
+#
+# Runs assertions to ensure removal templates rendered correctly
+
+- name: Verify - Validate generated removal templates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Verify BMC removal script has correct shebang and set -e
+      ansible.builtin.assert:
+        that:
+          - bmc_remove_content is search('#!/bin/bash')
+          - bmc_remove_content is search('set -e')
+        fail_msg: "BMC removal script missing shebang or set -e"
+        success_msg: "✓ BMC removal script has correct header"
+
+    - name: Verify BMC removal script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - bmc_remove_content is search('SOURCE_RANGE="10.6.215.10/32"')
+          - bmc_remove_content is search('HV_IP="10.19.138.55"')
+          - bmc_remove_content is search('HUB_IP="10.6.205.64"')
+          - bmc_remove_content is search('PORT="6180"')
+        fail_msg: "BMC removal script has incorrect variables"
+        success_msg: "✓ BMC removal script variables are correct"
+
+    - name: Verify BMC removal script contains all iptables removal commands
+      ansible.builtin.assert:
+        that:
+          - bmc_remove_content is search('iptables -t nat -D PREROUTING')
+          - bmc_remove_content is search('iptables -t nat -D POSTROUTING')
+          - bmc_remove_content is search('iptables -D FORWARD')
+          - bmc_remove_content is search('DNAT --to-destination')
+          - bmc_remove_content is search('MASQUERADE')
+        fail_msg: "BMC removal script missing iptables commands"
+        success_msg: "✓ BMC removal script has all required commands"
+
+    - name: Verify cluster removal script has correct shebang and set -e
+      ansible.builtin.assert:
+        that:
+          - cluster_remove_content is search('#!/bin/bash')
+          - cluster_remove_content is search('set -e')
+        fail_msg: "Cluster removal script missing shebang or set -e"
+        success_msg: "✓ Cluster removal script has correct header"
+
+    - name: Verify cluster removal script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - cluster_remove_content is search('SOURCE_RANGE="10.6.215.20/32"')
+          - cluster_remove_content is search('HV_IP="10.19.138.55"')
+          - cluster_remove_content is search('HUB_IP="10.6.205.64"')
+          - cluster_remove_content is search('PORT="6180"')
+        fail_msg: "Cluster removal script has incorrect variables"
+        success_msg: "✓ Cluster removal script variables are correct"
+
+    - name: Verify cluster removal script contains all iptables removal commands
+      ansible.builtin.assert:
+        that:
+          - cluster_remove_content is search('iptables -t nat -D PREROUTING')
+          - cluster_remove_content is search('iptables -t nat -D POSTROUTING')
+          - cluster_remove_content is search('iptables -D FORWARD')
+        fail_msg: "Cluster removal script missing iptables commands"
+        success_msg: "✓ Cluster removal script has all required commands"
+
+    - name: Verify registry removal script has correct shebang and set -e
+      ansible.builtin.assert:
+        that:
+          - registry_remove_content is search('#!/bin/bash')
+          - registry_remove_content is search('set -e')
+        fail_msg: "Registry removal script missing shebang or set -e"
+        success_msg: "✓ Registry removal script has correct header"
+
+    - name: Verify registry removal script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - registry_remove_content is search('SOURCE_RANGE="10.6.215.20/32"')
+          - registry_remove_content is search('HV_IP="10.19.138.55"')
+          - registry_remove_content is search('BASTION_IP="10.6.205.37"')
+          - registry_remove_content is search('PORT="6180"')
+        fail_msg: "Registry removal script has incorrect variables"
+        success_msg: "✓ Registry removal script variables are correct"
+
+    - name: Verify registry removal script contains all iptables removal commands
+      ansible.builtin.assert:
+        that:
+          - registry_remove_content is search('iptables -t nat -D PREROUTING')
+          - registry_remove_content is search('iptables -t nat -D POSTROUTING')
+          - registry_remove_content is search('iptables -D FORWARD')
+        fail_msg: "Registry removal script missing iptables commands"
+        success_msg: "✓ Registry removal script has all required commands"
+
+    - name: Verify all scripts have error handling with || true
+      ansible.builtin.assert:
+        that:
+          - bmc_remove_content is search('2>/dev/null')
+          - bmc_remove_content is search('|| true')
+          - cluster_remove_content is search('2>/dev/null')
+          - cluster_remove_content is search('|| true')
+          - registry_remove_content is search('2>/dev/null')
+          - registry_remove_content is search('|| true')
+        fail_msg: "Scripts missing error handling"
+        success_msg: "✓ All scripts have proper error handling"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Remove iptables Template Tests - PASSED"
+          - "=========================================="
+          - "✓ All 3 removal templates rendered correctly"
+          - "✓ All variables substituted properly"
+          - "✓ All iptables removal commands present"
+          - "✓ Error handling (|| true) included"
+          - "=========================================="

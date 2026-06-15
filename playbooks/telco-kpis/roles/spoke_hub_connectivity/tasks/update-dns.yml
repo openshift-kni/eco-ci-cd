@@ -1,0 +1,64 @@
+---
+# Update DNS configuration to serve hypervisor corporate IP as primary A record
+# Pattern: hub domain resolves to HV_IP (not HUB_IP) so iptables DNAT can forward traffic
+
+- name: Display DNS update configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Updating DNS for {{ spoke_hub_connectivity_hub_name }}"
+      - "=========================================="
+      - "Hub wildcard: *.apps.{{ spoke_hub_connectivity_hub_name }}.telco-kpis.rdu3.redhat.com"
+      - "Hub API: api.{{ spoke_hub_connectivity_hub_name }}.telco-kpis.rdu3.redhat.com"
+      - "Target IP: {{ spoke_hub_connectivity_hv_corporate_ip }} (Hypervisor external IP)"
+      - "Hub Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }} (via iptables DNAT)"
+      - "=========================================="
+
+- name: Create dnsmasq configuration for hub domain
+  when: not spoke_hub_connectivity_dry_run | bool
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  become: true
+  ansible.builtin.template:
+    src: dnsmasq-hub.conf.j2
+    dest: "/etc/NetworkManager/dnsmasq.d/00-spoke-hub-{{ spoke_hub_connectivity_hub_name }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  register: dnsmasq_config
+
+- name: Reload NetworkManager to apply dnsmasq configuration
+  when:
+    - not spoke_hub_connectivity_dry_run | bool
+    - dnsmasq_config.changed
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  become: true
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+
+- name: Verify DNS resolution
+  when: not spoke_hub_connectivity_dry_run | bool
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  ansible.builtin.shell: |
+    set -o pipefail
+    getent ahostsv4 test.apps.{{ spoke_hub_connectivity_hub_name }}.telco-kpis.rdu3.redhat.com | head -1 | awk '{print $1}'
+  register: dns_verify
+  changed_when: false
+  failed_when: dns_verify.stdout != spoke_hub_connectivity_hv_corporate_ip
+
+- name: Display DNS update result
+  when: dns_verify is defined and not dns_verify.skipped | default(false)
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "DNS Update Complete"
+      - "=========================================="
+      - "✓ dnsmasq configuration created: /etc/NetworkManager/dnsmasq.d/00-spoke-hub-{{ spoke_hub_connectivity_hub_name }}.conf"
+      - "✓ NetworkManager reloaded"
+      - "✓ DNS resolution verified:"
+      - "  Query: test.apps.{{ spoke_hub_connectivity_hub_name }}.telco-kpis.rdu3.redhat.com"
+      - "  Result: {{ dns_verify.stdout }}"
+      - "  Expected: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "=========================================="
+      - "Architecture: Spoke → {{ spoke_hub_connectivity_hv_corporate_ip }} (DNS) → iptables DNAT → {{ spoke_hub_connectivity_hub_cluster_ip }} (Hub)"
+      - "=========================================="

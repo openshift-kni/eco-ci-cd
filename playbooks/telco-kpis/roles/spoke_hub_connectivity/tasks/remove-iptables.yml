@@ -1,0 +1,170 @@
+---
+# Remove iptables rules and firewalld rich rules for spoke-hub connectivity
+#
+# Removes THREE sets of rules:
+# 1. BMC IP → Hub cluster (metal3 ports)
+# 2. Cluster IP → Hub cluster (HTTP/API ports)
+# 3. Cluster IP → Hub bastion (registry port)
+
+- name: Display iptables removal configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Removing iptables rules from {{ spoke_hub_connectivity_hypervisor }}"
+      - "=========================================="
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "BMC Source: {{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
+      - "Cluster Source: {{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+      - "Hub Cluster Target: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+      - "Hub Bastion Target: {{ spoke_hub_connectivity_hub_bastion_ip }}"
+      - "=========================================="
+
+# Remove BMC → Hub cluster rules
+- name: Generate BMC removal script from template
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: remove-bmc-iptables-rules.sh.j2
+    dest: /tmp/remove-bmc-iptables-rules-{{ item }}.sh
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove iptables rules for BMC traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: /tmp/remove-bmc-iptables-rules-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  register: iptables_bmc_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up BMC removal scripts
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: /tmp/remove-bmc-iptables-rules-{{ item }}.sh
+    state: absent
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove firewalld rules for BMC traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_bmc_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  register: firewalld_bmc_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  failed_when: false
+
+# Remove Cluster → Hub cluster rules
+- name: Generate cluster removal script from template
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: remove-cluster-iptables-rules.sh.j2
+    dest: /tmp/remove-cluster-iptables-rules-{{ item }}.sh
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove iptables rules for cluster traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: /tmp/remove-cluster-iptables-rules-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  register: iptables_cluster_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up cluster removal scripts
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: /tmp/remove-cluster-iptables-rules-{{ item }}.sh
+    state: absent
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove firewalld rules for cluster traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  register: firewalld_cluster_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  failed_when: false
+
+# Remove Cluster → Hub bastion rules (registry)
+- name: Generate registry removal script from template
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: remove-registry-iptables-rules.sh.j2
+    dest: /tmp/remove-registry-iptables-rules-{{ item }}.sh
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove iptables rules for registry traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: /tmp/remove-registry-iptables-rules-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  register: iptables_registry_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up registry removal scripts
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: /tmp/remove-registry-iptables-rules-{{ item }}.sh
+    state: absent
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Remove firewalld rules for registry traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_bastion_ip }}'
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  register: firewalld_registry_remove
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  failed_when: false
+
+- name: Display removal summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "iptables Rules Removal Complete"
+      - "=========================================="
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "BMC rules removed: {{ spoke_hub_connectivity_bmc_ports | length }}"
+      - "Cluster rules removed: {{ spoke_hub_connectivity_cluster_ports | length }}"
+      - "Registry rules removed: {{ spoke_hub_connectivity_cluster_registry_ports | length }}"
+      - "=========================================="

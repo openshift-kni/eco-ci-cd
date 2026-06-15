@@ -1,0 +1,44 @@
+---
+# Remove DNS configuration for spoke-hub connectivity
+# Cleans up dnsmasq configuration files on the hypervisor
+
+- name: Display DNS removal configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Removing DNS configuration for {{ spoke_hub_connectivity_hub_name }}"
+      - "=========================================="
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "DNS config file: /etc/NetworkManager/dnsmasq.d/00-spoke-hub-{{ spoke_hub_connectivity_hub_name }}.conf"
+      - "=========================================="
+
+- name: Remove dnsmasq configuration file for hub domain
+  when: not spoke_hub_connectivity_dry_run | bool
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  become: true
+  ansible.builtin.file:
+    path: "/etc/NetworkManager/dnsmasq.d/00-spoke-hub-{{ spoke_hub_connectivity_hub_name }}.conf"
+    state: absent
+  register: dnsmasq_removed
+
+- name: Reload NetworkManager to apply DNS changes
+  when:
+    - not spoke_hub_connectivity_dry_run | bool
+    - dnsmasq_removed.changed
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  become: true
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+
+- name: Display DNS removal result
+  when: dnsmasq_removed is defined and not dnsmasq_removed.skipped | default(false)
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "DNS Configuration Removed"
+      - "=========================================="
+      - "✓ Removed: /etc/NetworkManager/dnsmasq.d/00-spoke-hub-{{ spoke_hub_connectivity_hub_name }}.conf"
+      - "✓ NetworkManager reloaded"
+      - "=========================================="

@@ -1,0 +1,71 @@
+---
+# Default variables for spoke_hub_connectivity role
+#
+# NOTE: This role does NOT load vaults directly. All cluster-specific values
+# (IPs, hostnames, etc.) are extracted by Jenkins from Hashicorp Vault and
+# passed as parameters via extraVars in runAnsiblePlaybook().
+#
+# Required parameters from Jenkins (extracted from vaults):
+#   - spoke_hub_connectivity_spoke_name: Spoke cluster name
+#   - spoke_hub_connectivity_hub_name: Hub cluster name
+#   - spoke_hub_connectivity_hypervisor: Hypervisor name (hv6, hv-128, etc.)
+#   - spoke_hub_connectivity_spoke_bmc_ip: Spoke BMC IP address
+#   - spoke_hub_connectivity_spoke_bmc_ip_range: Spoke BMC CIDR range (e.g., "10.6.134.54/32")
+#   - spoke_hub_connectivity_hub_cluster_ip: Hub cluster IP on isolated network
+#   - spoke_hub_connectivity_hub_bastion_ip: Hub bastion IP (for DNS/CR updates)
+#   - spoke_hub_connectivity_hv_corporate_ip: Hypervisor corporate IP
+
+# Standard OpenShift/metal3 service ports
+spoke_hub_connectivity_metal3_ports:
+  - "6183"  # metal3-ironic HTTP/ISO server
+  - "6385"  # Ironic API
+  - "6180"  # metal3 inspector
+  - "6388"  # Ironic conductor
+
+spoke_hub_connectivity_http_ports:
+  - "80"    # HTTP
+  - "443"   # HTTPS
+
+spoke_hub_connectivity_kube_api_port:
+  - "6443"  # Kubernetes API
+
+spoke_hub_connectivity_registry_port:
+  - "5000"  # Container registry on bastion
+
+# Ports by traffic source and destination type
+# BMC → Hub cluster (during ZTP deployment): metal3 ports only
+spoke_hub_connectivity_bmc_ports: >-
+  {{ spoke_hub_connectivity_metal3_ports }}
+
+# Spoke cluster → Hub cluster (after deployment AND during inspection):
+# - metal3 ports: needed during inspection when node boots with cluster IP
+# - HTTP/HTTPS: needed for assisted-image-service and other hub services
+# - Kubernetes API: needed after deployment for klusterlet
+spoke_hub_connectivity_cluster_ports: >-
+  {{
+    spoke_hub_connectivity_metal3_ports +
+    spoke_hub_connectivity_http_ports +
+    spoke_hub_connectivity_kube_api_port
+  }}
+
+# Spoke cluster → Hub bastion (disconnected registry)
+spoke_hub_connectivity_cluster_registry_ports: >-
+  {{ spoke_hub_connectivity_registry_port }}
+
+# All ports combined for iptables rules
+spoke_hub_connectivity_all_ports: >-
+  {{
+    spoke_hub_connectivity_metal3_ports +
+    spoke_hub_connectivity_http_ports +
+    spoke_hub_connectivity_kube_api_port +
+    spoke_hub_connectivity_registry_port
+  }}
+
+# Action to perform (set by playbook)
+spoke_hub_connectivity_action: "setup"  # setup, remove, check-only, list-interconnections
+
+# Feature flags
+spoke_hub_connectivity_update_dns: true
+spoke_hub_connectivity_update_provisioning_cr: true
+spoke_hub_connectivity_dry_run: false
+spoke_hub_connectivity_debug: false

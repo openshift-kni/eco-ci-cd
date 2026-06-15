@@ -1,0 +1,53 @@
+---
+# Update hub Provisioning CR with externalIPs pointing to hypervisor corporate IP
+# This allows metal3-ironic to advertise services on HV corporate IP
+
+- name: Display Provisioning CR update configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Updating Provisioning CR on {{ spoke_hub_connectivity_hub_name }}"
+      - "=========================================="
+      - "External IP: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "Hub Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+      - "=========================================="
+
+- name: Get current Provisioning CR configuration
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_hub_connectivity_hub_kubeconfig }} get provisioning provisioning-configuration -o jsonpath='{.spec.virtualMediaViaExternalNetwork}'
+  register: current_provisioning_config
+  changed_when: false
+  failed_when: false
+
+- name: Generate Provisioning CR update script from template
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: update-provisioning-cr.sh.j2
+    dest: /tmp/update-provisioning-cr.sh
+    mode: '0755'
+
+- name: Update Provisioning CR with externalIPs
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: /tmp/update-provisioning-cr.sh
+  register: provisioning_update_result
+  changed_when: "'Provisioning CR updated' in provisioning_update_result.stdout"
+
+- name: Clean up Provisioning CR update script
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: /tmp/update-provisioning-cr.sh
+    state: absent
+
+- name: Display Provisioning CR update result
+  when: provisioning_update_result is defined and not provisioning_update_result.skipped | default(false)
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Provisioning CR Update Complete"
+      - "=========================================="
+      - "{{ provisioning_update_result.stdout_lines | default(['No changes']) }}"
+      - "=========================================="
+      - "NOTE: Verify metal3 services are accessible on {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "Test: curl http://{{ spoke_hub_connectivity_hv_corporate_ip }}:6183/"
+      - "=========================================="

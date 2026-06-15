@@ -1,0 +1,179 @@
+---
+# Setup source-filtered iptables rules for spoke-hub connectivity
+#
+# Creates TWO sets of iptables rules with different source IP filtering:
+# 1. BMC IP → metal3/HTTP/registry ports (for ZTP deployment)
+# 2. Cluster IP → Kubernetes API port (for klusterlet after deployment)
+
+- name: Display iptables configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Setting up iptables rules on {{ spoke_hub_connectivity_hypervisor }}"
+      - "=========================================="
+      - "BMC Source: {{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
+      - "Cluster Source: {{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+      - "Destination: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "Hub Cluster Target: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+      - "Hub Bastion Target: {{ spoke_hub_connectivity_hub_bastion_ip }}"
+      - "BMC Ports (to cluster): {{ spoke_hub_connectivity_bmc_ports | join(', ') }}"
+      - "Cluster Ports (to cluster): {{ spoke_hub_connectivity_cluster_ports | join(', ') }}"
+      - "Cluster Registry Ports (to bastion): {{ spoke_hub_connectivity_cluster_registry_ports | join(', ') }}"
+      - "=========================================="
+
+# BMC traffic rules (ZTP/metal3/registry)
+- name: Create iptables setup script on hypervisor (BMC traffic)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: setup-iptables-rule.sh.j2
+    dest: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-bmc-{{ item }}.sh"
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  vars:
+    source_ip_range: "{{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
+
+- name: Execute iptables setup script for each BMC port
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: >-
+    bash /tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-bmc-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  register: iptables_bmc_result
+  changed_when: "'iptables -t nat -A' in iptables_bmc_result.stdout"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Clean up iptables setup scripts (BMC)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-bmc-{{ item }}.sh"
+    state: absent
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Cluster traffic rules (Kubernetes API)
+- name: Create iptables setup script on hypervisor (Cluster API traffic)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: setup-iptables-rule.sh.j2
+    dest: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-cluster-{{ item }}.sh"
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  vars:
+    source_ip_range: "{{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+
+- name: Execute iptables setup script for each cluster port
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: >-
+    bash /tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-cluster-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  register: iptables_cluster_result
+  changed_when: "'iptables -t nat -A' in iptables_cluster_result.stdout"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Clean up iptables setup scripts (Cluster)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-cluster-{{ item }}.sh"
+    state: absent
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Cluster registry traffic rules (to hub bastion, not hub cluster)
+- name: Create iptables setup script on hypervisor (Cluster registry traffic to bastion)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.template:
+    src: setup-iptables-rule.sh.j2
+    dest: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-registry-{{ item }}.sh"
+    mode: '0755'
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  vars:
+    source_ip_range: "{{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+    hub_ip: "{{ spoke_hub_connectivity_hub_bastion_ip }}"
+
+- name: Execute iptables setup script for each registry port
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.command: >-
+    bash /tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-registry-{{ item }}.sh
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  register: iptables_registry_result
+  changed_when: "'iptables -t nat -A' in iptables_registry_result.stdout"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Clean up iptables setup scripts (Registry)
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.file:
+    path: "/tmp/setup-iptables-{{ spoke_hub_connectivity_spoke_name }}-registry-{{ item }}.sh"
+    state: absent
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Firewalld persistence (BMC traffic)
+- name: Add firewalld rich rules for BMC traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_bmc_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
+  register: firewalld_bmc_result
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Firewalld persistence (Cluster traffic)
+- name: Add firewalld rich rules for cluster traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
+  register: firewalld_cluster_result
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Firewalld persistence (Registry traffic to bastion)
+- name: Add firewalld rich rules for registry traffic
+  when: not spoke_hub_connectivity_dry_run | bool
+  become: true
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family='ipv4'
+      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
+      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
+      forward-port port='{{ item }}' protocol='tcp'
+      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_bastion_ip }}'
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
+  register: firewalld_registry_result
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Display iptables setup summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "iptables Rules Setup Complete"
+      - "=========================================="
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "BMC → Hub cluster rules: {{ spoke_hub_connectivity_bmc_ports | length }} ports"
+      - "Cluster → Hub cluster rules: {{ spoke_hub_connectivity_cluster_ports | length }} ports"
+      - "Cluster → Hub bastion rules: {{ spoke_hub_connectivity_cluster_registry_ports | length }} ports"
+      - "Persistent: Yes (via firewalld)"
+      - "=========================================="

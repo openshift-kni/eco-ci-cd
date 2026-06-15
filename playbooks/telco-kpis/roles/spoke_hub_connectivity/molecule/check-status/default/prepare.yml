@@ -1,0 +1,55 @@
+---
+# Molecule prepare phase - sets up test fixtures for check-status tests
+#
+# Creates mock variables and output directory for template testing
+
+- name: Prepare test environment
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: /tmp/molecule-tests/check-status
+        state: directory
+        mode: '0755'
+
+    - name: Setup spoke-hub connectivity variables
+      ansible.builtin.set_fact:
+        spoke_hub_connectivity_spoke_name: "spoke-01"
+        spoke_hub_connectivity_hub_name: "dev-kpi-01"
+        spoke_hub_connectivity_hypervisor: "localhost"
+        spoke_hub_connectivity_spoke_bmc_ip: "10.6.214.10"
+        spoke_hub_connectivity_spoke_bmc_ip_range: "10.6.214.10/32"
+        spoke_hub_connectivity_spoke_cluster_ip: "10.6.214.20"
+        spoke_hub_connectivity_spoke_cluster_ip_range: "10.6.214.20/32"
+        spoke_hub_connectivity_hub_cluster_ip: "10.6.204.64"
+        spoke_hub_connectivity_hub_bastion_ip: "10.6.204.37"
+        spoke_hub_connectivity_hv_corporate_ip: "10.19.138.54"
+        spoke_hub_connectivity_bmc_ports:
+          - 6180
+          - 6181
+          - 6183
+          - 6385
+        spoke_hub_connectivity_cluster_ports:
+          - 80
+          - 443
+          - 6443
+          - 22624
+        spoke_hub_connectivity_cluster_registry_ports:
+          - 5000
+
+    - name: Display test configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Check Status Test Configuration"
+          - "=========================================="
+          - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+          - "  BMC IP: {{ spoke_hub_connectivity_spoke_bmc_ip }}"
+          - "  Cluster IP: {{ spoke_hub_connectivity_spoke_cluster_ip }}"
+          - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+          - "  Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+          - "  Bastion IP: {{ spoke_hub_connectivity_hub_bastion_ip }}"
+          - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+          - "  Corporate IP: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+          - "=========================================="

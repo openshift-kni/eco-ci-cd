@@ -1,0 +1,50 @@
+---
+# Molecule prepare phase - sets up test fixtures for remove-iptables tests
+#
+# Creates mock variables for testing removal template generation
+
+- name: Prepare test environment
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: /tmp/molecule-tests/remove
+        state: directory
+        mode: '0755'
+
+    - name: Setup spoke-hub connectivity variables
+      ansible.builtin.set_fact:
+        spoke_hub_connectivity_spoke_name: "spoke-02"
+        spoke_hub_connectivity_hub_name: "dev-kpi-02"
+        spoke_hub_connectivity_hypervisor: "localhost"
+        spoke_hub_connectivity_spoke_bmc_ip_range: "10.6.215.10/32"
+        spoke_hub_connectivity_spoke_cluster_ip_range: "10.6.215.20/32"
+        spoke_hub_connectivity_hub_cluster_ip: "10.6.205.64"
+        spoke_hub_connectivity_hub_bastion_ip: "10.6.205.37"
+        spoke_hub_connectivity_hv_corporate_ip: "10.19.138.55"
+        spoke_hub_connectivity_bmc_ports:
+          - 6180
+          - 6181
+          - 6183
+          - 6385
+        spoke_hub_connectivity_cluster_ports:
+          - 80
+          - 443
+          - 6443
+          - 22624
+        spoke_hub_connectivity_cluster_registry_ports:
+          - 5000
+        item: "6180"  # Mock loop variable for template testing
+
+    - name: Display test configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Remove iptables Test Configuration"
+          - "=========================================="
+          - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+          - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+          - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+          - "Testing removal template generation"
+          - "=========================================="

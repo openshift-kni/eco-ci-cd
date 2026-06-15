@@ -1,0 +1,131 @@
+---
+# Setup Spoke-Hub Connectivity via Hypervisor iptables Rules
+#
+# This playbook configures transparent connectivity between spoke clusters
+# (on corporate network) and hub clusters (on isolated network) via hypervisor
+# iptables DNAT rules with source IP filtering.
+#
+# Architecture:
+#   Spoke BMC (10.6.x.x) → Hypervisor Corporate IP (10.8.x.x or 10.6.x.x)
+#     → [iptables DNAT] → Hub Cluster (172.16.x.x)
+#
+# Required Parameters (passed from Jenkins via extraVars):
+#   - spoke_name: Spoke cluster name
+#   - hub_name: Hub cluster name
+#   - hypervisor: Hub hypervisor FQDN (from getClusterHypervisor() - retrieved from vault)
+#   - action: Action to perform (setup, remove, check-only, list-interconnections)
+#   - update_dns: Update DNS configuration (true/false)
+#   - update_provisioning_cr: Update Provisioning CR (true/false)
+#   - dry_run: Dry run mode (true/false)
+#   - debug: Debug mode (true/false)
+#
+# Example usage from Jenkins:
+#   def hypervisor = getClusterHypervisor(hubCluster)  // Gets FQDN from vault
+#   runAnsiblePlaybook(
+#     playbookName: 'setup-spoke-hub-connectivity.yml',
+#     playbookPath: 'playbooks/telco-kpis',
+#     inventoryPath: 'inventories/ocp-deployment/build-inventory.py',
+#     volumeName: PODMAN_VOLUME_NAME,
+#     extraVars: [
+#       "spoke_name=spree-01",
+#       "hub_name=kni-qe-70",
+#       "hypervisor=${hypervisor}",  // Value from vault, not hardcoded
+#       "action=setup",
+#       "update_dns=true",
+#       "update_provisioning_cr=true",
+#       "dry_run=false",
+#       "debug=false"
+#     ]
+#   )
+
+- name: Setup Spoke-Hub Connectivity
+  hosts: bastion
+  gather_facts: false
+  vars:
+    spoke_hub_connectivity_action: "{{ action | default('setup') }}"
+    spoke_hub_connectivity_spoke_name: "{{ spoke_name }}"
+    spoke_hub_connectivity_hub_name: "{{ hub_name }}"
+    spoke_hub_connectivity_hypervisor: "{{ hypervisor }}"
+    spoke_hub_connectivity_hub_kubeconfig: "{{ hub_kubeconfig }}"
+    spoke_hub_connectivity_update_dns: "{{ update_dns | default(true) }}"
+    spoke_hub_connectivity_update_provisioning_cr: "{{ update_provisioning_cr | default(true) }}"
+    spoke_hub_connectivity_dry_run: "{{ dry_run | default(false) }}"
+    spoke_hub_connectivity_debug: "{{ debug | default(false) }}"
+
+  tasks:
+    - name: Block to extract vault values and query hub cluster
+      when: spoke_hub_connectivity_action != 'list-interconnections'
+      block:
+        # NOTE: We explicitly load vault files instead of relying on inventory variables
+        # because this playbook needs data from BOTH spoke and hub clusters.
+        # Inventory is targeted at spoke bastion (hosts: bastion), but we need:
+        #   - Spoke data: master0 BMC IP, ansible_host (cluster node IP)
+        #   - Hub data: bastion (registry IP), hypervisor (corporate IP)
+        # Using include_vars with 'name' parameter creates namespaced variables
+        # (spoke_master0.bmc_address, hub_bastion_vault.ansible_host) to avoid conflicts.
+
+        - name: Load host_vars/master0 (spoke cluster)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../inventories/ocp-deployment/host_vars/master0"
+            name: spoke_master0
+
+        - name: Load host_vars/hypervisor
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../inventories/ocp-deployment/host_vars/hypervisor"
+            name: hypervisor_vault
+
+        - name: Load host_vars/bastion (hub bastion - for registry IP)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../inventories/ocp-deployment/host_vars/bastion"
+            name: hub_bastion_vault
+
+        - name: Parse BMC IP from Redfish URL
+          ansible.builtin.set_fact:
+            spoke_bmc_ip: "{{ (spoke_master0.bmc_address | urlsplit).hostname }}"
+            spoke_cluster_ip: "{{ spoke_master0.ansible_host }}"
+
+        - name: Get hub cluster nodes info
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ spoke_hub_connectivity_hub_kubeconfig }}"
+            kind: Node
+          register: hub_nodes
+          failed_when: hub_nodes.resources | length == 0
+
+        - name: Set hub cluster IP fact
+          ansible.builtin.set_fact:
+            hub_cluster_ip: >-
+              {{
+                hub_nodes.resources[0].status.addresses
+                | selectattr('type', 'equalto', 'InternalIP')
+                | map(attribute='address')
+                | first
+              }}
+
+        - name: Set connectivity variables
+          ansible.builtin.set_fact:
+            spoke_hub_connectivity_spoke_bmc_ip: "{{ spoke_bmc_ip }}"
+            spoke_hub_connectivity_spoke_bmc_ip_range: "{{ spoke_bmc_ip }}/32"
+            spoke_hub_connectivity_spoke_cluster_ip: "{{ spoke_cluster_ip }}"
+            spoke_hub_connectivity_spoke_cluster_ip_range: "{{ spoke_cluster_ip }}/32"
+            spoke_hub_connectivity_hub_cluster_ip: "{{ hub_cluster_ip }}"
+            spoke_hub_connectivity_hub_bastion_ip: "{{ hub_bastion_vault.ansible_host }}"
+            spoke_hub_connectivity_hv_corporate_ip: "{{ hypervisor_vault.ansible_host }}"
+
+        - name: Display extracted configuration
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Configuration:"
+              - "=========================================="
+              - "Spoke BMC IP: {{ spoke_hub_connectivity_spoke_bmc_ip }}"
+              - "Spoke BMC Range: {{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
+              - "Spoke Cluster IP: {{ spoke_hub_connectivity_spoke_cluster_ip }}"
+              - "Spoke Cluster Range: {{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+              - "Hub Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+              - "Hub Bastion IP: {{ spoke_hub_connectivity_hub_bastion_ip }}"
+              - "Hypervisor Corporate IP: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+              - "=========================================="
+
+    - name: Execute spoke-hub connectivity configuration
+      ansible.builtin.include_role:
+        name: spoke_hub_connectivity

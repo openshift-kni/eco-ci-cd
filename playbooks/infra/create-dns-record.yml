@@ -269,7 +269,7 @@
     - name: Copy zone file to bind zones directory
       ansible.builtin.copy:
         src: "{{ zone_file }}"
-        dest: "{{ ansible_user_dir }}/bind/zones/{{ zone_file | basename }}"
+        dest: "{{ ansible_user_dir }}/.config/bind/zones/{{ zone_file | basename }}"
         mode: "0644"
         remote_src: true
 

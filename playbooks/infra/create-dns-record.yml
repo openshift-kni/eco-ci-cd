@@ -169,11 +169,15 @@
               - "New zone file created: {{ zone_file }}"
               - "Domain: {{ dns_domain }}"
 
+    - name: Build safe regexp for DNS hostname
+      ansible.builtin.set_fact:
+        dns_record_regexp: "^{{ dns_record_hostname | replace('*', '\\*') | replace('.', '\\.') }}\\s+IN\\s+A\\s+"
+
     - name: Add A record to zone file
       ansible.builtin.lineinfile:
         path: "{{ zone_file }}"
         line: "{{ dns_record_hostname }}    IN  A    {{ dns_record_ip }}"
-        regexp: "^{{ dns_record_hostname }}\\s+IN\\s+A\\s+"
+        regexp: "{{ dns_record_regexp }}"
         insertafter: EOF
         state: present
         backup: true

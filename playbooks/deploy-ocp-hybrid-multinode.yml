@@ -709,6 +709,11 @@
   hosts: vm_hosts
   tasks:
 
+    - name: Skip play if no KVM nodes are defined
+      ansible.builtin.meta: end_play
+      when: groups['nodes'] | map('extract', hostvars) | selectattr('vendor', 'defined') |
+        map(attribute='vendor') | map('lower') | select('equalto', 'kvm') | list | length == 0
+
     - name: Enable CRB repository
       become: true
       ansible.builtin.command: "dnf config-manager --enable rhosp-rhel-9.4-crb"

@@ -10,17 +10,17 @@
 #   - Valid pull secret with access to quay.io/openshift-release-dev
 #
 # Usage:
-#   ansible-playbook playbooks/ran/mirror-ocp-release.yml \
+#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "release=4.19"
 #
 #   # Mirror a specific z-stream build:
-#   ansible-playbook playbooks/ran/mirror-ocp-release.yml \
+#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "release=4.19.1"
 #
 #   # Mirror from an explicit pull spec (e.g. nightly or RC build):
-#   ansible-playbook playbooks/ran/mirror-ocp-release.yml \
+#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "release=quay.io/openshift-release-dev/ocp-release:4.19.0-rc.2-x86_64"
 #
@@ -31,9 +31,11 @@
 #     - Full pull spec     (e.g. "quay.io/openshift-release-dev/ocp-release:4.19.0-rc.2-x86_64")
 #
 # Optional variables:
-#   mirror_ocp_release_cache_dir:      Working directory for oc-mirror cache (default: /opt/cache)
-#   mirror_ocp_release_registry_path:  Repository path inside the registry (default: ocp4/openshift)
+#   mirror_ocp_release_cache_dir:        Working directory for oc-mirror cache (default: /opt/cache)
+#   mirror_ocp_release_registry_path:    Repository path inside the registry (default: ocp4/openshift)
 #   mirror_ocp_release_pull_secret_path: Temp path to write the pull secret (default: /tmp/pull-secret.json)
+#   kubeconfig:                          Path to hub cluster kubeconfig. When set, creates or updates
+#                                        a ClusterImageSet resource pointing to the mirrored release.
 #
 # Variables consumed from inventory (group_vars/bastions):
 #   pull_secret_string:          Base64-encoded pull secret JSON
@@ -41,7 +43,7 @@
 #   disconnected_registry_port:  Port the registry listens on (e.g. "5000")
 #   share_http_iso_port:         HTTP store port used by the mirror role for artifact serving
 
-- name: Mirror OCP release to disconnected registry
+- name: Prepare hub for OCP release: mirror images, register ClusterImageSet and RHCOS ISO
   hosts: bastion
   gather_facts: true
 
@@ -132,3 +134,88 @@
       ansible.builtin.file:
         path: "{{ mirror_ocp_release_pull_secret_path }}"
         state: absent
+
+    - name: Create or update ClusterImageSet for mirrored OCP version
+      when:
+        - kubeconfig is defined
+        - kubeconfig | length > 0
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: hive.openshift.io/v1
+          kind: ClusterImageSet
+          metadata:
+            name: "{{ ocp_version_facts_major }}.{{ ocp_version_facts_minor }}"
+          spec:
+            releaseImage: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/{{ mirror_ocp_release_registry_path }}:{{ ocp_version_facts_parsed_release }}"
+
+    - name: Register RHCOS ISO for Assisted Installer
+      when:
+        - kubeconfig is defined
+        - kubeconfig | length > 0
+      block:
+        - name: Read RHCOS ISO URL from rhcos.json
+          ansible.builtin.command:
+            cmd: >-
+              jq -r '.architectures.x86_64.artifacts.metal.formats.iso.disk.location'
+              {{ mirror_ocp_release_cache_dir }}/{{ ocp_version_facts_parsed_release }}/rhcos.json
+          register: _rhcos_iso_url
+          changed_when: false
+
+        - name: Read RHCOS version from rhcos.json
+          ansible.builtin.command:
+            cmd: >-
+              jq -r '.architectures.x86_64.artifacts.metal.release'
+              {{ mirror_ocp_release_cache_dir }}/{{ ocp_version_facts_parsed_release }}/rhcos.json
+          register: _rhcos_version
+          changed_when: false
+
+        - name: Set RHCOS ISO local path and serving URL
+          ansible.builtin.set_fact:
+            _rhcos_iso_filename: "{{ _rhcos_iso_url.stdout | basename }}"
+            _rhcos_local_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/{{ _rhcos_iso_url.stdout | basename }}"
+
+        - name: Check if RHCOS ISO already downloaded
+          ansible.builtin.stat:
+            path: "{{ http_store_path | default('/opt/http_store/data') }}/{{ _rhcos_iso_filename }}"
+          register: _rhcos_iso_stat
+
+        - name: Download RHCOS ISO to HTTP store
+          ansible.builtin.get_url:
+            url: "{{ _rhcos_iso_url.stdout }}"
+            dest: "{{ http_store_path | default('/opt/http_store/data') }}/{{ _rhcos_iso_filename }}"
+            mode: "0644"
+          when: not _rhcos_iso_stat.stat.exists
+
+        - name: Check if AgentServiceConfig already has this OS image version
+          ansible.builtin.shell: >-
+            oc get agentserviceconfig agent
+            -o jsonpath='{.spec.osImages[*].openshiftVersion}'
+          environment:
+            KUBECONFIG: "{{ kubeconfig }}"
+          register: _existing_os_versions
+          changed_when: false
+
+        - name: Add RHCOS OS image to AgentServiceConfig
+          when: >-
+            (ocp_version_facts_major ~ '.' ~ ocp_version_facts_minor)
+            not in _existing_os_versions.stdout.split()
+          ansible.builtin.shell: |
+            oc patch agentserviceconfig agent --type=json -p='[
+              {
+                "op": "add",
+                "path": "/spec/osImages/-",
+                "value": {
+                  "cpuArchitecture": "x86_64",
+                  "openshiftVersion": "{{ ocp_version_facts_major }}.{{ ocp_version_facts_minor }}",
+                  "rootFSUrl": "",
+                  "url": "{{ _rhcos_local_url }}",
+                  "version": "{{ _rhcos_version.stdout }}"
+                }
+              }
+            ]'
+          environment:
+            KUBECONFIG: "{{ kubeconfig }}"
+          changed_when: true

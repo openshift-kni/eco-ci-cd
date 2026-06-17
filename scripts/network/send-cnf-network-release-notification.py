@@ -114,8 +114,10 @@ def parse_arguments():
     parser.add_argument("--version", required=True, help="Release version")
     
     # Optional arguments with defaults
-    parser.add_argument("--registry-url", default="https://registry.stage.redhat.io/openshift4", 
-                       help="Registry URL for images (default: %(default)s)")    
+    parser.add_argument("--registry-url", default="https://registry.stage.redhat.io/openshift4",
+                       help="Registry URL for images (default: %(default)s)")
+    parser.add_argument("--containers-version", default=None,
+                       help="Version tag for CNF/DPDK container images (default: derived from --version)")
     # Direct values
     parser.add_argument("--jira-link", default="", help="Jira card link")
     parser.add_argument("--polarion-url", default="", help="Polarion URL")
@@ -181,6 +183,7 @@ def construct_prow_urls(major, minor, phase1_build_id=None):
 
 def create_release_info(args, rhel_version):
     """Create the release info dictionary."""
+    containers_version = args.containers_version if args.containers_version else args.version
     return {
         "version": args.version,
         "jira_card_link": args.jira_link,
@@ -189,8 +192,8 @@ def create_release_info(args, rhel_version):
             "cluster_name": args.cluster_name,
             "nic": args.nic,
             "secondary_nic": args.secondary_nic,
-            "cnf_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{args.version}",
-            "dpdk_image_version": f"{args.registry_url}/dpdk-base-{rhel_version}:v{args.version}"
+            "cnf_image_version": f"{args.registry_url}/cnf-{rhel_version}:v{containers_version}",
+            "dpdk_image_version": f"{args.registry_url}/dpdk-base-{rhel_version}:v{containers_version}"
         }
     }
 

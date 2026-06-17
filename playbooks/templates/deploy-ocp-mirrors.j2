@@ -3,11 +3,21 @@
   mirrors:
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
+{% if ocp_version_facts_major | int == 5 %}
+{# Temporary mirror. Will be removed once OCP fully supports ocp-v5.0-art-dev #}
+- source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+  mirrors:
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift-release-dev/ocp-v4.0-art-dev
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
+{% endif %}
 - source: quay.io/openshift-release-dev/ocp-v{{ ocp_version_facts_major }}.0-art-dev
   mirrors:
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift-release-dev/ocp-v{{ ocp_version_facts_major }}.0-art-dev
+    - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release
-- source: registry.ci.openshift.org/ocp/release
+{% set ci_release_source = 'registry.ci.openshift.org/ocp/release-5' if ocp_version_facts_major | int == 5 else 'registry.ci.openshift.org/ocp/release' %}
+- source: {{ ci_release_source }}
   mirrors:
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release-images
     - {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ocp{{ ocp_version_facts_major }}/openshift/release

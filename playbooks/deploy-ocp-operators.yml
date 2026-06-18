@@ -127,9 +127,20 @@
           ansible.builtin.set_fact:
             version_string: "{{ version | string }}"
 
+        - name: Set version for short format
+          when: version is defined and version != "" and (version_string | length <= 7)
+          block:
+            - name: Set version directly from short format
+              ansible.builtin.set_fact:
+                extracted_version: "{{ version_string | regex_replace('^([0-9]+\\.[0-9]+).*', '\\1') }}"
+
+            - name: Display using provided version
+              ansible.builtin.debug:
+                msg: "Using provided version {{ extracted_version }}"
+
         # First, try to use the provided version if available
         - name: Parse version from pull spec if provided
-          when: version is defined and version
+          when: version is defined and version and extracted_version is not defined
           block:
             - name: Validate Version String
               when: version_string is ansible.builtin.match('^[0-9]+\\.[0-9]+\\.[0-9]+.*$')
@@ -151,17 +162,6 @@
             - name: Display extracted version from pull spec
               ansible.builtin.debug:
                 msg: "Using version {{ extracted_version }} from pull spec {{ version_string }}  and parsed release {{ ocp_version_facts_parsed_release }}"
-
-        - name: Set version for short format
-          when: version is defined and version != "" and (version_string | length <= 7)
-          block:
-            - name: Set version directly from short format
-              ansible.builtin.set_fact:
-                extracted_version: "{{ version_string | regex_replace('^([0-9]+\\.[0-9]+).*', '\\1') }}"
-
-            - name: Display using provided version
-              ansible.builtin.debug:
-                msg: "Using provided version {{ extracted_version }}"
 
         # Fallback: extract from cluster only if version was not provided or is empty
         - name: Extract OCP version from cluster as fallback

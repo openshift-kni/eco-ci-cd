@@ -77,7 +77,7 @@
             value: true
 
     - name: Enable IP forwarding for OpenShift versions greater than 4.13
-      when: ocp_minor_version | int > 13
+      when: (ocp_minor_version | int > 13 and ocp_major_version | int == 4) or ocp_major_version | int > 4
       ansible.builtin.set_fact:
         cluster_network_patch: "{{ cluster_network_patch +
           [{'op': 'add', 'path': '/spec/defaultNetwork/ovnKubernetesConfig/gatewayConfig/ipForwarding', 'value': 'Global'}] }}"
@@ -161,7 +161,7 @@
       loop: "{{ worker_nodes[1:] }}"
 
     - name: Configure machine settings for OpenShift versions < 4.13
-      when: ocp_minor_version | int < 13
+      when: ocp_major_version | int < 5 and ocp_minor_version | int < 13
       block:
         - name: Apply machine configuration for NIC renaming
           kubernetes.core.k8s:

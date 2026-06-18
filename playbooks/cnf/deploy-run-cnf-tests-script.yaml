@@ -55,7 +55,6 @@
     container_registry: "{{ internal_container_registry_name }}/openshift4"
     features: "sctp"
     role_worker_cnf: "workercnf"
-    latest_minor_version: 21
     cluster_disconnected: false
   tasks:
 
@@ -72,6 +71,7 @@
       ansible.builtin.set_fact:
         version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
         ocp_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+        ocp_major_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}"
 
     - name: Print cluster version
       ansible.builtin.debug:
@@ -123,16 +123,17 @@
         mode: "0777"
 
     - name: Set containers version
-      vars:
-        major: "{{ (version | split('.'))[0] }}"
-        minor: "{{ (version | split('.'))[1] | int }}"
       ansible.builtin.set_fact:
-        containers_version: "{{ ((minor | int) == (latest_minor_version | int)) | ternary(major ~ '.' ~ ((minor | int) - 1), version) }}"
+        containers_version: "{{ version }}"
+
+    - name: Set CNF test image RHEL versions
+      ansible.builtin.set_fact:
+        cnf_tests_rhel: "{{ '9' if version is version('4.20', '>=') else '8' }}"
+        dpdk_tests_rhel: "{{ '9' if version is version('4.16', '>=') else '8' }}"
 
     # TODO: Remove this block when OCP 4.14 reaches end-of-life
     - name: Run CNF tests via podman image. OCP < 4.15
-      when:
-        - ocp_minor_version|int < 15
+      when: ocp_major_version | int == 4 and ocp_minor_version | int < 15
       block:
 
         - name: Remove cnf-tests container
@@ -142,7 +143,7 @@
 
         - name: Remove cnf-tests image
           containers.podman.podman_image:
-            name: "{{ container_registry }}/cnf-tests-rhel8"
+            name: "{{ container_registry }}/cnf-tests-rhel{{ cnf_tests_rhel }}"
             state: absent
             tag: "{{ item }}"
           loop:
@@ -151,7 +152,7 @@
 
         - name: Pull cnf-tests image
           containers.podman.podman_image:
-            name: "{{ container_registry }}/cnf-tests-rhel8"
+            name: "{{ container_registry }}/cnf-tests-rhel{{ cnf_tests_rhel }}"
             state: present
             tag: "v{{ containers_version }}"
 
@@ -181,11 +182,10 @@
             junit_report_path: /tmp/junit
             report_path: /tmp/report
             registry: "{{ container_registry }}"
-            cnf_image_tag: "{{ container_registry }}/cnf-tests-rhel8:v{{ containers_version }}"
+            cnf_image_tag: "{{ container_registry }}/cnf-tests-rhel{{ cnf_tests_rhel }}:v{{ containers_version }}"
 
     - name: Run CNF tests via makefile. OCP >= 4.15
-      when:
-        - ocp_minor_version|int >= 15
+      when: (ocp_minor_version|int >= 15 and ocp_major_version | int == 4) or ocp_major_version | int > 4
       block:
         - name: Clone cnf-feature-deploy project
           block:
@@ -270,19 +270,19 @@
 
         - name: Print dpdk-base image version
           ansible.builtin.debug:
-            msg: dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 20) else '9' }}:v{{ containers_version }}
+            msg: dpdk-base-rhel{{ dpdk_tests_rhel }}:v{{ containers_version }}
 
-        - name: Print cnf_tests_version image version
+        - name: Print cnf-tests image version
           ansible.builtin.debug:
-            msg: dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}
+            msg: cnf-tests-rhel{{ cnf_tests_rhel }}:v{{ containers_version }}
 
         - name: Mirror images if disconnected
           ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
           vars:
             image_tag_mirror_set_name: "cnf-tests-images"
             test_images:
-              - "{{ container_registry }}/dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ containers_version }}"
-              - "{{ container_registry }}/cnf-tests-rhel{{ '8' if (version.split('.')[1] | int < 20) else '9' }}:v{{ containers_version }}"
+              - "{{ container_registry }}/dpdk-base-rhel{{ dpdk_tests_rhel }}:v{{ containers_version }}"
+              - "{{ container_registry }}/cnf-tests-rhel{{ cnf_tests_rhel }}:v{{ containers_version }}"
 
         - name: Prepare execute shell script
           ansible.builtin.template:

@@ -7,8 +7,8 @@ podman run --name cnf-container-tests \
     -v {{ report_path }}:/report:Z \
     -e KUBECONFIG=/kubeconfig/kubeconfig \
     -e IMAGE_REGISTRY={{ registry }}/ \
-    -e CNF_TESTS_IMAGE=cnf-tests-rhel8:v{{ version }} \
-    -e DPDK_TESTS_IMAGE="dpdk-base-rhel{{ '8' if (version.split('.')[1] | int < 16) else '9' }}:v{{ version }}" \
+    -e CNF_TESTS_IMAGE=cnf-tests-rhel{{ cnf_tests_rhel }}:v{{ containers_version }} \
+    -e DPDK_TESTS_IMAGE="dpdk-base-rhel{{ dpdk_tests_rhel }}:v{{ containers_version }}" \
     -e NODES_SELECTOR="node-role.kubernetes.io/{{ role_worker_cnf }}=" \
     -e ROLE_WORKER_CNF={{ role_worker_cnf }} \
     -e IS_OPENSHIFT=true \

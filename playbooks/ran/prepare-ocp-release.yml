@@ -25,17 +25,17 @@
 #     --extra-vars "release=quay.io/openshift-release-dev/ocp-release:4.19.0-rc.2-x86_64"
 #
 # Required variables (set via extra-vars or inventory):
-#   release: OCP release to mirror. Accepts:
+#   release:    OCP release to mirror. Accepts:
 #     - Major.minor        (e.g. "4.19")     → resolves to the latest z-stream
 #     - Full version       (e.g. "4.19.1")
 #     - Full pull spec     (e.g. "quay.io/openshift-release-dev/ocp-release:4.19.0-rc.2-x86_64")
+#   kubeconfig: Path to hub cluster kubeconfig. Used to create/update the ClusterImageSet
+#               and register the RHCOS OS image in AgentServiceConfig.
 #
 # Optional variables:
 #   mirror_ocp_release_cache_dir:        Working directory for oc-mirror cache (default: /opt/cache)
 #   mirror_ocp_release_registry_path:    Repository path inside the registry (default: ocp4/openshift)
 #   mirror_ocp_release_pull_secret_path: Temp path to write the pull secret (default: /tmp/pull-secret.json)
-#   kubeconfig:                          Path to hub cluster kubeconfig. When set, creates or updates
-#                                        a ClusterImageSet resource pointing to the mirrored release.
 #
 # Variables consumed from inventory (group_vars/bastions):
 #   pull_secret_string:          Base64-encoded pull secret JSON
@@ -43,7 +43,7 @@
 #   disconnected_registry_port:  Port the registry listens on (e.g. "5000")
 #   share_http_iso_port:         HTTP store port used by the mirror role for artifact serving
 
-- name: Prepare hub for OCP release: mirror images, register ClusterImageSet and RHCOS ISO
+- name: Prepare hub for OCP release
   hosts: bastion
   gather_facts: true
 
@@ -59,7 +59,9 @@
         that:
           - release is defined
           - release | string | length > 0
-        fail_msg: "The 'release' variable must be defined (e.g., release=4.19 or release=4.19.1)"
+          - kubeconfig is defined
+          - kubeconfig | string | length > 0
+        fail_msg: "Both 'release' and 'kubeconfig' must be defined (e.g., release=4.19 kubeconfig=/path/to/kubeconfig)"
 
     - name: Write pull secret to temp file
       ansible.builtin.copy:

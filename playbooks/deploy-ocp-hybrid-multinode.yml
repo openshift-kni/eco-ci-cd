@@ -37,6 +37,7 @@
 # - disconnected (bool): enable disconnected mode
 # - ipv6_only (bool): enable IPv6-only network configuration
 # - ipv4_only (bool): enable IPv4-only network configuration
+# - cpu_partitioning (bool): enable partitioning of the disk
 
 ## Roles Requirements
 # The playbook uses role:
@@ -627,6 +628,8 @@
     - name: Generate deployment manifests for OCP installation
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
+      vars:
+        partitioning_enabled: "{{ cpu_partitioning | default(false) | bool }}"
 
     - name: Get stats for each file
       ansible.builtin.stat:

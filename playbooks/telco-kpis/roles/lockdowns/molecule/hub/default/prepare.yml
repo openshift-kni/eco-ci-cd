@@ -1,0 +1,114 @@
+---
+# Molecule prepare phase - sets up test fixtures
+#
+# Creates mock hub lockdown JSON file for parse action testing
+
+- name: Prepare test environment
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: /tmp/molecule-tests
+        state: directory
+        mode: '0755'
+
+    - name: Create mock hub lockdown JSON file
+      ansible.builtin.copy:
+        content: |
+          {
+            "hub": {
+              "ocp": {
+                "pull_spec": {
+                  "digest": "quay.io/openshift-release-dev/ocp-release@sha256:e2f30027fa1240272c8a472d6c77218ebc486bb966b6862c121187801a40163b",
+                  "tag": "quay.io/openshift-release-dev/ocp-release:4.21.20-x86_64"
+                },
+                "major_version": "4",
+                "minor_version": "21",
+                "full_version": "4.21.20",
+                "architecture": "x86_64"
+              },
+              "operators": [
+                {
+                  "name": "multicluster-engine",
+                  "namespace": "multicluster-engine",
+                  "catalog": "redhat-operators",
+                  "channel": "stable-2.10",
+                  "subscription_name": "multicluster-engine",
+                  "installed_csv": "multicluster-engine.v2.10.3",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "multicluster-engine",
+                  "og_spec": {}
+                },
+                {
+                  "name": "advanced-cluster-management",
+                  "namespace": "open-cluster-management",
+                  "catalog": "redhat-operators",
+                  "channel": "release-2.15",
+                  "subscription_name": "acm-operator-subscription",
+                  "installed_csv": "advanced-cluster-management.v2.15.3",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "open-cluster-management",
+                  "og_spec": {
+                    "targetNamespaces": ["open-cluster-management"]
+                  }
+                },
+                {
+                  "name": "topology-aware-lifecycle-manager",
+                  "namespace": "openshift-operators",
+                  "catalog": "topology-aware-lifecycle-manager-fbc",
+                  "channel": "stable",
+                  "subscription_name": "topology-aware-lifecycle-manager",
+                  "installed_csv": "topology-aware-lifecycle-manager.v4.21.0",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "global-operators",
+                  "og_spec": {}
+                },
+                {
+                  "name": "local-storage-operator",
+                  "namespace": "openshift-local-storage",
+                  "catalog": "redhat-operators",
+                  "channel": "stable",
+                  "subscription_name": "local-storage-operator",
+                  "installed_csv": "local-storage-operator.v4.21.0-202606090112",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "local-operator-group",
+                  "og_spec": {
+                    "targetNamespaces": ["openshift-local-storage"]
+                  }
+                },
+                {
+                  "name": "certified-operator-example",
+                  "namespace": "openshift-operators",
+                  "catalog": "certified-operators",
+                  "channel": "stable",
+                  "subscription_name": "certified-operator-example",
+                  "installed_csv": "certified-operator.v1.0.0",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "global-operators",
+                  "og_spec": {}
+                },
+                {
+                  "name": "community-operator-example",
+                  "namespace": "openshift-operators",
+                  "catalog": "community-operators",
+                  "channel": "stable",
+                  "subscription_name": "community-operator-example",
+                  "installed_csv": "community-operator.v1.0.0",
+                  "install_plan_approval": "Automatic",
+                  "og_name": "global-operators",
+                  "og_spec": {}
+                }
+              ],
+              "metadata": {
+                "cluster_name": "molecule-test-cluster",
+                "capture_timestamp": "2026-06-19T10:00:00Z"
+              }
+            }
+          }
+        dest: /tmp/hub-lockdown.json
+        mode: '0644'
+
+    - name: Display mock lockdown location
+      ansible.builtin.debug:
+        msg: "Mock hub lockdown created at: /tmp/hub-lockdown.json"

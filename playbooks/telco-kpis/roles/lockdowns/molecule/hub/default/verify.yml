@@ -1,0 +1,127 @@
+---
+# Molecule verify phase - validates hub lockdown parse results
+#
+# This runs assertions to verify the parse action set facts correctly
+
+- name: Verify lockdowns role (hub parse)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: TEST 1 - Verify hub_lockdown_operators fact is set
+      ansible.builtin.assert:
+        that:
+          - hub_lockdown_operators is defined
+          - hub_lockdown_operators is sequence
+          - hub_lockdown_operators | length == 6
+        fail_msg: "FAILED: hub_lockdown_operators not set correctly"
+        success_msg: "PASSED: hub_lockdown_operators fact set with 6 operators"
+
+    - name: TEST 2 - Verify hub OCP version facts
+      ansible.builtin.assert:
+        that:
+          - hub_ocp_version is defined
+          - hub_ocp_version == '4.21'
+          - hub_ocp_pull_spec is defined
+          - hub_ocp_pull_spec == 'quay.io/openshift-release-dev/ocp-release@sha256:e2f30027fa1240272c8a472d6c77218ebc486bb966b6862c121187801a40163b'
+        fail_msg: "FAILED: Hub OCP version facts incorrect"
+        success_msg: "PASSED: Hub OCP version facts correct (digest extracted from new format)"
+
+    - name: TEST 3 - Verify redhat operators catalog mapping
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'multicluster-engine') | first).catalog == 'redhat-operators'
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'advanced-cluster-management') | first).catalog == 'redhat-operators'
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'local-storage-operator') | first).catalog == 'redhat-operators'
+        fail_msg: "FAILED: Redhat operator catalogs incorrect"
+        success_msg: "PASSED: Redhat operator catalogs correct"
+
+    - name: TEST 4 - Verify certified operators catalog mapping
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'certified-operator-example') | first).catalog == 'certified-operators'
+        fail_msg: "FAILED: Certified operator catalog incorrect"
+        success_msg: "PASSED: Certified operator catalog correct"
+
+    - name: TEST 5 - Verify community operators catalog mapping
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'community-operator-example') | first).catalog == 'community-operators'
+        fail_msg: "FAILED: Community operator catalog incorrect"
+        success_msg: "PASSED: Community operator catalog correct"
+
+    - name: TEST 6 - Verify FBC catalog remains unchanged
+      ansible.builtin.assert:
+        that:
+          - >-
+            (hub_lockdown_operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | first).catalog
+            == 'topology-aware-lifecycle-manager-fbc'
+        fail_msg: "FAILED: FBC catalog should remain unchanged"
+        success_msg: "PASSED: FBC catalog unchanged"
+
+    - name: TEST 7 - Verify operator field completeness (core fields only)
+      ansible.builtin.assert:
+        that:
+          - hub_lockdown_operators | selectattr('name', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('namespace', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('catalog', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('channel', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('subscription_name', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('install_plan_approval', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('og_name', 'defined') | list | length == 6
+          - hub_lockdown_operators | selectattr('og_spec', 'defined') | list | length == 6
+        fail_msg: "FAILED: Operator fields incomplete"
+        success_msg: "PASSED: All core operator fields present (installed_csv optional)"
+
+    - name: TEST 8 - Verify OperatorGroup spec handling (empty vs populated)
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'multicluster-engine') | first).og_spec == {}
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | first).og_spec == {}
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'advanced-cluster-management') | first).og_spec.targetNamespaces | length == 1
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'local-storage-operator') | first).og_spec.targetNamespaces[0] == 'openshift-local-storage'
+        fail_msg: "FAILED: OperatorGroup spec handling incorrect"
+        success_msg: "PASSED: OperatorGroup specs handled correctly"
+
+    - name: TEST 9 - Verify specific operator details
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'multicluster-engine') | first).channel == 'stable-2.10'
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'advanced-cluster-management') | first).channel == 'release-2.15'
+        fail_msg: "FAILED: Operator details incorrect"
+        success_msg: "PASSED: Operator details correct"
+
+    - name: TEST 9a - Verify backward compatibility with installed_csv field
+      ansible.builtin.assert:
+        that:
+          - (hub_lockdown_operators | selectattr('name', 'equalto', 'multicluster-engine') | first).installed_csv == 'multicluster-engine.v2.10.3'
+        fail_msg: "FAILED: Backward compatibility - installed_csv field not preserved when present"
+        success_msg: "PASSED: Backward compatibility - installed_csv field preserved from old lockdowns"
+
+    - name: TEST 10 - Verify hub_lockdown_data structure
+      ansible.builtin.assert:
+        that:
+          - hub_lockdown_data is defined
+          - hub_lockdown_data.hub is defined
+          - hub_lockdown_data.hub.metadata is defined
+          - hub_lockdown_data.hub.metadata.cluster_name == 'molecule-test-cluster'
+        fail_msg: "FAILED: hub_lockdown_data structure invalid"
+        success_msg: "PASSED: hub_lockdown_data structure valid"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "  Lockdowns Role (Hub Parse) Tests: ALL PASSED"
+          - "=========================================="
+          - "✓ hub_lockdown_operators fact set correctly"
+          - "✓ Hub OCP version facts correct"
+          - "✓ Redhat operator catalogs correct"
+          - "✓ Certified operator catalogs correct"
+          - "✓ Community operator catalogs correct"
+          - "✓ FBC catalogs unchanged"
+          - "✓ All core operator fields present (installed_csv optional)"
+          - "✓ OperatorGroup specs handled correctly"
+          - "✓ Specific operator details correct"
+          - "✓ Backward compatibility - old lockdowns with installed_csv still parse"
+          - "✓ hub_lockdown_data structure valid"
+          - "=========================================="

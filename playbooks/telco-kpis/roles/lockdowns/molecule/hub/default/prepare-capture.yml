@@ -1,0 +1,119 @@
+---
+# Molecule prepare phase for CAPTURE testing - sets up mock k8s_info responses
+#
+# This mocks kubernetes.core.k8s_info calls to test capture logic without a real cluster
+
+- name: Prepare capture test environment
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: /tmp/molecule-tests
+        state: directory
+        mode: '0755'
+
+    - name: Setup mock cluster version data (replaces k8s_info for ClusterVersion)
+      ansible.builtin.set_fact:
+        cluster_version_info:
+          resources:
+            - status:
+                desired:
+                  image: "quay.io/openshift-release-dev/ocp-release@sha256:e2f30027fa1240272c8a472d6c77218ebc486bb966b6862c121187801a40163b"
+                  version: "4.21.20"
+
+    - name: Setup mock Subscription data (replaces k8s_info for Subscriptions)
+      ansible.builtin.set_fact:
+        subscriptions_raw:
+          resources:
+            - metadata:
+                name: "multicluster-engine"
+                namespace: "multicluster-engine"
+              spec:
+                name: "multicluster-engine"
+                source: "cs-redhat-operator-index-v4-21"
+                channel: "stable-2.10"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "multicluster-engine.v2.10.3"
+            - metadata:
+                name: "acm-operator-subscription"
+                namespace: "open-cluster-management"
+              spec:
+                name: "advanced-cluster-management"
+                source: "cs-redhat-operator-index-v4-21"
+                channel: "release-2.15"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "advanced-cluster-management.v2.15.3"
+            - metadata:
+                name: "topology-aware-lifecycle-manager"
+                namespace: "openshift-operators"
+              spec:
+                name: "topology-aware-lifecycle-manager"
+                source: "topology-aware-lifecycle-manager-fbc"
+                channel: "stable"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "topology-aware-lifecycle-manager.v4.21.0"
+            - metadata:
+                name: "local-storage-operator"
+                namespace: "openshift-local-storage"
+              spec:
+                name: "local-storage-operator"
+                source: "cs-redhat-operator-index-v4-21"
+                channel: "stable"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "local-storage-operator.v4.21.0-202606090112"
+            - metadata:
+                name: "certified-operator-example"
+                namespace: "openshift-operators"
+              spec:
+                name: "certified-operator-example"
+                source: "cs-certified-operator-index-v4-21"
+                channel: "stable"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "certified-operator.v1.0.0"
+            - metadata:
+                name: "community-operator-example"
+                namespace: "openshift-operators"
+              spec:
+                name: "community-operator-example"
+                source: "cs-community-operator-index-v4-21"
+                channel: "stable"
+                installPlanApproval: "Automatic"
+              status:
+                currentCSV: "community-operator.v1.0.0"
+
+    - name: Setup mock OperatorGroup data (replaces k8s_info for OperatorGroups)
+      ansible.builtin.set_fact:
+        operator_groups_raw:
+          resources:
+            - metadata:
+                name: "multicluster-engine"
+                namespace: "multicluster-engine"
+              spec: {}
+            - metadata:
+                name: "open-cluster-management"
+                namespace: "open-cluster-management"
+              spec:
+                targetNamespaces: ["open-cluster-management"]
+            - metadata:
+                name: "global-operators"
+                namespace: "openshift-operators"
+              spec: {}
+            - metadata:
+                name: "local-operator-group"
+                namespace: "openshift-local-storage"
+              spec:
+                targetNamespaces: ["openshift-local-storage"]
+
+    - name: Display mock data summary
+      ansible.builtin.debug:
+        msg:
+          - "Mock cluster data prepared:"
+          - "  - ClusterVersion: OCP 4.21.20"
+          - "  - Subscriptions: {{ subscriptions_raw.resources | length }} operators"
+          - "  - OperatorGroups: {{ operator_groups_raw.resources | length }} groups"

@@ -1,0 +1,248 @@
+---
+# Hub-specific: Capture hub lockdown from cluster
+#
+# Queries hub cluster for operator state and generates lockdown JSON
+#
+# Required variables:
+#   - kubeconfig: Path to hub cluster kubeconfig
+#   - hub_cluster: Hub cluster name
+#   - hub_lockdown_output_file: Path where to save generated lockdown JSON
+#
+# Sets facts:
+#   - hub_lockdown_operators: Captured operator list
+#   - hub_ocp_pull_spec: OCP pull spec
+#   - hub_ocp_major_version: OCP major version
+#   - hub_ocp_minor_version: OCP minor version
+#   - hub_ocp_full_version: OCP full version
+#   - hub_ocp_architecture: OCP architecture
+
+- name: Validate capture parameters
+  ansible.builtin.assert:
+    that:
+      - kubeconfig is defined
+      - hub_cluster is defined
+      - hub_lockdown_output_file is defined
+    fail_msg: "kubeconfig, hub_cluster, and hub_lockdown_output_file required for capture"
+    success_msg: "Hub lockdown capture: {{ hub_cluster }}"
+
+- name: Display capture configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Capturing Hub Lockdown State"
+      - "=========================================="
+      - "Hub Cluster: {{ hub_cluster }}"
+      - "Kubeconfig: {{ kubeconfig }}"
+      - "Output File: {{ hub_lockdown_output_file }}"
+      - "=========================================="
+
+- name: Get OCP cluster version
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: cluster_version_info
+
+- name: Extract OCP pull spec and version
+  ansible.builtin.set_fact:
+    hub_ocp_pull_spec: "{{ cluster_version_info.resources[0].status.desired.image }}"
+    hub_ocp_full_version: "{{ cluster_version_info.resources[0].status.desired.version }}"
+
+- name: Parse OCP version components
+  ansible.builtin.set_fact:
+    hub_ocp_major_version: "{{ hub_ocp_full_version.split('.')[0] }}"
+    hub_ocp_minor_version: "{{ hub_ocp_full_version.split('.')[1] }}"
+
+- name: Detect OCP release image architecture
+  block:
+    - name: Check if OCP release image is multi-arch
+      ansible.builtin.shell: |
+        set -o pipefail
+        skopeo inspect --raw docker://{{ hub_ocp_pull_spec }} | jq -e '.manifests' > /dev/null 2>&1
+      register: multiarch_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set architecture to multi for multi-arch images
+      when: multiarch_check.rc == 0
+      ansible.builtin.set_fact:
+        hub_ocp_architecture: "multi"
+
+    - name: Detect single-arch architecture
+      when: multiarch_check.rc != 0
+      block:
+        - name: Get architecture from single-arch image
+          ansible.builtin.shell: |
+            set -o pipefail
+            skopeo inspect docker://{{ hub_ocp_pull_spec }} | jq -r '.Architecture'
+          register: arch_result
+          changed_when: false
+
+        - name: Map architecture to lockdown format (lowercase)
+          ansible.builtin.set_fact:
+            hub_ocp_architecture: >-
+              {{
+                'x86_64' if arch_result.stdout == 'amd64'
+                else arch_result.stdout
+              }}
+
+- name: Display detected architecture
+  ansible.builtin.debug:
+    msg: "Detected OCP architecture: {{ hub_ocp_architecture }}"
+
+- name: Construct OCP pull spec tag format from digest
+  ansible.builtin.set_fact:
+    hub_ocp_pull_spec_tag: >-
+      {{
+        hub_ocp_pull_spec.split('@')[0] + ':' + hub_ocp_full_version + '-' + hub_ocp_architecture
+      }}
+
+- name: Display OCP pull spec formats
+  ansible.builtin.debug:
+    msg:
+      - "Pull Spec (digest): {{ hub_ocp_pull_spec }}"
+      - "Pull Spec (tag):    {{ hub_ocp_pull_spec_tag }}"
+
+- name: Check if lockdown output directory exists
+  ansible.builtin.stat:
+    path: "{{ hub_lockdown_output_file | dirname }}"
+  register: lockdown_dir_stat
+
+- name: Create lockdown output directory if it doesn't exist
+  when: not lockdown_dir_stat.stat.exists
+  ansible.builtin.file:
+    path: "{{ hub_lockdown_output_file | dirname }}"
+    state: directory
+    mode: '0755'
+
+- name: Get all operator Subscriptions
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+  register: subscriptions_raw
+
+- name: Get all OperatorGroups
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1
+    kind: OperatorGroup
+  register: operator_groups_raw
+
+- name: Build operators list
+  ansible.builtin.set_fact:
+    hub_lockdown_operators: []
+
+- name: Extract operator details from subscriptions
+  vars:
+    _current_og_name: >-
+      {{
+        operator_groups_raw.resources
+        | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+        | map(attribute='metadata.name')
+        | first
+        | default('')
+      }}
+    _current_og_spec: >-
+      {{
+        operator_groups_raw.resources
+        | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+        | map(attribute='spec')
+        | first
+        | default({})
+        | dict2items
+        | selectattr('key', 'equalto', 'targetNamespaces')
+        | map(attribute='value')
+        | first
+        | default({})
+        | ternary(
+            {'targetNamespaces': (
+              operator_groups_raw.resources
+              | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+              | map(attribute='spec.targetNamespaces')
+              | first
+              | default([])
+            )},
+            {}
+          )
+      }}
+  ansible.builtin.set_fact:
+    hub_lockdown_operators: >-
+      {{
+        hub_lockdown_operators + [{
+          'name': item.spec.name,
+          'nsname': item.metadata.namespace,
+          'catalog': item.spec.source,
+          'channel': item.spec.channel,
+          'subscription_name': item.metadata.name,
+          'installed_csv': item.status.currentCSV | default(''),
+          'install_plan_approval': item.spec.installPlanApproval | default('Automatic'),
+          'og_name': _current_og_name,
+          'og_spec': _current_og_spec
+        }]
+      }}
+  loop: "{{ subscriptions_raw.resources }}"
+  loop_control:
+    label: "{{ item.spec.name }}"
+
+- name: Map mirrored catalog names to upstream catalog names and enrich FBC operators
+  ansible.builtin.set_fact:
+    hub_lockdown_operators: "{{ _enriched_operators }}"
+  vars:
+    _version_tag: "{{ hub_ocp_major_version }}-{{ hub_ocp_minor_version }}"
+    _enriched_operators: >-
+      {%- set result = [] -%}
+      {%- for op in hub_lockdown_operators -%}
+        {%- set mapped_catalog = 'redhat-operators' if 'redhat-operator-index' in op.catalog
+            else 'certified-operators' if 'certified-operator-index' in op.catalog
+            else 'community-operators' if 'community-operator-index' in op.catalog
+            else op.catalog -%}
+        {%- set base_op = op | combine({'catalog': mapped_catalog}) -%}
+        {%- if mapped_catalog.endswith('-fbc') -%}
+          {%- set fbc_metadata = {
+              'fbc_iib_repo': 'latest',
+              'ocp_operator_mirror_fbc_image_base': 'quay.io/redhat-user-workloads/telco-5g-tenant/' ~ mapped_catalog ~ '-' ~ _version_tag
+          } -%}
+          {%- set _ = result.append(base_op | combine(fbc_metadata)) -%}
+        {%- else -%}
+          {%- set _ = result.append(base_op) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Display FBC enrichment summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "FBC Operator Enrichment Summary"
+      - "=========================================="
+      - "FBC operators detected: {{ hub_lockdown_operators | selectattr('catalog', 'search', '-fbc$') | list | length }}"
+      - "{{ hub_lockdown_operators | selectattr('catalog', 'search', '-fbc$') | map(attribute='name') | list }}"
+      - "Enriched with hardcoded mirroring metadata:"
+      - "  - fbc_iib_repo: latest"
+      - >-
+        - ocp_operator_mirror_fbc_image_base:
+        quay.io/redhat-user-workloads/telco-5g-tenant/{catalog}-{{ hub_ocp_major_version }}-{{ hub_ocp_minor_version }}
+      - "=========================================="
+
+- name: Generate hub lockdown JSON from template
+  ansible.builtin.template:
+    src: hub/lockdown.json.j2
+    dest: "{{ hub_lockdown_output_file }}"
+    mode: '0644'
+
+- name: Display captured lockdown summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Hub Lockdown Capture Complete"
+      - "=========================================="
+      - "OCP Version: {{ hub_ocp_full_version }}"
+      - "Architecture: {{ hub_ocp_architecture }}"
+      - "Operators Captured: {{ hub_lockdown_operators | length }}"
+      - "Output: {{ hub_lockdown_output_file }}"
+      - "=========================================="
+      - "Operators:"
+      - "{{ hub_lockdown_operators | map(attribute='name') | join(', ') }}"
+      - "=========================================="

@@ -1,0 +1,133 @@
+---
+# Molecule converge phase for CAPTURE testing
+#
+# Tests the hub capture logic using mock k8s_info data from prepare phase
+# Note: We extract the core logic here to avoid needing real kubernetes.core.k8s_info calls
+
+- name: Converge - Test hub capture logic
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Extract OCP pull spec and version (from prepare mock data)
+      ansible.builtin.set_fact:
+        hub_ocp_pull_spec: "{{ cluster_version_info.resources[0].status.desired.image }}"
+        hub_ocp_full_version: "{{ cluster_version_info.resources[0].status.desired.version }}"
+
+    - name: Parse OCP version components
+      ansible.builtin.set_fact:
+        hub_ocp_major_version: "{{ hub_ocp_full_version.split('.')[0] }}"
+        hub_ocp_minor_version: "{{ hub_ocp_full_version.split('.')[1] }}"
+
+    - name: Set mock architecture (skip skopeo in tests)
+      ansible.builtin.set_fact:
+        hub_ocp_architecture: "x86_64"
+
+    - name: Construct OCP pull spec tag format from digest
+      ansible.builtin.set_fact:
+        hub_ocp_pull_spec_tag: >-
+          {{
+            hub_ocp_pull_spec.split('@')[0] + ':' + hub_ocp_full_version + '-' + hub_ocp_architecture
+          }}
+
+    - name: Build operators list
+      ansible.builtin.set_fact:
+        hub_lockdown_operators: []
+
+    - name: Extract operator details from subscriptions
+      vars:
+        _current_og_name: >-
+          {{
+            operator_groups_raw.resources
+            | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+            | map(attribute='metadata.name')
+            | first
+            | default('')
+          }}
+        _current_og_spec: >-
+          {{
+            operator_groups_raw.resources
+            | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+            | map(attribute='spec')
+            | first
+            | default({})
+            | dict2items
+            | selectattr('key', 'equalto', 'targetNamespaces')
+            | map(attribute='value')
+            | first
+            | default({})
+            | ternary(
+                {'targetNamespaces': (
+                  operator_groups_raw.resources
+                  | selectattr('metadata.namespace', 'equalto', item.metadata.namespace)
+                  | map(attribute='spec.targetNamespaces')
+                  | first
+                  | default([])
+                )},
+                {}
+              )
+          }}
+      ansible.builtin.set_fact:
+        hub_lockdown_operators: >-
+          {{
+            hub_lockdown_operators + [{
+              'name': item.spec.name,
+              'nsname': item.metadata.namespace,
+              'catalog': item.spec.source,
+              'channel': item.spec.channel,
+              'subscription_name': item.metadata.name,
+              'installed_csv': item.status.currentCSV | default(''),
+              'install_plan_approval': item.spec.installPlanApproval | default('Automatic'),
+              'og_name': _current_og_name,
+              'og_spec': _current_og_spec
+            }]
+          }}
+      loop: "{{ subscriptions_raw.resources }}"
+      loop_control:
+        label: "{{ item.spec.name }}"
+
+    - name: Map mirrored catalog names to upstream catalog names and enrich FBC operators
+      ansible.builtin.set_fact:
+        hub_lockdown_operators: "{{ _enriched_operators }}"
+      vars:
+        _version_tag: "{{ hub_ocp_major_version }}-{{ hub_ocp_minor_version }}"
+        _enriched_operators: >-
+          {%- set result = [] -%}
+          {%- for op in hub_lockdown_operators -%}
+            {%- set mapped_catalog = 'redhat-operators' if 'redhat-operator-index' in op.catalog
+                else 'certified-operators' if 'certified-operator-index' in op.catalog
+                else 'community-operators' if 'community-operator-index' in op.catalog
+                else op.catalog -%}
+            {%- set base_op = op | combine({'catalog': mapped_catalog}) -%}
+            {%- if mapped_catalog.endswith('-fbc') -%}
+              {%- set fbc_metadata = {
+                  'fbc_iib_repo': 'latest',
+                  'ocp_operator_mirror_fbc_image_base': 'quay.io/redhat-user-workloads/telco-5g-tenant/' ~ mapped_catalog ~ '-' ~ _version_tag
+              } -%}
+              {%- set _ = result.append(base_op | combine(fbc_metadata)) -%}
+            {%- else -%}
+              {%- set _ = result.append(base_op) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Set hub cluster name for testing
+      ansible.builtin.set_fact:
+        hub_cluster: "molecule-test-cluster"
+
+    - name: Generate hub lockdown JSON from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns/templates/hub/lockdown.json.j2
+        dest: /tmp/molecule-tests/hub-lockdown-captured.json
+        mode: '0644'
+
+    - name: Display capture test results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Hub Lockdown Capture Test"
+          - "=========================================="
+          - "OCP Version: {{ hub_ocp_full_version }}"
+          - "Architecture: {{ hub_ocp_architecture }}"
+          - "Operators Captured: {{ hub_lockdown_operators | length }}"
+          - "Output: /tmp/molecule-tests/hub-lockdown-captured.json"
+          - "=========================================="

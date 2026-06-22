@@ -50,8 +50,8 @@ echo "Applying {{ url }}..."
 KUBECONFIG={{ spoke_kubeconfig }} oc apply -f {{ url }}
 {% endfor %}
 
-echo "Waiting 5 minutes"
-sleep 5m
+echo "Waiting 15 minutes for PTP clock to lock after config switch"
+sleep 15m
 
 mkdir -p {{ eco_gotest_base_dir }}_{{ loop.index }}/report
 {{ podman_run(eco_gotest_base_dir ~ '_' ~ loop.index ~ '/report') }}

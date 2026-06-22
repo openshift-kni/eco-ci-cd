@@ -1,0 +1,167 @@
+---
+# Molecule verify phase for CAPTURE testing
+#
+# Validates the generated lockdown JSON from capture action
+
+- name: Verify hub capture results
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read generated lockdown JSON
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/hub-lockdown-captured.json
+      register: lockdown_json
+
+    - name: Parse lockdown JSON
+      ansible.builtin.set_fact:
+        lockdown_data: "{{ lockdown_json.content | b64decode | from_json }}"
+
+    - name: TEST 1 - Verify JSON file was created and is valid
+      ansible.builtin.assert:
+        that:
+          - lockdown_json is defined
+          - lockdown_data is defined
+          - lockdown_data is mapping
+        fail_msg: "FAILED: Lockdown JSON file not created or invalid"
+        success_msg: "PASSED: Lockdown JSON file created and valid"
+
+    - name: TEST 2 - Verify JSON structure
+      ansible.builtin.assert:
+        that:
+          - lockdown_data.hub is defined
+          - lockdown_data.hub.ocp is defined
+          - lockdown_data.hub.operators is defined
+          - lockdown_data.hub.metadata is defined
+        fail_msg: "FAILED: Lockdown JSON structure invalid"
+        success_msg: "PASSED: Lockdown JSON structure valid"
+
+    - name: TEST 3 - Verify OCP section in JSON
+      ansible.builtin.assert:
+        that:
+          - lockdown_data.hub.ocp.pull_spec is mapping
+          - >-
+            lockdown_data.hub.ocp.pull_spec.digest ==
+            'quay.io/openshift-release-dev/ocp-release@sha256:e2f30027fa1240272c8a472d6c77218ebc486bb966b6862c121187801a40163b'
+          - >-
+            lockdown_data.hub.ocp.pull_spec.tag ==
+            'quay.io/openshift-release-dev/ocp-release:4.21.20-x86_64'
+          - lockdown_data.hub.ocp.major_version == '4'
+          - lockdown_data.hub.ocp.minor_version == '21'
+          - lockdown_data.hub.ocp.full_version == '4.21.20'
+          - lockdown_data.hub.ocp.architecture == 'x86_64'
+        fail_msg: "FAILED: OCP section in JSON incorrect"
+        success_msg: "PASSED: OCP section in JSON correct (digest + tag formats)"
+
+    - name: TEST 4 - Verify catalog name mapping for redhat operators
+      ansible.builtin.assert:
+        that:
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'multicluster-engine') | first).catalog == 'redhat-operators'
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'advanced-cluster-management') | first).catalog == 'redhat-operators'
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'local-storage-operator') | first).catalog == 'redhat-operators'
+        fail_msg: "FAILED: Redhat operator catalogs not mapped correctly"
+        success_msg: "PASSED: Redhat operator catalogs mapped to 'redhat-operators'"
+
+    - name: TEST 5 - Verify catalog name mapping for certified operators
+      ansible.builtin.assert:
+        that:
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'certified-operator-example') | first).catalog == 'certified-operators'
+        fail_msg: "FAILED: Certified operator catalog not mapped correctly"
+        success_msg: "PASSED: Certified operator catalog mapped to 'certified-operators'"
+
+    - name: TEST 6 - Verify catalog name mapping for community operators
+      ansible.builtin.assert:
+        that:
+          - >-
+            (lockdown_data.hub.operators | selectattr('name', 'equalto', 'community-operator-example') | first).catalog
+            == 'community-operators'
+        fail_msg: "FAILED: Community operator catalog not mapped correctly"
+        success_msg: "PASSED: Community operator catalog mapped to 'community-operators'"
+
+    - name: TEST 7 - Verify FBC catalogs remain unchanged
+      ansible.builtin.assert:
+        that:
+          - >-
+            (lockdown_data.hub.operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | first).catalog
+            == 'topology-aware-lifecycle-manager-fbc'
+        fail_msg: "FAILED: FBC catalog should remain unchanged"
+        success_msg: "PASSED: FBC catalog remains unchanged"
+
+    - name: TEST 8 - Verify operator count and essential fields only
+      ansible.builtin.assert:
+        that:
+          - lockdown_data.hub.operators | length == 6
+          - lockdown_data.hub.operators | selectattr('name', 'defined') | list | length == 6
+          - lockdown_data.hub.operators | selectattr('nsname', 'defined') | list | length == 6
+          - lockdown_data.hub.operators | selectattr('catalog', 'defined') | list | length == 6
+          - lockdown_data.hub.operators | selectattr('channel', 'defined') | list | length == 6
+          - lockdown_data.hub.operators | selectattr('og_name', 'defined') | list | length == 6
+          - lockdown_data.hub.operators | selectattr('og_spec', 'defined') | list | length == 6
+        fail_msg: "FAILED: Operator extraction incomplete - missing essential fields"
+        success_msg: "PASSED: All essential operator fields extracted (name, nsname, catalog, channel, og_name, og_spec)"
+
+    - name: TEST 8a - Verify optional fields are NOT present (simplified lockdown)
+      ansible.builtin.assert:
+        that:
+          - lockdown_data.hub.operators | selectattr('installed_csv', 'defined') | list | length == 0
+          - lockdown_data.hub.operators | selectattr('subscription_name', 'defined') | list | length == 0
+          - lockdown_data.hub.operators | selectattr('install_plan_approval', 'defined') | list | length == 0
+          - lockdown_data.hub.operators | selectattr('namespace', 'defined') | list | length == 0
+        fail_msg: "FAILED: Optional fields should NOT be present (simplified lockdown format)"
+        success_msg: >-
+          PASSED: Optional fields correctly omitted
+          (installed_csv, subscription_name, install_plan_approval, namespace)
+
+    - name: TEST 9 - Verify OperatorGroup spec handling (empty vs populated)
+      ansible.builtin.assert:
+        that:
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'multicluster-engine') | first).og_spec == {}
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | first).og_spec == {}
+          - (lockdown_data.hub.operators | selectattr('name', 'equalto', 'advanced-cluster-management') | first).og_spec.targetNamespaces | length == 1
+          - >-
+            (lockdown_data.hub.operators | selectattr('name', 'equalto', 'local-storage-operator') | first).og_spec.targetNamespaces[0]
+            == 'openshift-local-storage'
+        fail_msg: "FAILED: OperatorGroup spec handling incorrect"
+        success_msg: "PASSED: OperatorGroup specs handled correctly (empty vs populated)"
+
+    - name: TEST 10 - Verify metadata in JSON
+      ansible.builtin.assert:
+        that:
+          - lockdown_data.hub.metadata.cluster_name == 'molecule-test-cluster'
+          - lockdown_data.hub.metadata.capture_timestamp is defined
+        fail_msg: "FAILED: Metadata in JSON incorrect"
+        success_msg: "PASSED: Metadata in JSON correct"
+
+    - name: TEST 11 - Verify FBC operators have mirroring metadata
+      vars:
+        talm_operator: "{{ lockdown_data.hub.operators | selectattr('name', 'equalto', 'topology-aware-lifecycle-manager') | first }}"
+      ansible.builtin.assert:
+        that:
+          - talm_operator.catalog == 'topology-aware-lifecycle-manager-fbc'
+          - talm_operator.fbc_iib_repo is defined
+          - talm_operator.fbc_iib_repo == 'latest'
+          - talm_operator.ocp_operator_mirror_fbc_image_base is defined
+          - >-
+            talm_operator.ocp_operator_mirror_fbc_image_base
+            == 'quay.io/redhat-user-workloads/telco-5g-tenant/topology-aware-lifecycle-manager-fbc-4-21'
+        fail_msg: "FAILED: TALM operator missing FBC mirroring metadata (fbc_iib_repo, ocp_operator_mirror_fbc_image_base)"
+        success_msg: "PASSED: TALM operator has correct FBC mirroring metadata"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "  Hub Lockdown CAPTURE Tests: ALL PASSED"
+          - "=========================================="
+          - "✓ JSON file created and valid"
+          - "✓ JSON structure valid"
+          - "✓ OCP section correct"
+          - "✓ Redhat operator catalogs mapped"
+          - "✓ Certified operator catalogs mapped"
+          - "✓ Community operator catalogs mapped"
+          - "✓ FBC catalogs unchanged"
+          - "✓ All operator fields extracted (without installed_csv)"
+          - "✓ installed_csv field correctly omitted (catalog channel mutability fix)"
+          - "✓ OperatorGroup specs handled correctly"
+          - "✓ Metadata correct"
+          - "✓ FBC operators enriched with mirroring metadata"
+          - "=========================================="

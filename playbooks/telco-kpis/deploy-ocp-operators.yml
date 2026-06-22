@@ -1,0 +1,191 @@
+---
+# Telco-KPIs wrapper for deploy-ocp-operators.yml
+#
+# This wrapper adds hub operator lockdown support to the upstream deploy-ocp-operators.yml playbook:
+# 1. Parse lockdown JSON if hub_lockdown_uri provided (extract operators list)
+# 2. Call upstream deploy-ocp-operators.yml with normalized operators variable
+# 3. Generate lockdown JSON if generate_hub_lockdown requested (capture cluster state)
+#
+# Usage:
+#   # Without lockdown (uses HUB_OPERATORS parameter):
+#   ansible-playbook playbooks/telco-kpis/deploy-ocp-operators.yml \
+#     --extra-vars 'kubeconfig=/tmp/kubeconfig version=4.21 operators=[...]'
+#
+#   # With lockdown URI (operators extracted from lockdown):
+#   ansible-playbook playbooks/telco-kpis/deploy-ocp-operators.yml \
+#     --extra-vars 'kubeconfig=/tmp/kubeconfig hub_lockdown_uri=https://gitea.../hub-lockdown.json'
+#
+#   # Generate lockdown after installation:
+#   ansible-playbook playbooks/telco-kpis/deploy-ocp-operators.yml \
+#     --extra-vars 'kubeconfig=/tmp/kubeconfig version=4.21 operators=[...] generate_hub_lockdown=true hub_cluster=dev-kpi-01'
+
+- name: Phase 1 - Parse Hub Lockdown (if provided)
+  hosts: bastion
+  gather_facts: true
+  tasks:
+    - name: Hub lockdown integration
+      when:
+        - hub_lockdown_uri is defined
+        - hub_lockdown_uri | length > 0
+      block:
+        - name: Parse hub lockdown JSON using unified lockdowns role
+          ansible.builtin.include_role:
+            name: lockdowns
+          vars:
+            lockdown_mode: hub
+            lockdown_action: parse
+
+        - name: Pass lockdown operators to upstream (no transformation needed)
+          ansible.builtin.set_fact:
+            operators: "{{ hub_lockdown_operators }}"
+            version: "{{ hub_ocp_version }}"
+
+        - name: Display hub lockdown override
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Hub Lockdown Mode: ENABLED"
+              - "=========================================="
+              - "Lockdown URI: {{ hub_lockdown_uri }}"
+              - "OCP Version: {{ version }}"
+              - "Operators Count: {{ operators | length }}"
+              - "=========================================="
+              - "NOTE: operators and version from lockdown override parameters"
+              - "=========================================="
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - operators is defined
+          - version is defined or (hub_lockdown_uri is defined and hub_lockdown_uri | length > 0)
+          - kubeconfig is defined
+        fail_msg: >-
+          Required variables: operators, version (or hub_lockdown_uri), kubeconfig
+        success_msg: "Required variables validated"
+
+    - name: Apply known operator deployment workarounds (before operator installation)
+      when:
+        - not (mirror_only | default(false) | bool)
+      ansible.builtin.include_role:
+        name: workarounds
+      vars:
+        workarounds_talm_manifestwork_crd_operators: "{{ operators }}"
+
+# Phase 2 - Call Upstream Operator Deployment
+- name: Phase 2 - Deploy Operators
+  ansible.builtin.import_playbook: ../deploy-ocp-operators.yml
+  # Variables passed through from caller or set by Phase 1:
+  #   - operators (from HUB_OPERATORS param OR hub lockdown)
+  #   - version (from OCP_VERSION param OR hub lockdown)
+  #   - disconnected (default: true for telco-kpis)
+  #   - mirror_only (default: false)
+  #   - kubeconfig
+
+# Phase 3 - Generate Hub Lockdown (if requested)
+- name: Phase 3 - Capture Hub Lockdown
+  hosts: bastion
+  gather_facts: true
+  tasks:
+    - name: Generate hub lockdown JSON
+      when:
+        - generate_hub_lockdown is defined
+        - generate_hub_lockdown | bool
+      block:
+        - name: Validate capture parameters
+          ansible.builtin.assert:
+            that:
+              - hub_cluster is defined
+              - kubeconfig is defined
+            fail_msg: "hub_cluster and kubeconfig required for lockdown capture"
+            success_msg: "Capturing lockdown for cluster: {{ hub_cluster }}"
+
+        - name: Set lockdown artifact directory (if not using Jenkins-provided path)
+          when: hub_lockdown_output_file is not defined
+          ansible.builtin.set_fact:
+            lockdown_artifact_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"
+
+        - name: Set lockdown output path
+          ansible.builtin.set_fact:
+            hub_lockdown_output_path: >-
+              {{
+                hub_lockdown_output_file
+                if (hub_lockdown_output_file is defined)
+                else (
+                  lockdown_artifact_dir + '/hub-lockdown-' + hub_cluster + '-' +
+                  (lookup('env', 'BUILD_NUMBER') | default(ansible_date_time.epoch, true)) + '.json'
+                )
+              }}
+
+        - name: Set lockdown artifact directory from output path
+          ansible.builtin.set_fact:
+            lockdown_artifact_dir: "{{ hub_lockdown_output_path | dirname }}"
+
+        - name: Capture hub lockdown using unified lockdowns role
+          ansible.builtin.include_role:
+            name: lockdowns
+          vars:
+            lockdown_mode: hub
+            lockdown_action: capture
+            hub_lockdown_output_file: "{{ hub_lockdown_output_path }}"
+
+        - name: Generate symlink for latest lockdown
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/generate-symlink.yml
+          vars:
+            lockdown_output_file: "{{ hub_lockdown_output_path }}"
+            lockdown_mode: hub
+
+        - name: Display lockdown capture result
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Hub Lockdown Captured Successfully"
+              - "=========================================="
+              - "Output File: {{ hub_lockdown_output_path }}"
+              - "Symlink: {{ lockdown_artifact_dir }}/hub-lockdown-latest.json"
+              - "=========================================="
+              - "Upload this file to Gitea for future deployments"
+              - "=========================================="
+
+    - name: Compare lockdown if both input and generated exist
+      when:
+        - generate_hub_lockdown is defined
+        - generate_hub_lockdown | bool
+        - hub_lockdown_data is defined
+      block:
+        - name: Write parsed input lockdown to temp file for comparison
+          ansible.builtin.copy:
+            content: "{{ hub_lockdown_data | to_nice_json }}"
+            dest: /tmp/hub-lockdown-input.json
+            mode: '0644'
+
+        - name: Compare input vs generated lockdown
+          ansible.builtin.shell: |
+            if command -v jd &> /dev/null; then
+              jd -set /tmp/hub-lockdown-input.json {{ hub_lockdown_output_path }}
+            elif command -v jq &> /dev/null; then
+              echo "=== Input Lockdown ==="
+              jq -S . /tmp/hub-lockdown-input.json > /tmp/input-sorted.json
+              echo "=== Generated Lockdown ==="
+              jq -S . {{ hub_lockdown_output_path }} > /tmp/generated-sorted.json
+              diff -u /tmp/input-sorted.json /tmp/generated-sorted.json || true
+            else
+              echo "WARNING: Neither jd nor jq available for comparison"
+              echo "Install jd (https://github.com/josephburnett/jd) for better diffs"
+            fi
+          register: lockdown_diff
+          changed_when: false
+          failed_when: false
+
+        - name: Display lockdown comparison result
+          ansible.builtin.debug:
+            msg: "{{ lockdown_diff.stdout_lines }}"
+          when: lockdown_diff.stdout_lines is defined
+
+        - name: Save diff to artifacts
+          ansible.builtin.copy:
+            content: "{{ lockdown_diff.stdout }}"
+            dest: "{{ lockdown_artifact_dir }}/hub-lockdown-diff.txt"
+            mode: '0644'
+          when: lockdown_diff.stdout is defined

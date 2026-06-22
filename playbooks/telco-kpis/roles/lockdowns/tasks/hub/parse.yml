@@ -1,0 +1,60 @@
+---
+# Hub-specific: Parse hub lockdown JSON
+#
+# Downloads hub lockdown from URI, validates structure, and sets facts for operator deployment
+#
+# Required variables:
+#   - hub_lockdown_uri: URL to hub lockdown JSON
+#
+# Sets facts:
+#   - hub_lockdown_operators: List of operators ready for deploy-ocp-operators.yml
+#   - hub_ocp_pull_spec: OCP pull spec from lockdown
+#   - hub_ocp_version: OCP version (major.minor format)
+
+- name: Download hub lockdown JSON
+  ansible.builtin.include_tasks: ../common/download-lockdown.yml
+  vars:
+    lockdown_uri: "{{ hub_lockdown_uri }}"
+    lockdown_download_path: /tmp/hub-lockdown.json
+
+- name: Read hub lockdown JSON from bastion
+  ansible.builtin.slurp:
+    src: /tmp/hub-lockdown.json
+  register: hub_lockdown_file
+
+- name: Parse hub lockdown JSON
+  ansible.builtin.set_fact:
+    hub_lockdown_data: "{{ hub_lockdown_file.content | b64decode | from_json }}"
+
+- name: Validate hub lockdown structure
+  ansible.builtin.include_tasks: ../common/validate-structure.yml
+  vars:
+    lockdown_data: "{{ hub_lockdown_data }}"
+    lockdown_mode: hub
+
+- name: Extract hub operators from lockdown
+  ansible.builtin.set_fact:
+    hub_lockdown_operators: "{{ hub_lockdown_data.hub.operators }}"
+
+- name: Extract hub OCP details from lockdown
+  ansible.builtin.set_fact:
+    hub_ocp_pull_spec: >-
+      {{
+        hub_lockdown_data.hub.ocp.pull_spec.digest
+        if (hub_lockdown_data.hub.ocp.pull_spec is mapping)
+        else hub_lockdown_data.hub.ocp.pull_spec
+      }}
+    hub_ocp_version: "{{ hub_lockdown_data.hub.ocp.major_version }}.{{ hub_lockdown_data.hub.ocp.minor_version }}"
+
+- name: Display hub lockdown parsing results
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Hub Lockdown Parsed Successfully"
+      - "=========================================="
+      - "OCP Version: {{ hub_ocp_version }}"
+      - "OCP Pull Spec: {{ hub_ocp_pull_spec }}"
+      - "Operators Count: {{ hub_lockdown_operators | length }}"
+      - "Cluster Name: {{ hub_lockdown_data.hub.metadata.cluster_name }}"
+      - "Capture Timestamp: {{ hub_lockdown_data.hub.metadata.capture_timestamp }}"
+      - "=========================================="

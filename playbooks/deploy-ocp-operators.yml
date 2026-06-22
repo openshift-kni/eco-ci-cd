@@ -201,7 +201,7 @@
       ansible.builtin.include_role:
         name: ocp_operator_mirror
       vars:
-        ocp_operator_mirror_registry_url: disconnected.registry.local:5000
+        ocp_operator_mirror_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
         ocp_operator_mirror_registry_user: "{{ ansible_user }}"
         ocp_operator_mirror_registry_password: "{{ ansible_password }}"
         ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode }}"

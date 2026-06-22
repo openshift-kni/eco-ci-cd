@@ -1,0 +1,37 @@
+{
+  "hub": {
+    "ocp": {
+      "pull_spec": {
+        "digest": "{{ hub_ocp_pull_spec }}",
+        "tag": "{{ hub_ocp_pull_spec_tag }}"
+      },
+      "major_version": "{{ hub_ocp_major_version }}",
+      "minor_version": "{{ hub_ocp_minor_version }}",
+      "full_version": "{{ hub_ocp_full_version }}",
+      "architecture": "{{ hub_ocp_architecture }}"
+    },
+    "operators": [
+{% for op in hub_lockdown_operators %}
+      {
+        "name": "{{ op.name }}",
+        "nsname": "{{ op.nsname }}",
+        "catalog": "{{ op.catalog }}",
+        "channel": "{{ op.channel }}",
+{% if op.fbc_iib_repo is defined %}
+        "fbc_iib_repo": "{{ op.fbc_iib_repo }}",
+{% endif %}
+{% if op.ocp_operator_mirror_fbc_image_base is defined %}
+        "ocp_operator_mirror_fbc_image_base": "{{ op.ocp_operator_mirror_fbc_image_base }}",
+{% endif %}
+        "og_name": "{{ op.og_name }}",
+        "og_spec": {{ op.og_spec | to_json }}
+      }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "metadata": {
+      "cluster_name": "{{ hub_cluster }}",
+      "capture_timestamp": "{{ ansible_date_time.iso8601 }}"
+    }
+  }
+}

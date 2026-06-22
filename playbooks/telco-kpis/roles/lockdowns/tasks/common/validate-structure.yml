@@ -1,0 +1,45 @@
+---
+# Common task: Validate lockdown JSON structure
+#
+# Required variables:
+#   - lockdown_data: Parsed lockdown JSON (dict)
+#   - lockdown_mode: 'hub' or 'spoke' (determines validation rules)
+
+- name: Validate lockdown data is provided
+  ansible.builtin.assert:
+    that:
+      - lockdown_data is defined
+      - lockdown_data is mapping
+    fail_msg: "lockdown_data must be a valid dictionary"
+
+- name: Validate hub lockdown structure
+  ansible.builtin.assert:
+    that:
+      - lockdown_data.hub is defined
+      - lockdown_data.hub.ocp is defined
+      - lockdown_data.hub.operators is defined
+      - lockdown_data.hub.operators is sequence
+      - lockdown_data.hub.metadata is defined
+    fail_msg: "Invalid hub lockdown structure - missing required fields"
+    success_msg: "Hub lockdown structure validation: PASSED"
+  when: lockdown_mode == 'hub'
+
+- name: Validate spoke lockdown structure
+  ansible.builtin.assert:
+    that:
+      - lockdown_data.spoke is defined
+      - lockdown_data.spoke.ocp is defined
+      - lockdown_data.spoke.operators is defined
+      - lockdown_data.spoke.operators is sequence
+      - lockdown_data.spoke.metadata is defined
+    fail_msg: "Invalid spoke lockdown structure - missing required fields"
+    success_msg: "Spoke lockdown structure validation: PASSED"
+  when: lockdown_mode == 'spoke'
+
+- name: Display lockdown summary
+  ansible.builtin.debug:
+    msg:
+      - "Lockdown validation successful"
+      - "Mode: {{ lockdown_mode }}"
+      - "Operators count: {{ lockdown_data[lockdown_mode].operators | length }}"
+      - "OCP version: {{ lockdown_data[lockdown_mode].ocp.full_version }}"

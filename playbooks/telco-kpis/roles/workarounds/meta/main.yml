@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: Telco Verification Team
+  description: Workarounds for known operator deployment and infrastructure issues
+  company: Red Hat
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.9"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - openshift
+    - operators
+    - workarounds
+
+dependencies: []

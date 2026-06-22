@@ -75,6 +75,8 @@
 #   - secondary_nic: Secondary NIC type (e.g., intel_810)
 #   - cluster_name: Name of the OCP cluster
 #   - artifact_dest_dir: path to store env var file
+#   - version: OCP version (e.g., 4.22, 5.0). When major >= 5, Intel interface names in
+#     cluster_config (ens3f0) are exported with the netdev NP suffix (ens3f0np0).
 
 - name: Configure jump host for switch connection
   hosts: localhost
@@ -104,6 +106,7 @@
     artifact_dest_dir: /tmp
     vlan_list: []
     ansible_netconf_ssh_config: "{{ hostvars['localhost'].ansible_env.HOME }}/jump-ssh-config"
+    version: "4.22"
   tasks:
     - name: Assert required variables are defined
       ansible.builtin.assert:
@@ -112,20 +115,45 @@
           - ocp_nic is defined
           - secondary_nic is defined
           - ocp_nic != secondary_nic
+          - version is defined
 
     - name: Set cluster_config fact
       ansible.builtin.set_fact:
         cluster_config: "{{ cluster_config | from_yaml }}"
 
+    - name: Parse OCP major version from version
+      ansible.builtin.set_fact:
+        ocp_major_version: "{{ version.split('.')[0] | int }}"
+
     - name: Prepare OCP external interface
+      vars:
+        resolved_node_interface: >-
+          {{
+            item.node_interface
+            | regex_replace('^(.+f)(\d+)$', '\1\2np\2')
+            if (ocp_major_version | int) >= 5 and (item.node_interface is match('^ens[0-9]+f[0-9]+$'))
+            else item.node_interface
+          }}
       ansible.builtin.set_fact:
         switch_external_interface: "{{ switch_external_interface + [item.switch_interface] }}"
         shell_script: |
           {{ shell_script }}
-          export {{ item.node_name }}_EXTERNAL_INTERFACE="{{ item.node_interface | quote }}"
+          export {{ item.node_name }}_EXTERNAL_INTERFACE="{{ resolved_node_interface | quote }}"
           export {{ item.node_name }}_MAC_ADDRESS="{{ item.node_mac | quote }}"
       when: item.node_interface is defined
       loop: "{{ cluster_config[cluster_name][ocp_nic] | default([]) }}"
+
+    - name: Resolve secondary interface list for Intel NP suffix
+      ansible.builtin.set_fact:
+        resolved_interface_list: >-
+          {{
+            cluster_config[cluster_name]['bm_interface_list'][secondary_nic]
+            | split(',')
+            | map('regex_replace', '^(.+f)(\d+)$', '\1\2np\2')
+            | join(',')
+            if (ocp_major_version | int) >= 5
+            else cluster_config[cluster_name]['bm_interface_list'][secondary_nic]
+          }}
 
     - name: Set native VLAN
       ansible.builtin.set_fact:
@@ -151,7 +179,7 @@
       ansible.builtin.set_fact:
         shell_script: |
           {{ shell_script }}
-          export INTERFACE_LIST="{{ cluster_config[cluster_name]['bm_interface_list'][secondary_nic] | quote }}"
+          export INTERFACE_LIST="{{ resolved_interface_list | quote }}"
 
     - name: Set switch_interfaces fact (for SWITCH_INTERFACES env variable)
       ansible.builtin.set_fact:

@@ -93,6 +93,10 @@
       environment:
         REGISTRY_AUTH_FILE: "{{ pull_secret_path }}"
 
+    - name: Prune stopped containers left by oc image extract
+      containers.podman.podman_prune:
+        container: true
+
     - name: Read gitops operator catalog content
       ansible.builtin.slurp:
         src: /tmp/gitops-catalog/catalog.json

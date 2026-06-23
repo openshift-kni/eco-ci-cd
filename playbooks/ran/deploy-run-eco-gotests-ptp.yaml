@@ -266,6 +266,7 @@
       ansible.builtin.copy:
         src: "{{ eco_gotest_base_dir }}_{{ item.index }}/report/report_testrun.xml"
         dest: "{{ bastion_report_dir }}/junit/ptp_cycle_{{ item.index }}.xml"
+        mode: "0644"
         remote_src: true
       loop: "{{ ptp_cycles }}"
       failed_when: false

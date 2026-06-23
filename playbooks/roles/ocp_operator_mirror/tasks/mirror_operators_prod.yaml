@@ -31,8 +31,72 @@
   loop_control:
     loop_var: operator_item
 
-- name: Map production catalogs to index images
+- name: Extract lockdown FBC digests from operators (spoke lockdown validation mode)
+  when: (telco_kpis_lockdown_feature_enabled | default(false) | bool)
+  block:
+    - name: Extract lockdown FBC digest for redhat-operators catalog
+      changed_when: false
+      ansible.builtin.set_fact:
+        redhat_lockdown_fbc: >-
+          {{
+            (ocp_operator_mirror_operators_prod
+            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_redhat_catalog_name)
+            | selectattr('fbc', 'defined')
+            | map(attribute='fbc')
+            | first | default(''))
+          }}
+
+    - name: Extract lockdown FBC digest for certified-operators catalog
+      changed_when: false
+      ansible.builtin.set_fact:
+        certified_lockdown_fbc: >-
+          {{
+            (ocp_operator_mirror_operators_prod
+            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_certified_catalog_name)
+            | selectattr('fbc', 'defined')
+            | map(attribute='fbc')
+            | first | default(''))
+          }}
+
+    - name: Extract lockdown FBC digest for community-operators catalog
+      changed_when: false
+      ansible.builtin.set_fact:
+        community_lockdown_fbc: >-
+          {{
+            (ocp_operator_mirror_operators_prod
+            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_community_catalog_name)
+            | selectattr('fbc', 'defined')
+            | map(attribute='fbc')
+            | first | default(''))
+          }}
+
+    - name: Map production catalogs to index images (digest-based lockdown mode)
+      changed_when: false
+      ansible.builtin.set_fact:
+        catalog_index_map:
+          redhat-operators: >-
+            {{
+              redhat_lockdown_fbc
+              if (redhat_lockdown_fbc | default('') | length > 0)
+              else (ocp_operator_mirror_prod_catalog_image_name ~ ':v' ~ (production_catalog_version | default(catalog_version)))
+            }}
+          certified-operators: >-
+            {{
+              certified_lockdown_fbc
+              if (certified_lockdown_fbc | default('') | length > 0)
+              else ('registry.redhat.io/redhat/certified-operator-index:v' ~ (certified_catalog_version | default(catalog_version)))
+            }}
+          community-operators: >-
+            {{
+              community_lockdown_fbc
+              if (community_lockdown_fbc | default('') | length > 0)
+              else ('registry.redhat.io/redhat/community-operator-index:v' ~ (community_catalog_version | default(catalog_version)))
+            }}
+
+
+- name: Map production catalogs to index images (tag-based mode)
   changed_when: false
+  when: not (telco_kpis_lockdown_feature_enabled | default(false) | bool)
   ansible.builtin.set_fact:
     catalog_index_map:
       redhat-operators: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
@@ -204,6 +268,19 @@
 - name: Show oc-mirror result
   ansible.builtin.debug:
     var: oc_mirror.stdout
+
+- name: Accumulate lockdown metadata from production catalogs (spoke lockdown generation mode)
+  when:
+    - ocp_operator_mirror_generate_lockdown | default(false) | bool
+    - oc_mirror is defined
+    - oc_mirror.stdout is defined
+  ansible.builtin.include_role:
+    name: lockdowns
+    tasks_from: spoke/accumulate-metadata-prod.yml
+  vars:
+    lockdown_oc_mirror_output: "{{ oc_mirror.stdout }}"
+    lockdown_operators_list: "{{ ocp_operator_mirror_operators_prod }}"
+    lockdown_catalog_version: "{{ catalog_version }}"
 
 - name: Find CatalogSource (cs*) and ImageDigestMirrorSet (idms*) manifests
   register: mirror_manifests

@@ -1,10 +1,10 @@
-.PHONY: test test-hub test-hub-parse test-hub-capture test-spoke test-hub-local test-spoke-local prepare converge verify clean help
+.PHONY: test test-hub test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri prepare-hub converge-hub verify-hub prepare-spoke converge-spoke verify-spoke clean help
 
 # Get absolute path to eco-ci-cd root (5 levels up from role dir)
 ECO_CI_CD_ROOT := $(shell cd ../../../.. && pwd)
 
 # Default target
-test: test-hub-parse test-hub-capture
+test: test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri
 
 # Run hub parse tests in container
 test-hub-parse:
@@ -41,12 +41,35 @@ test-hub: test-hub-parse test-hub-capture
 	@echo ""
 	@echo "✓ All hub tests passed!"
 
-# Run spoke tests in container (when implemented)
+# Run spoke tests in container
 test-spoke:
 	@echo "=========================================="
-	@echo "  Running Lockdowns Role Spoke Tests"
+	@echo "  Running Spoke Tests (Parse + Generate)"
 	@echo "=========================================="
-	@echo "TODO: Spoke tests not yet implemented"
+	@podman run --rm --platform linux/amd64 \
+		-v $(ECO_CI_CD_ROOT):/eco-ci-cd:Z \
+		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
+		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
+		--entrypoint /bin/sh \
+		quay.io/ccardenosa/eco-ci-cd:latest \
+		-c "ansible-playbook -i localhost, -c local molecule/spoke/default/test.yml"
+	@echo ""
+	@echo "✓ Spoke tests passed!"
+
+# Run spoke lockdown URI with digests test (reproduces empty metadata issue)
+test-spoke-lockdown-uri:
+	@echo "=========================================="
+	@echo "  Running Spoke Lockdown URI with Digests Test"
+	@echo "=========================================="
+	@podman run --rm --platform linux/amd64 \
+		-v $(ECO_CI_CD_ROOT):/eco-ci-cd:Z \
+		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
+		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
+		--entrypoint /bin/sh \
+		quay.io/ccardenosa/eco-ci-cd:latest \
+		-c "ansible-playbook -i localhost, -c local molecule/spoke-lockdown-uri-with-digests/default/test.yml"
+	@echo ""
+	@echo "✓ Spoke lockdown URI with digests test passed!"
 
 # Run individual hub test phases (for debugging - requires local ansible)
 prepare-hub:
@@ -57,6 +80,16 @@ converge-hub:
 
 verify-hub:
 	@ansible-playbook -i localhost, -c local molecule/hub/default/verify.yml
+
+# Run individual spoke test phases (for debugging - requires local ansible)
+prepare-spoke:
+	@ansible-playbook -i localhost, -c local molecule/spoke/default/prepare.yml
+
+converge-spoke:
+	@ansible-playbook -i localhost, -c local molecule/spoke/default/converge.yml
+
+verify-spoke:
+	@ansible-playbook -i localhost, -c local molecule/spoke/default/verify.yml
 
 # Clean up test artifacts
 clean:
@@ -69,15 +102,19 @@ help:
 	@echo "Lockdowns Role Tests"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make test              Run all hub tests (parse + capture)"
-	@echo "  make test-hub          Run all hub tests (parse + capture)"
-	@echo "  make test-hub-parse    Run hub parse tests only"
-	@echo "  make test-hub-capture  Run hub capture tests only"
-	@echo "  make test-spoke        Run spoke tests (TODO)"
-	@echo "  make prepare-hub       Run hub prepare phase only (requires ansible)"
-	@echo "  make converge-hub      Run hub converge phase only (requires ansible)"
-	@echo "  make verify-hub        Run hub verify phase only (requires ansible)"
-	@echo "  make clean             Remove test artifacts"
+	@echo "  make test                      Run all tests (hub + spoke + spoke lockdown URI)"
+	@echo "  make test-hub                  Run all hub tests (parse + capture)"
+	@echo "  make test-hub-parse            Run hub parse tests only"
+	@echo "  make test-hub-capture          Run hub capture tests only"
+	@echo "  make test-spoke                Run spoke tests (parse + generate)"
+	@echo "  make test-spoke-lockdown-uri   Run spoke lockdown URI with digests test"
+	@echo "  make prepare-hub               Run hub prepare phase only (requires ansible)"
+	@echo "  make converge-hub              Run hub converge phase only (requires ansible)"
+	@echo "  make verify-hub                Run hub verify phase only (requires ansible)"
+	@echo "  make prepare-spoke             Run spoke prepare phase only (requires ansible)"
+	@echo "  make converge-spoke            Run spoke converge phase only (requires ansible)"
+	@echo "  make verify-spoke              Run spoke verify phase only (requires ansible)"
+	@echo "  make clean                     Remove test artifacts"
 	@echo ""
 	@echo "Hub Parse Tests:"
 	@echo "  1. prepare   - Creates mock hub lockdown JSON file"
@@ -88,3 +125,13 @@ help:
 	@echo "  1. prepare   - Sets up mock k8s_info responses"
 	@echo "  2. converge  - Runs capture logic (generate JSON)"
 	@echo "  3. verify    - Validates generated JSON (10 assertions)"
+	@echo ""
+	@echo "Spoke Tests:"
+	@echo "  1. prepare   - Creates mock lockdown files (legacy + new) and metadata"
+	@echo "  2. converge  - Runs parse (both formats) and generate logic"
+	@echo "  3. verify    - Validates results (17 assertions)"
+	@echo ""
+	@echo "Spoke Lockdown URI with Digests Test:"
+	@echo "  1. prepare   - Creates mock lockdown JSON with bundle/fbc digests"
+	@echo "  2. converge  - Demonstrates empty lockdown_metadata_operators issue"
+	@echo "  3. verify    - Confirms issue and validates workaround (3 assertions)"

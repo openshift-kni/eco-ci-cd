@@ -1,0 +1,79 @@
+---
+- name: Prune ArgoCD apps and remove seed ManagedCluster
+  hosts: bastion
+  gather_facts: false
+  vars:
+    hub_kubeconfig: "{{ hub_kubeconfig }}"
+    openshift_gitops_namespace: "openshift-gitops"
+    argocd_apps:
+      - clusters
+      - policies
+
+  tasks:
+    - name: Remove finalizers from ArgoCD apps # noqa: ignore-errors
+      kubernetes.core.k8s:
+        state: patched
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+        definition:
+          metadata:
+            finalizers: []
+      loop: "{{ argocd_apps }}"
+      ignore_errors: true
+
+    - name: Delete ArgoCD apps
+      kubernetes.core.k8s:
+        state: absent
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      loop: "{{ argocd_apps }}"
+
+    - name: Wait for ArgoCD apps to be deleted
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: argocd_apps_check
+      until: argocd_apps_check.resources | length == 0
+      retries: 12
+      delay: 10
+      loop: "{{ argocd_apps }}"
+
+    - name: Remove finalizers from seed ManagedCluster # noqa: ignore-errors
+      kubernetes.core.k8s:
+        state: patched
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+        definition:
+          metadata:
+            finalizers: []
+      ignore_errors: true
+
+    - name: Delete seed ManagedCluster
+      kubernetes.core.k8s:
+        state: absent
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+
+    - name: Wait for seed ManagedCluster to be deleted
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ spoke_cluster }}"
+        kubeconfig: "{{ hub_kubeconfig }}"
+      register: managedcluster_check
+      until: managedcluster_check.resources | length == 0
+      retries: 30
+      delay: 10

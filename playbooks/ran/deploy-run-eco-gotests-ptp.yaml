@@ -60,6 +60,7 @@
 - name: Set up eco-gotests RAN PTP test
   hosts: bastion
   gather_facts: true
+  tags: setup
   vars:
     eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests
     eco_gotest_base_dir: /tmp/eco_gotests
@@ -122,7 +123,7 @@
             docker://{{ eco_gotests_image }}:{{ eco_gotests_tag }}
             docker://{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}:{{ eco_gotests_tag }}
           register: skopeo_result
-          changed_when: skopeo_result.rc == 0
+          changed_when: false
 
         - name: Override eco-gotests image source to disconnected registry
           ansible.builtin.set_fact:
@@ -148,7 +149,7 @@
             docker://quay.io/redhat-cne/cloud-event-consumer:4.18
             docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v1
           register: skopeo_v1_result
-          changed_when: skopeo_v1_result.rc == 0
+          changed_when: false
 
         - name: Mirror cloud-event-consumer v2 image
           ansible.builtin.command: >
@@ -158,7 +159,7 @@
             docker://quay.io/redhat-cne/cloud-event-consumer:latest
             docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v2
           register: skopeo_v2_result
-          changed_when: skopeo_v2_result.rc == 0
+          changed_when: false
 
         - name: Mirror ptp-must-gather image (OCP < 4.21 only)
           when: version.split('.')[1] | int < 21
@@ -170,7 +171,7 @@
             docker://registry.redhat.io/openshift4/ptp-must-gather-rhel9:v{{ version }}
             docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
           register: skopeo_must_gather_result
-          changed_when: skopeo_must_gather_result.rc == 0
+          changed_when: false
 
         - name: Set PTP event consumer mirror fact
           ansible.builtin.set_fact:
@@ -222,3 +223,50 @@
         src: run_eco_gotests_ptp.j2
         dest: "{{ eco_gotest_base_dir }}/{{ script_name }}"
         mode: "0764"
+
+- name: Process PTP report files on bastion
+  hosts: bastion
+  gather_facts: false
+  tags: process
+  vars:
+    eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests') }}"
+    bastion_report_dir: "{{ ptp_report_dir | default('/tmp/ptp_reports') }}"
+    ptp_cycles:
+      - { index: 0, name: "BC-OC" }
+      - { index: 1, name: "OC2port" }
+      - { index: 2, name: "T-TSC" }
+      - { index: 3, name: "T-BC" }
+  tasks:
+    - name: Remove existing report directory
+      ansible.builtin.file:
+        path: "{{ bastion_report_dir }}"
+        state: absent
+
+    - name: Create polarion and junit directories
+      ansible.builtin.file:
+        path: "{{ bastion_report_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - polarion
+        - junit
+
+    - name: Rename testsuite and prepare for ReportPortal
+      ansible.builtin.shell: |
+        src="{{ eco_gotest_base_dir }}_{{ item.index }}/report/ptp_suite_test_junit.xml"
+        dst="{{ bastion_report_dir }}/polarion/testrun_ptp_{{ item.index }}.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "${src}" > "${dst}"
+        fi
+      loop: "{{ ptp_cycles }}"
+      changed_when: false
+
+    - name: Prepare report for Polarion converter
+      ansible.builtin.copy:
+        src: "{{ eco_gotest_base_dir }}_{{ item.index }}/report/report_testrun.xml"
+        dest: "{{ bastion_report_dir }}/junit/ptp_cycle_{{ item.index }}.xml"
+        mode: "0644"
+        remote_src: true
+      loop: "{{ ptp_cycles }}"
+      failed_when: false

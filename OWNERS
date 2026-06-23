@@ -1,20 +1,6 @@
 reviewers:
-- ccardenosa
-- cplacani
-- eifrach
-- kononovn
-- shaior
-- rdiscala
-- mkochanowski
-- rdiazcam
-- TimurMP
+  - ipa-team
+  - compute-team
 approvers:
-- ccardenosa
-- cplacani
-- eifrach
-- kononovn
-- shaior
-- rdiscala
-- mkochanowski
-- rdiazcam
-- TimurMP
+  - ipa-team
+  - compute-team

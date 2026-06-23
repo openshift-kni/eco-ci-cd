@@ -1,0 +1,38 @@
+---
+# Prepare: Create mock lockdown JSON with bundle/fbc digests (simulating lockdown URI scenario)
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create mock lockdown JSON with bundle and fbc digests
+      ansible.builtin.copy:
+        dest: /tmp/mock-spoke-lockdown-with-digests.json
+        mode: '0644'
+        content: |
+          {
+            "deployment": {
+              "ocp_pull_spec": "quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64",
+              "ocp_version": "4.22",
+              "architecture": "x86_64",
+              "operator_source": "production-catalog"
+            },
+            "operators": [
+              {
+                "name": "sriov-network-operator",
+                "catalog": "cs-redhat-operator-index-v4-22",
+                "nsname": "openshift-sriov-network-operator",
+                "channel": "stable",
+                "bundle": "registry.redhat.io/openshift4/ose-sriov-network-operator-bundle@sha256:b16b9be8efaef673a31d0ae2fc5b7ebb548b6b90a39c36b82e0f17130",
+                "fbc": "registry.redhat.io/redhat/redhat-operator-index@sha256:d02f5661332d2b24c7b5bbe2cecb5450093b41d739b2e7ce8f32a726"
+              }
+            ],
+            "metadata": {
+              "hub_name": "test-hub",
+              "mirror_timestamp": "2026-06-23T12:00:00Z",
+              "build_number": "999"
+            }
+          }
+
+    - name: Display mock lockdown info
+      ansible.builtin.debug:
+        msg: "Mock lockdown created at /tmp/mock-spoke-lockdown-with-digests.json with bundle+fbc digests"

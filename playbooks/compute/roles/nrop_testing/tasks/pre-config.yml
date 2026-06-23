@@ -31,9 +31,10 @@
   ansible.builtin.debug:
     msg: "Traget pool: {{ nrop_target_pool }}"
 
+# for 4.12 releases use rhel8 base image
 - name: Set UBI base image
   ansible.builtin.set_fact:
-    base_image: "{% if ocp_version_minor | float < 4.14 %}rhel8{% else %}rhel9{% endif %}"
+    base_image: "{% if ocp_version_minor == 12 %}rhel8{% else %}rhel9{% endif %}"
   when: custom_scheduler is not defined
 
 - name: Set scheduler image uri

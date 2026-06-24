@@ -1,0 +1,90 @@
+---
+# Mirror IBU seed image from seed bastion to target bastion disconnected registry.
+#
+# This playbook copies a generated IBU seed image stored in the seed bastion's
+# local registry to the target bastion's internal registry, ready for LCA/IBU
+# upgrade.
+#
+# The source registry is always addressed by its DNS hostname (disconnected_registry_url
+# from inventory) to satisfy TLS certificate validation — the registry cert covers
+# the hostname but not the IP. The target registry is accessed by IP with TLS
+# verification disabled (--dest-tls-verify=false).
+#
+# Prerequisites:
+#   - skopeo CLI tool installed on the seed bastion
+#   - Seed image already generated and stored in the seed bastion registry
+#   - Network connectivity from seed bastion to target bastion registry
+#   - pull_secret_string variable available (base64-encoded Docker config JSON)
+#
+# Usage:
+#   ansible-playbook playbooks/ran/ibu-mirror-seed-image.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'version=4.20 target_registry_host=10.6.184.4'
+#
+# Required variables:
+#   version:              OCP version tag for the seed image (e.g., "4.20")
+#   target_registry_host: Destination registry IP/hostname (e.g., "10.6.184.4")
+#
+# Vault variables (sourced automatically from inventory vault):
+#   pull_secret_string:       Base64-encoded Docker config JSON for registry authentication
+#   disconnected_registry_url: Source registry hostname (e.g., "disconnected.registry.local")
+#   disconnected_registry_port: Source registry port (e.g., "5000")
+#
+# Optional variables:
+#   target_registry_port: Destination registry port (default: disconnected_registry_port)
+#   seed_image_namespace: Image namespace/path within registry (default: ibu)
+#   seed_image_name:      Image name within namespace (default: seed)
+#
+- name: Mirror IBU seed image to target bastion disconnected registry
+  hosts: bastion
+  gather_facts: true
+  vars:
+    seed_image_namespace: "ibu"
+    seed_image_name: "seed"
+  tasks:
+    - name: Assert required variables are defined
+      ansible.builtin.assert:
+        that:
+          - version is defined
+          - version | string | length > 0
+          - target_registry_host is defined
+          - target_registry_host | length > 0
+          - pull_secret_string is defined
+          - pull_secret_string | length > 0
+          - disconnected_registry_url is defined
+          - disconnected_registry_port is defined
+        fail_msg: >-
+          'version' and 'target_registry_host' must be provided as extra-vars.
+          'pull_secret_string', 'disconnected_registry_url', and
+          'disconnected_registry_port' must be available via inventory/vault.
+          Example: --extra-vars 'version=4.20 target_registry_host=10.6.184.4'
+
+    - name: Build augmented pull secret with target registry IP credentials
+      no_log: true
+      ansible.builtin.set_fact:
+        _ibu_pull_secret: >-
+          {{
+            _ps | combine({
+              'auths': _ps.auths | combine({
+                target_registry_host ~ ':' ~ (target_registry_port | default(disconnected_registry_port)):
+                  _ps.auths[disconnected_registry_url ~ ':' ~ disconnected_registry_port]
+              })
+            }, recursive=True) | to_json | b64encode
+          }}
+      vars:
+        _ps: "{{ pull_secret_string | b64decode | from_json }}"
+
+    - name: Mirror seed image from seed bastion registry to target bastion registry
+      ansible.builtin.include_role:
+        name: container_image_mirror
+      vars:
+        container_image_mirror_operation: mirror
+        container_image_mirror_registry_host: "{{ target_registry_host }}"
+        container_image_mirror_registry_port: "{{ target_registry_port | default(disconnected_registry_port) }}"
+        container_image_mirror_registry_namespace: "{{ seed_image_namespace }}/"
+        container_image_mirror_dest_tls_verify: false
+        container_image_mirror_use_pull_secret: true
+        container_image_mirror_pull_secret_string: "{{ _ibu_pull_secret }}"
+        container_image_mirror_images:
+          - source: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/{{ seed_image_namespace }}/{{ seed_image_name }}:{{ version }}"
+            dest: "{{ seed_image_name }}:{{ version }}"

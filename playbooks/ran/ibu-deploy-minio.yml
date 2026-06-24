@@ -17,7 +17,7 @@
 #   - sudo/become privileges for firewall and mc installation
 #
 # Usage:
-#   ansible-playbook playbooks/ran/deploy-minio.yml \
+#   ansible-playbook playbooks/ran/ibu-deploy-minio.yml \
 #     -i inventories/ocp-deployment/build-inventory.py
 #
 # Required variables (set in inventory, vault-encrypted):

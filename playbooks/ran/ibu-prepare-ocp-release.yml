@@ -10,17 +10,17 @@
 #   - Valid pull secret with access to quay.io/openshift-release-dev
 #
 # Usage:
-#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
+#   ansible-playbook playbooks/ran/ibu-prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "release=4.19"
 #
 #   # Mirror a specific z-stream build:
-#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
+#   ansible-playbook playbooks/ran/ibu-prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars "release=4.19.1"
 #
 #   # Mirror from an explicit pull spec (e.g. nightly or RC build):
-#   ansible-playbook playbooks/ran/prepare-ocp-release.yml \
+#   ansible-playbook playbooks/ran/ibu-prepare-ocp-release.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars \
 #       "release=quay.io/openshift-release-dev/ocp-release:4.19.0-rc.2-x86_64"

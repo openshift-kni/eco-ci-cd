@@ -1,0 +1,160 @@
+---
+# Prepares the seed SNO for IBU seed image generation.
+#
+# This playbook:
+#   1. Retrieves the seed spoke kubeconfig from ACM on the hub cluster
+#   2. Attaches a dedicated container storage disk to the seed SNO VM
+#   3. Configures shared container storage mount on the seed SNO
+#
+# Prerequisites:
+#   - The containers qcow2 disk must already exist on the hypervisor
+#     (one-time manual step: qemu-img create -f qcow2 /var/lib/libvirt/images/<vm>-containers.qcow2 100G)
+#   - The seed SNO must be deployed and managed by ACM on the hub cluster
+#
+# This playbook is intended to run before seed generation tests.
+#
+# Usage:
+#   ansible-playbook playbooks/ran/prepare-ibu-seed-sno.yml \
+#     -i inventories/cnf/switch-config.yaml \
+#     --extra-vars 'hub_cluster=kni-qe-108 spoke_cluster=ibu-seed seed_vm_name=master-0.kni-qe-108'
+#
+# Parameters:
+#   hub_cluster: Hub cluster name (required)
+#   spoke_cluster: Spoke cluster name (required)
+#   seed_vm_name: VM name on hypervisor (required)
+
+- name: Retrieve spoke kubeconfig from hub cluster
+  hosts: bastion
+  vars:
+    hub_kubeconfig: "/home/telcov10n/project/generated/{{ hub_cluster }}/auth/kubeconfig"
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+  tasks:
+    - name: Assert required variables are defined
+      ansible.builtin.assert:
+        that:
+          - hub_cluster is defined
+          - spoke_cluster is defined
+          - hub_kubeconfig is defined
+          - seed_kubeconfig is defined
+        fail_msg: >-
+          hub_cluster and spoke_cluster must be provided as extra-vars
+
+    - name: Check hub kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ hub_kubeconfig }}"
+      register: hub_kubeconfig_stat
+
+    - name: Assert hub kubeconfig file exists
+      ansible.builtin.assert:
+        that:
+          - hub_kubeconfig_stat.stat.exists
+        fail_msg: >-
+          Hub kubeconfig not found at {{ hub_kubeconfig }}.
+          Ensure hub cluster is deployed or provide correct hub_kubeconfig path.
+
+    - name: Get spoke cluster admin kubeconfig secret
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ hub_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ spoke_cluster }}"
+        name: "{{ spoke_cluster }}-admin-kubeconfig"
+      register: spoke_kubeconfig_secret
+
+    - name: Extract spoke kubeconfig to specified path
+      ansible.builtin.copy:
+        content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+        dest: "{{ seed_kubeconfig }}"
+        mode: '0600'
+
+- name: Attach container storage disk to seed SNO VM
+  hosts: hypervisor
+  vars:
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+    libvirtd_disk_path: /var/lib/libvirt/images
+    containers_disk_path: "{{ libvirtd_disk_path }}/{{ seed_vm_name }}-containers.qcow2"
+  tasks:
+    - name: Assert required variables are defined
+      ansible.builtin.assert:
+        that:
+          - seed_vm_name is defined
+          - seed_kubeconfig is defined
+        fail_msg: >-
+          Both seed_vm_name and seed_kubeconfig must be provided
+          as extra-vars
+
+    - name: Check current VM disk list
+      ansible.builtin.command: virsh domblklist {{ seed_vm_name }}
+      register: domblklist
+      changed_when: false
+      become: true
+
+    - name: Attach containers disk if not already attached
+      ansible.builtin.command: >-
+        virsh attach-disk {{ seed_vm_name }}
+        {{ containers_disk_path }}
+        vdb
+        --driver qemu --subdriver qcow2 --persistent
+      when: containers_disk_path not in domblklist.stdout
+      changed_when: true
+      become: true
+
+- name: Configure shared container storage on seed SNO
+  hosts: bastion
+  vars:
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+  tasks:
+    - name: Check if containers partition already exists
+      ansible.builtin.stat:
+        path: /dev/disk/by-partlabel/containers
+      register: containers_partlabel
+      become: true
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    - name: Create containers partition on vdb
+      community.general.parted:
+        device: /dev/vdb
+        number: 1
+        state: present
+        part_type: primary
+        name: containers
+      become: true
+      delegate_to: "{{ groups['masters'][0] }}"
+      when: not containers_partlabel.stat.exists
+
+    - name: Create XFS filesystem on containers partition
+      community.general.filesystem:
+        dev: /dev/vdb1
+        fstype: xfs
+        opts: "-L containers"
+      become: true
+      delegate_to: "{{ groups['masters'][0] }}"
+      when: not containers_partlabel.stat.exists
+
+    - name: Apply var-lib-containers MachineConfig
+      kubernetes.core.k8s:
+        kubeconfig: "{{ seed_kubeconfig }}"
+        state: present
+        definition: "{{ lookup('template', playbook_dir + '/../templates/mc-var-lib-containers.j2') | from_yaml }}"
+
+    - name: Wait for MachineConfigPool to start updating
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ seed_kubeconfig }}"
+        kind: MachineConfigPool
+        name: master
+        wait: true
+        wait_condition:
+          type: Updating
+          status: "True"
+        wait_timeout: 120
+
+    - name: Wait for MachineConfigPool to finish updating
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ seed_kubeconfig }}"
+        kind: MachineConfigPool
+        name: master
+        wait: true
+        wait_condition:
+          type: Updated
+          status: "True"
+        wait_timeout: 1200

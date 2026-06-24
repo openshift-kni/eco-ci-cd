@@ -1,0 +1,37 @@
+---
+# Playbook: Power off IBU seed spoke node
+# Description: Gracefully shuts down the IBU seed SNO spoke node.
+#              If the node is already down, the shutdown task is skipped.
+#
+# Usage:
+#   ansible-playbook playbooks/ran/ibu-poweroff-seed-spoke.yml \
+#     -i inventories/ocp-deployment/build-inventory.py
+#
+- name: Power off IBU seed spoke
+  hosts: masters
+  gather_facts: false
+  tasks:
+    - name: Check if node is reachable via SSH
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 5
+        state: started
+      register: ssh_reachable
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Report node reachability
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'Node is reachable, proceeding with poweroff'
+            if ssh_reachable.state is defined and ssh_reachable.state == 'started'
+            else 'Node is already down, skipping poweroff'
+          }}
+
+    - name: Power off seed spoke node
+      community.general.shutdown:
+        msg: "Powering off after IBU seed generation"
+      become: true
+      when: ssh_reachable.state is defined and ssh_reachable.state == 'started'

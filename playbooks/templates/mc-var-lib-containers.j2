@@ -1,0 +1,25 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 98-var-lib-containers
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    systemd:
+      units:
+        - name: var-lib-containers.mount
+          enabled: true
+          contents: |
+            [Unit]
+            Description=Mount /var/lib/containers on dedicated partition
+            Before=local-fs.target
+            [Mount]
+            What=/dev/disk/by-partlabel/containers
+            Where=/var/lib/containers
+            Type=xfs
+            Options=defaults,prjquota
+            [Install]
+            WantedBy=local-fs.target

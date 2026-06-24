@@ -14,7 +14,7 @@
 # This playbook is intended to run before seed generation tests.
 #
 # Usage:
-#   ansible-playbook playbooks/ran/prepare-ibu-seed-sno.yml \
+#   ansible-playbook playbooks/ran/ibu-prepare-seed-sno.yml \
 #     -i inventories/cnf/switch-config.yaml \
 #     --extra-vars 'hub_cluster=kni-qe-108 spoke_cluster=ibu-seed seed_vm_name=master-0.kni-qe-108'
 #

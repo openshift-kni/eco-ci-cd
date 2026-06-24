@@ -1,0 +1,97 @@
+---
+# configure-nrop-operator.yml
+# This playbook configures the NROP operator on the cluster.
+# It sets the target pool, the scheduler image uri, and deploys the operator manifest.
+
+# Variables required:
+# kubeconfig: The kubeconfig to use.
+# test_env: The environment to use.
+
+# Variables optional:
+# custom_scheduler: The custom scheduler to use.
+
+
+- name: Configure NROP operator
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    is_full_schedulable_cluster: false
+    scheduler_image_name: noderesourcetopology-scheduler
+    image_uri:
+      prod: registry.redhat.io/openshift4
+      stage: registry.stage.redhat.io/openshift4
+
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - test_env is defined
+        fail_msg: "Required variables are not defined"
+
+    - name: Get Cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: api_version
+
+    - name: Set ocp_version
+      ansible.builtin.set_fact:
+        ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+        ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+    - name: Get scheduler configuration
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Scheduler
+        name: cluster
+      register: scheduler_info
+
+    - name: Set NROP target pool and base image
+      ansible.builtin.set_fact:
+        nrop_target_pool: "{{ 'master' if scheduler_info.resources[0].spec.mastersSchedulable | default(false) else 'worker' }}"
+        base_image: "{% if ocp_version_minor == 12 %}rhel8{% else %}rhel9{% endif %}"
+
+    - name: Check if it's full schedulable cluster
+      when: nrop_target_pool == 'master'
+      block:
+        - name: Get Nodes information
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+          register: nodes_info
+
+        - name: Check if it's full schedulable cluster
+          ansible.builtin.set_fact:
+            is_full_schedulable_cluster: true
+          when: nodes_info.resources | length >= 4
+
+    - name: Print target pool
+      ansible.builtin.debug:
+        msg: "Traget pool: {{ nrop_target_pool }}"
+
+    - name: Set scheduler image uri
+      ansible.builtin.set_fact:
+        scheduler_image_uri: "{{ image_uri[test_env] }}/{{ scheduler_image_name }}-{{ base_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+      when: custom_scheduler is not defined
+
+    - name: Overwrite scheduler image uri
+      ansible.builtin.set_fact:
+        scheduler_image_uri: "{{ custom_scheduler }}"
+      when: custom_scheduler is defined
+
+    - name: Print scheduler image uri
+      ansible.builtin.debug:
+        msg: "Scheduler image uri: {{ scheduler_image_uri }}"
+
+    - name: Print operator manifest
+      ansible.builtin.debug:
+        msg: "{{ lookup('template', 'templates/operator.yaml.j2') }}"
+
+    - name: Deploy Kubernetes resource from template
+      kubernetes.core.k8s:
+        state: present
+        template: "templates/operator.yaml.j2"

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="{{ artifact_management_test_name }}-{{ artifact_management_spoke_cluster }}" tests="1" failures="{{ '1' if artifact_management_test_rc != 0 else '0' }}" errors="0" time="{{ artifact_management_test_duration }}">
+    <testcase name="{{ artifact_management_test_name | upper }}-{{ artifact_management_spoke_cluster }}" classname="telco.kpis.{{ artifact_management_test_name }}" time="{{ artifact_management_test_duration }}">
+      {% if artifact_management_test_rc != 0 %}
+      <failure message="{{ artifact_management_test_name }} test failed with exit code {{ artifact_management_test_rc }}">
+      Test failed. Check test artifacts for details.
+      </failure>
+      {% endif %}
+    </testcase>
+  </testsuite>
+</testsuites>

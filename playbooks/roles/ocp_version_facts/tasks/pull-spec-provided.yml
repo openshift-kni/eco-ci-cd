@@ -9,7 +9,7 @@
       {{
         (ocp_version_facts_pull_spec | default(''))
         | regex_replace('^.*:', '')
-        | regex_replace('-(x86|x64|x86_64|aarch64|ppc64le|s390x)$', '')
+        | regex_replace('-(x86|x64|x86_64|aarch64|ppc64le|s390x|multi)$', '')
       }}
 
 - name: Display parsed release version for debugging

@@ -1,0 +1,39 @@
+---
+- name: Ensure required variables are defined
+  ansible.builtin.assert:
+    that:
+      - kubeconfig is defined
+      - test_env is defined
+    fail_msg: "Required variables are not defined"
+
+- name: Create workdir
+  ansible.builtin.include_tasks: create_workdir.yml
+
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+    ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+- name: Deploy scheduler
+  ansible.builtin.include_tasks: deploy_scheduler.yml
+
+- name: Deploy performance profile
+  ansible.builtin.include_tasks: preformance_profile.yml
+
+- name: Deploy Sample Device
+  ansible.builtin.include_tasks: deploy_manifest.yml
+  vars:
+    template_name: "templates/{{ item }}.yaml.j2"
+    manifest_name: "{{ item }}.yaml"
+  loop:
+    - "setup-sample-device"
+    - "sample-device-A"
+    - "sample-device-B"
+    - "sample-device-C"

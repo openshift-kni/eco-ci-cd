@@ -288,7 +288,7 @@
 
     - name: Set up HTTP storage
       vars:
-        http_port: "{{ share_http_iso_port }}"
+        http_port: "{{ share_http_iso_port | string }}"
         http_dir: "{{ http_directory }}"
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store

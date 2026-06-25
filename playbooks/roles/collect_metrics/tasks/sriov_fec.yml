@@ -1,19 +1,22 @@
 ---
 - name: Collect SR-IOV FEC operator version
   block:
-    - name: Get SR-IOV FEC subscription
+    - name: Get SR-IOV FEC subscriptions
       kubernetes.core.k8s_info:
         api_version: operators.coreos.com/v1alpha1
         kind: Subscription
-        name: sriov-fec-subscription
         namespace: vran-acceleration-operators
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
-      register: _sriov_fec_sub
+      register: _sriov_fec_subs
+
+    - name: Find SR-IOV FEC subscription by operator package name
+      ansible.builtin.set_fact:
+        _sriov_fec_subscription: "{{ _sriov_fec_subs.resources | selectattr('spec.name', 'equalto', 'sriov-fec') | list | first | default({}) }}"
 
     - name: Set SR-IOV FEC operator version fact
       ansible.builtin.set_fact:
-        _sriov_fec_operator: "{{ _sriov_fec_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: _sriov_fec_sub.resources | length > 0
+        _sriov_fec_operator: "{{ _sriov_fec_subscription.status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _sriov_fec_subscription.status is defined
 
     - name: Append SR-IOV FEC operator version to metrics
       ansible.builtin.set_fact:

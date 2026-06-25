@@ -1,19 +1,22 @@
 ---
 - name: Collect PTP operator version
   block:
-    - name: Get PTP subscription
+    - name: Get PTP subscriptions
       kubernetes.core.k8s_info:
         api_version: operators.coreos.com/v1alpha1
         kind: Subscription
-        name: ptp-operator-subscription
         namespace: openshift-ptp
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
-      register: _ptp_sub
+      register: _ptp_subs
+
+    - name: Find PTP subscription by operator package name
+      ansible.builtin.set_fact:
+        _ptp_subscription: "{{ _ptp_subs.resources | selectattr('spec.name', 'equalto', 'ptp-operator') | list | first | default({}) }}"
 
     - name: Set PTP operator version fact
       ansible.builtin.set_fact:
-        _ptp_operator: "{{ _ptp_sub.resources[0].status.installedCSV | regex_replace('^.*\\.v', '') }}"
-      when: _ptp_sub.resources | length > 0
+        _ptp_operator: "{{ _ptp_subscription.status.installedCSV | regex_replace('^.*\\.v', '') }}"
+      when: _ptp_subscription.status is defined
 
     - name: Append PTP operator version to metrics
       ansible.builtin.set_fact:

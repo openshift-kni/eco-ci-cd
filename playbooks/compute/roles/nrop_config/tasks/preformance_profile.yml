@@ -1,0 +1,37 @@
+---
+- name: Create temporary build directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: must_gather
+  register: tmp_must_gather_dir
+
+- name: Ensure must gather directory is empty
+  ansible.builtin.file:
+    path: "{{ tmp_must_gather_dir.path }}"
+    state: absent
+
+- name: Set performance profile creator image based on OCP version
+  ansible.builtin.set_fact:
+    nrop_ppc_image: >-
+      {{ ppc_image_rhel8 if (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.19', '<') else ppc_image }}
+
+- name: Check if PPC needs to run on both master and worker nodes
+  ansible.builtin.set_fact:
+    nrop_target_pool: "{{ 'master,worker' if is_full_schedulable_cluster | default(false) | bool is true else nrop_target_pool }}"
+
+- name: Generate Performance Profile {{ nrop_target_pool }}
+  ansible.builtin.include_tasks: pp_generator.yml
+  loop: "{{ nrop_target_pool.split(',') }}"
+  loop_control:
+    loop_var: nrop_target_pool
+
+- name: Delete temporary must gather directory
+  ansible.builtin.file:
+    path: "{{ tmp_must_gather_dir.path }}"
+    state: absent
+
+- name: Wait for MCP restart
+  ansible.builtin.include_tasks: wait_for_mcp.yml
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers

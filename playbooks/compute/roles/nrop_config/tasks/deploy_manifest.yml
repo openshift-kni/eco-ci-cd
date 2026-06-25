@@ -1,0 +1,11 @@
+---
+- name: Save Manifest
+  ansible.builtin.template:
+    src: "{{ template_name }}"
+    dest: "{{ manifest_dir }}/{{ manifest_name }}"
+    mode: '0664'
+
+- name: Apply Manifest
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ manifest_dir }}/{{ manifest_name }}"

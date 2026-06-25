@@ -522,7 +522,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
       vars:
-        http_port: "{{ share_http_iso_port }}"
+        http_port: "{{ share_http_iso_port | string }}"
         http_dir: "{{ http_directory }}"
 
     - name: Deploy/Redeploy OCP client

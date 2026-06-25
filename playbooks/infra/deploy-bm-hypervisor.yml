@@ -133,7 +133,7 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.setup_http_store
       vars:
-        http_port: "{{ http_store_port }}"
+        http_port: "{{ http_store_port | string }}"
 
 - name: Deploy Bare-Metal
   hosts: hypervisor

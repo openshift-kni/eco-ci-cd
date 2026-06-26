@@ -33,6 +33,9 @@
 
 - name: Pull FBC index image
   register: image_info
+  retries: 3
+  delay: 10
+  until: image_info is success
   containers.podman.podman_image:
     name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
     tag: "{{ fbc_tag }}"

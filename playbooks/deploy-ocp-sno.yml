@@ -277,6 +277,7 @@
     - name: Set OpenShift version facts
       vars:
         ocp_version_facts_release: "{{ release }}"
+        ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
       ansible.builtin.import_role:
         name: ocp_version_facts
 
@@ -325,6 +326,7 @@
       block:
 
         - name: Workaround oc-mirror v2 authfile issue
+          failed_when: false
           when: ocp_version_facts_minor | int >= 20 and ocp_version_facts_major | int >= 4 or ocp_version_facts_major | int >= 5
           no_log: true
           ansible.builtin.copy:

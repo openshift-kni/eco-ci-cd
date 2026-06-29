@@ -100,7 +100,7 @@
         ocp_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
         ocp_hub_major_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}"
         ocp_hub_minor_version: "{{ cluster_info.resources[0].status.version.split('.')[1] }}"
-        ocp_hub_patch_version: "{{ cluster_info.resources[0].status.version.split('.')[2] }}"
+        ocp_hub_patch_version: "{{ cluster_info.resources[0].status.version.split('.')[2:] | join('.') }}"
 
     - name: Validate required variables for HTTP store
       ansible.builtin.assert:
@@ -445,7 +445,11 @@
         - siteconfig_deployment_status is succeeded
 
     - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
-      when: ocp_hub_patch_version is search('(ec|rc|nightly)') and ocp_hub_minor_version | int >= 21
+      when: >-
+        ocp_hub_patch_version is search('(ec|rc|nightly)') and (
+          ocp_hub_major_version | int > 4
+          or (ocp_hub_major_version | int == 4 and ocp_hub_minor_version | int >= 21)
+        )
       vars:
         disable_image_policy_config_map_name: assisted-installer-config-override
       block:

@@ -80,10 +80,16 @@
           - labels is defined
           - ptp_cycle_configs is defined
 
-    - name: Ensure base directory does not exist
+    - name: Ensure base directory and all cycle output directories do not exist
       ansible.builtin.file:
-        path: "{{ eco_gotest_base_dir }}"
+        path: "{{ item }}"
         state: absent
+      loop:
+        - "{{ eco_gotest_base_dir }}"
+        - "{{ eco_gotest_base_dir }}_0"
+        - "{{ eco_gotest_base_dir }}_1"
+        - "{{ eco_gotest_base_dir }}_2"
+        - "{{ eco_gotest_base_dir }}_3"
 
     - name: Ensure test directory is present
       ansible.builtin.file:

@@ -35,7 +35,7 @@ sample_device_type_2: example.com/deviceB
 sample_device_type_3: example.com/deviceC
 
 # Test to skip
-ginkgo_skip: 84312
+ginkgo_skip: "84312|should converge with mixed SELinux policy across node groups"
 
 # Test Conigurations
 _ginkgo_label: 'tier0 || tier1'  # run only this labled tests

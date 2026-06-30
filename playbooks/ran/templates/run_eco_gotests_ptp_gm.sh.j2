@@ -40,6 +40,7 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
 echo "=== Running {{ feat_config.name }} ==="
 rm -rf {{ feat_dir }}/report
 mkdir -p {{ feat_dir }}/report
+chmod 777 {{ feat_dir }}/report
 {{ podman_run(feat_config.name, feat_dir ~ '/report', feat_config.additional_test_env_variables | default('')) }} || true
 
 {% endfor %}
@@ -57,6 +58,7 @@ sleep 15m
 
 rm -rf {{ eco_gotest_base_dir }}_{{ loop.index }}/report
 mkdir -p {{ eco_gotest_base_dir }}_{{ loop.index }}/report
+chmod 777 {{ eco_gotest_base_dir }}_{{ loop.index }}/report
 {{ podman_run('ptp', eco_gotest_base_dir ~ '_' ~ loop.index ~ '/report', additional_test_env_variables | default('')) }} || true
 
 {% endfor %}

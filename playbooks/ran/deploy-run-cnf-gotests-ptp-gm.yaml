@@ -121,7 +121,7 @@
   tags: process
   vars:
     downstream_test_report_path: /tmp/downstream_report
-    ptp_report_dir: /tmp/ptp_reports
+    ptp_report_dir: /tmp/test_reports
   tasks:
     - name: Reset ptp_report_dir
       ansible.builtin.file:
@@ -146,7 +146,7 @@
     - name: Copy Polarion reports to destination
       ansible.builtin.copy:
         src: "{{ item.path }}"
-        dest: "{{ ptp_report_dir }}/polarion/"
+        dest: "{{ ptp_report_dir }}/junit/"
         remote_src: true
         mode: "0644"
       loop: "{{ polarion_files.files }}"
@@ -161,7 +161,7 @@
     - name: Copy JUnit reports to destination
       ansible.builtin.copy:
         src: "{{ item.path }}"
-        dest: "{{ ptp_report_dir }}/junit/"
+        dest: "{{ ptp_report_dir }}/polarion/"
         remote_src: true
         mode: "0644"
       loop: "{{ junit_files.files }}"

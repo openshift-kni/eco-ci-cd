@@ -1,0 +1,168 @@
+---
+# Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Deploy CNF gotests PTP GM script
+# Description  : Prepares a bastion host to run PTP GM-specific cnf-gotests.
+#                Installs dependencies, optionally mirrors workload images to a
+#                disconnected registry, installs ginkgo from vendor, and
+#                generates a self-contained run script from a Jinja2 template.
+#                The caller is responsible for executing the script (e.g. via
+#                SSH with keepalives) and collecting reports.
+#
+# Prerequisites:
+#   - The downstream test repository must already be cloned at downstream_test_dir
+#     (e.g. by deploy-run-downstream-tests-script.yaml).
+#   - Go must be installed on the bastion.
+#   - kubeconfig, cnf_gotests_features, and cnf_test_image must be defined.
+#
+# Key Tasks:
+#   - Install nmap-ncat (required for node reachability checks)
+#   - Re-install ginkgo from project vendor to match the library version
+#   - Generate a test run script from run_cnf_gotests_ptp_gm.sh.j2
+
+# Usage:
+#   ansible-playbook ./playbooks/ran/deploy-run-cnf-gotests-ptp-gm.yaml \
+#     -i ./inventories/cnf/run-tests.yaml \
+#     --extra-vars "kubeconfig=/remote/path/to/kubeconfig \
+#       downstream_test_dir=/tmp/workdir/cnf-gotests \
+#       downstream_test_report_path=/tmp/workdir/downstream_report \
+#       cnf_gotests_features='ptp,sriov' \
+#       cnf_test_image=registry.example.com/tools:latest \
+#       mirror_registry=registry.example.com \
+#       bmc_hosts=192.0.2.1 \
+#       bmc_user=admin \
+#       bmc_password=secret"
+#
+# Available extra-vars:
+# kubeconfig                    # string: Path to the spoke kubeconfig file on the bastion.
+# downstream_test_dir           # string: Path to the cloned cnf-gotests repo on the bastion.
+# downstream_test_report_path   # string: Directory for test report output on the bastion.
+# cnf_gotests_features          # string: Space-separated feature list for FEATURES env var (use @file to pass multi-word values).
+# cnf_test_image                # string: CNF_TEST_IMAGE override (OCP tools image).
+# mirror_registry               # string: Disconnected registry host:port (optional).
+# bmc_hosts                     # string: BMC IP for power management tests (optional).
+# bmc_user                      # string: BMC username (optional).
+# bmc_password                  # string: BMC password (optional).
+
+- name: Deploy CNF gotests PTP GM script
+  hosts: bastion
+  gather_facts: true
+  tags: setup
+  vars:
+    downstream_test_dir: /tmp/cnf-gotests
+    downstream_test_report_path: /tmp/downstream_report
+    mirror_registry: ""
+    bmc_hosts: ""
+    bmc_user: ""
+    bmc_password: ""
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - downstream_test_dir is defined
+          - downstream_test_report_path is defined
+          - cnf_gotests_features is defined
+          - cnf_gotests_features | length > 0
+          - cnf_test_image is defined
+          - cnf_test_image | length > 0
+
+    - name: Install nmap-ncat
+      become: true
+      ansible.builtin.dnf:
+        name: nmap-ncat
+        state: present
+
+    - name: Mirror workload images to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      block:
+        - name: Mirror oslat image
+          ansible.builtin.shell: |
+            ACCEPT_POLICY='{"default":[{"type":"insecureAcceptAnything"}]}'
+            skopeo copy \
+              --policy <(echo "${ACCEPT_POLICY}") \
+              --dest-tls-verify=false \
+              docker://quay.io/container-perf-tools/oslat:latest \
+              docker://{{ mirror_registry }}/container-perf-tools/oslat:latest
+          changed_when: false
+
+        - name: Mirror stress-ng image
+          ansible.builtin.shell: |
+            ACCEPT_POLICY='{"default":[{"type":"insecureAcceptAnything"}]}'
+            skopeo copy \
+              --policy <(echo "${ACCEPT_POLICY}") \
+              --dest-tls-verify=false \
+              docker://quay.io/container-perf-tools/stress-ng:latest \
+              docker://{{ mirror_registry }}/container-perf-tools/stress-ng:latest
+          changed_when: false
+
+    - name: Install ginkgo from project vendor
+      ansible.builtin.command: go install -mod=vendor github.com/onsi/ginkgo/v2/ginkgo
+      args:
+        chdir: "{{ downstream_test_dir }}"
+      environment:
+        PATH: "/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    - name: Generate cnf-gotests PTP GM run script
+      ansible.builtin.template:
+        src: templates/run_cnf_gotests_ptp_gm.sh.j2
+        dest: "{{ downstream_test_dir }}/cnf-gotests-ptp-gm-run.sh"
+        mode: "0764"
+      no_log: "{{ bmc_password | default('') | length > 0 }}"
+
+- name: Process CNF gotests PTP GM report files on bastion
+  hosts: bastion
+  gather_facts: false
+  tags: process
+  vars:
+    downstream_test_report_path: /tmp/downstream_report
+    ptp_report_dir: /tmp/ptp_reports
+  tasks:
+    - name: Reset ptp_report_dir
+      ansible.builtin.file:
+        path: "{{ ptp_report_dir }}"
+        state: absent
+
+    - name: Ensure ptp_report_dir directories exist
+      ansible.builtin.file:
+        path: "{{ ptp_report_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - polarion
+        - junit
+
+    - name: Find Polarion reports
+      ansible.builtin.find:
+        paths: "{{ downstream_test_report_path }}"
+        patterns: "*_polarion.xml"
+      register: polarion_files
+
+    - name: Copy Polarion reports to destination
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ ptp_report_dir }}/polarion/"
+        remote_src: true
+        mode: "0644"
+      loop: "{{ polarion_files.files }}"
+      when: polarion_files.matched > 0
+
+    - name: Find JUnit reports
+      ansible.builtin.find:
+        paths: "{{ downstream_test_report_path }}"
+        patterns: "*_suite_test.xml"
+      register: junit_files
+
+    - name: Copy JUnit reports to destination
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ ptp_report_dir }}/junit/"
+        remote_src: true
+        mode: "0644"
+      loop: "{{ junit_files.files }}"
+      when: junit_files.matched > 0

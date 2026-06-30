@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
+export KUBECONFIG="{{ kubeconfig }}"
+export POLARION_REPORT=true
+export REPORT_DIR_NAME="{{ downstream_test_report_path }}"
+export FEATURES="{{ cnf_gotests_features }}"
+export CNF_TEST_IMAGE={{ cnf_test_image }}
+{% if mirror_registry | default('') | length > 0 %}
+export OSLAT_TEST_IMAGE={{ mirror_registry }}/container-perf-tools/oslat:latest
+export STRESSNG_TEST_IMAGE={{ mirror_registry }}/container-perf-tools/stress-ng:latest
+{% endif %}
+{% if bmc_hosts | default('') | length > 0 %}
+export BMC_HOSTS={{ bmc_hosts }}
+export BMC_USERNAME={{ bmc_user }}
+export BMC_PASSWORD={{ bmc_password }}
+{% endif %}
+
+mkdir -p "${REPORT_DIR_NAME}"
+make test-features

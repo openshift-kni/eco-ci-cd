@@ -1,0 +1,409 @@
+---
+# Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Deploy RAN PTP GM tests script
+# Description  : Prepares a bastion host to run RAN PTP GM eco-gotests.
+#                Optionally discovers the spoke kubeconfig and BMC IP from the
+#                hub ACM cluster. Mirrors required images, pulls the eco-gotests
+#                container, and generates a single test script that runs:
+#                  1. containernshide, powermanagement, deploymenttypes
+#                     (with existing ZTP PtpConfigs)
+#                  2. For each ptp_cycle_config: switches PTP config, waits 5m,
+#                     runs ptp eco-gotests
+#
+# Prerequisites:
+#   - Either kubeconfig is provided directly, or hub_kubeconfig +
+#     spoke_cluster_label_selector are provided for spoke discovery.
+#   - hub_kubeconfig must be the path to the hub kubeconfig file on the bastion
+#     (used for spoke discovery and mounted into the eco-gotests container).
+#   - ptp_cycle_configs must be a list of {name, urls[]} dicts.
+#   - bmc_user and bmc_password must be defined for power management tests.
+#
+# Key Tasks:
+#   - Optionally discover spoke kubeconfig and BMC IP from hub ManagedCluster
+#   - Gather cluster version from OpenShift
+#   - Pull the eco-gotests container (mirror to disconnected registry if needed)
+#   - Generate a unified test script covering all eco_gotests_features and
+#     ptp_cycle_configs
+
+# Usage (hub/spoke ACM discovery mode):
+#   ansible-playbook ./playbooks/ran/deploy-run-eco-gotests-ptp-gm.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "hub_kubeconfig=/home/telcov10n/project/generated/kni-qe-111/auth/kubeconfig \
+#       hub_clusterconfigs_path=/home/telcov10n/project/generated/kni-qe-111 \
+#       spoke_cluster_label_selector=sites=helix48 \
+#       bmc_user=<user> bmc_password=<pass> \
+#       labels='!no-container' \
+#       ptp_cycle_configs='[{\"name\": \"ntpfailover\", \"urls\": [
+#         \"https://gitlab.cee.redhat.com/telcov10n/ztp-site-configs-ci/-/raw/ptp_gm/policygentemplates/4.20/ptp-test/PtpConfigGmWpcNtpCustom.yaml\",
+#         \"https://gitlab.cee.redhat.com/telcov10n/ztp-site-configs-ci/-/raw/ptp_gm/policygentemplates/4.20/ptp-test/PtpConfigSlaveNtpCustom.yaml\"
+#       ]}]'"
+#
+# Available extra-vars:
+# hub_kubeconfig                    # string: Path to hub kubeconfig file on the bastion (enables spoke discovery
+#                                   #         and is mounted directly into the eco-gotests container).
+# spoke_cluster_label_selector      # string: Label selector for spoke ManagedCluster (required with hub_kubeconfig).
+# bmc_user                          # string: BMC username (required for power management tests).
+# bmc_password                      # string: BMC password (required for power management tests).
+# kubeconfig                        # string: Path to spoke kubeconfig (alternative to hub_kubeconfig discovery).
+# spoke_kubeconfig                  # string: Same as kubeconfig, used for oc commands between PTP cycles.
+# labels                            # string: Test labels filter (e.g. !no-container).
+# ptp_cycle_configs                 # list:   [{name, urls[]}] PTP config cycles to run after ZTP features.
+#                                   #         Example: ptp_cycle_configs='[{"name": "ntpfailover", "urls": [
+#     "https://gitlab.cee.redhat.com/telcov10n/ztp-site-configs-ci/-/raw/ptp_gm/policygentemplates/4.20/ptp-test/PtpConfigGmWpcNtpCustom.yaml",
+#     "https://gitlab.cee.redhat.com/telcov10n/ztp-site-configs-ci/-/raw/ptp_gm/policygentemplates/4.20/ptp-test/PtpConfigSlaveNtpCustom.yaml"
+#   ]}]'
+# eco_gotests_features              # list:   Features to run in the first cycle (with ZTP PtpConfigs).
+#                                   #         Supported values: containernshide, powermanagement, deploymenttypes.
+#                                   #         Defaults to all three. Example: eco_gotests_features='["containernshide","powermanagement"]'
+# eco_gotests_tag                   # string: Override image tag (e.g. "latest", "v4.18.0"). Auto-detects from cluster version if not set.
+# eco_gotest_base_dir               # string: Base directory for PTP cycle reports (default: /tmp/eco_gotests_ptp_gm).
+# test_timeout                      # string: Per-cycle timeout (default: 12h).
+# mirror_registry                   # string: Disconnected registry URL host:port.
+# cnf_test_image                    # string: Override ECO_CNF_RAN_TEST_IMAGE passed to the eco-gotests container.
+# additional_test_env_variables     # string: Additional env variables for the eco-gotests container (PTP cycles).
+
+- name: Deploy RAN PTP GM tests script
+  hosts: bastion
+  gather_facts: true
+  tags: setup
+  vars:
+    eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests
+    eco_gotest_base_dir: /tmp/eco_gotests_ptp_gm
+    test_timeout: "12h"
+    script_name: "eco-gotests-ptp-gm-run.sh"
+    pull_container_image: true
+    mirror_registry: ""
+    additional_test_env_variables: ""
+    auth_kubeconfig_path: "/tmp/auth_kubeconfigs"
+    eco_gotests_features:
+      - ptp
+      - containernshide
+      - powermanagement
+      - deploymenttypes
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - (hub_kubeconfig is defined and spoke_cluster_label_selector is defined) or kubeconfig is defined
+          - labels is defined
+          - ptp_cycle_configs is defined
+
+    - name: Set up kubeconfig directory and discover spoke
+      when: hub_kubeconfig is defined
+      block:
+        - name: Ensure auth_kubeconfig_path directory does not exist
+          ansible.builtin.file:
+            path: "{{ auth_kubeconfig_path }}"
+            state: absent
+
+        - name: Ensure auth_kubeconfig directory is present
+          ansible.builtin.file:
+            path: "{{ auth_kubeconfig_path }}/spokes"
+            state: directory
+            recurse: true
+            mode: "0777"
+
+        - name: Get managed cluster (spoke)
+          kubernetes.core.k8s_info:
+            api_version: cluster.open-cluster-management.io/v1
+            kind: ManagedCluster
+            kubeconfig: "{{ hub_kubeconfig }}"
+            label_selectors: "{{ spoke_cluster_label_selector }}"
+          register: spoke_cluster_info
+
+        - name: Get spoke admin kubeconfig secret
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ spoke_cluster_info.resources[0].metadata.name }}-admin-kubeconfig"
+            namespace: "{{ spoke_cluster_info.resources[0].metadata.name }}"
+            kubeconfig: "{{ hub_kubeconfig }}"
+          register: spoke_kubeconfig_secret
+
+        - name: Get BMC address of spoke
+          kubernetes.core.k8s_info:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ spoke_cluster_info.resources[0].metadata.name }}"
+            kubeconfig: "{{ hub_kubeconfig }}"
+          register: spoke_bmc_host
+
+        - name: Extract BMC IP from spoke BMC address
+          ansible.builtin.set_fact:
+            spoke_bmc_ip: "{{ (spoke_bmc_host.resources[0].spec.bmc.address | ansible.builtin.urlsplit).hostname }}"
+
+        - name: Write spoke kubeconfig to test directory
+          ansible.builtin.copy:
+            content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+            dest: "{{ auth_kubeconfig_path }}/spokes/spoke-kubeconfig"
+            mode: "0600"
+
+        - name: Set kubeconfig from discovered spoke
+          ansible.builtin.set_fact:
+            kubeconfig: "{{ auth_kubeconfig_path }}/spokes/spoke-kubeconfig"
+            spoke_kubeconfig: "{{ auth_kubeconfig_path }}/spokes/spoke-kubeconfig"
+
+    - name: Ensure base directory does not exist
+      ansible.builtin.file:
+        path: "{{ eco_gotest_base_dir }}"
+        state: absent
+
+    - name: Ensure base directory is present
+      ansible.builtin.file:
+        path: "{{ eco_gotest_base_dir }}"
+        state: directory
+        mode: "0760"
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Mirror eco-gotests image to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      block:
+        - name: Set eco-gotests mirror tag
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "{{ eco_gotests_tag | default('latest') }}"
+
+        - name: Copy eco-gotests image to disconnected registry
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            docker://{{ eco_gotests_image }}:{{ eco_gotests_tag }}
+            docker://{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}:{{ eco_gotests_tag }}
+          register: skopeo_result
+          changed_when: skopeo_result.rc == 0
+
+        - name: Override eco-gotests image source to disconnected registry
+          ansible.builtin.set_fact:
+            eco_gotests_image: "{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}"
+
+    - name: Mirror PTP images to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      block:
+        - name: Write pull secret auth file for registry mirroring
+          no_log: true
+          ansible.builtin.copy:
+            content: "{{ pull_secret_string | b64decode }}"
+            dest: "{{ pull_secret_file | default('/tmp/auth.json') }}"
+            mode: '0600'
+
+        - name: Mirror cloud-event-consumer v1 image
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            docker://quay.io/redhat-cne/cloud-event-consumer:4.18
+            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v1
+          register: skopeo_v1_result
+          changed_when: skopeo_v1_result.rc == 0
+
+        - name: Mirror cloud-event-consumer v2 image
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            docker://quay.io/redhat-cne/cloud-event-consumer:latest
+            docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v2
+          register: skopeo_v2_result
+          changed_when: skopeo_v2_result.rc == 0
+
+        - name: Mirror ptp-must-gather image (OCP < 4.21 only)
+          when: version.split('.')[1] | int < 21
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            --all
+            --authfile {{ pull_secret_file | default('/tmp/auth.json') }}
+            docker://registry.redhat.io/openshift4/ptp-must-gather-rhel9:v{{ version }}
+            docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
+          register: skopeo_must_gather_result
+          changed_when: skopeo_must_gather_result.rc == 0
+
+        - name: Set PTP event consumer mirror fact
+          ansible.builtin.set_fact:
+            ptp_event_consumer_image: "{{ mirror_registry }}/ran-test/cloud-event-consumer"
+
+        - name: Set PTP must-gather mirror fact (OCP < 4.21 only)
+          when: version.split('.')[1] | int < 21
+          ansible.builtin.set_fact:
+            ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
+
+    - name: Remove eco-gotests image
+      when: pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        state: absent
+        tag: "{{ eco_gotests_tag | default('latest') }}"
+
+    - name: Pull eco-gotests image
+      when: pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        tag: "{{ eco_gotests_tag | default('latest') }}"
+
+    - name: Set eco-gotests tag
+      when: eco_gotests_tag is not defined
+      ansible.builtin.set_fact:
+        eco_gotests_tag: "latest"
+
+    - name: Set eco-gotests feature configurations
+      ansible.builtin.set_fact:
+        _eco_gotests_feature_configs:
+          - name: ptp
+            additional_test_env_variables: >-
+              -e ECO_TEST_TRACE=true
+              -e ECO_VERBOSE_SCRIPT=true
+          - name: containernshide
+            additional_test_env_variables: >-
+              -e ECO_TEST_TRACE=true
+              -e ECO_VERBOSE_SCRIPT=true
+          - name: powermanagement
+            additional_test_env_variables: >-
+              -e ECO_CNF_RAN_BMC_USERNAME={{ bmc_user | default('') }}
+              -e ECO_CNF_RAN_BMC_PASSWORD={{ bmc_password | default('') }}
+              -e ECO_CNF_RAN_BMC_HOSTS={{ spoke_bmc_ip | default('') }}
+              -e ECO_TEST_TRACE=true
+              -e ECO_VERBOSE_SCRIPT=true
+          - name: deploymenttypes
+            additional_test_env_variables: >-
+              -e ECO_CNF_RAN_SKIP_TLS_VERIFY=true
+              -e ECO_TEST_TRACE=true
+              -e ECO_VERBOSE_SCRIPT=true
+
+    - name: Generate PTP GM test execution script
+      ansible.builtin.template:
+        src: templates/run_eco_gotests_ptp_gm.sh.j2
+        dest: "{{ eco_gotest_base_dir }}/{{ script_name }}"
+        mode: "0764"
+
+- name: Process PTP GM report files on bastion
+  hosts: bastion
+  gather_facts: false
+  tags: process
+  vars:
+    eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests_ptp_gm') }}"
+    bastion_report_dir: "{{ ptp_report_dir | default('/tmp/ptp_reports') }}"
+    ptp_cycle_configs: "{{ ptp_cycle_configs | default([]) }}"
+    ptp_features:
+      - name: containernshide
+        junit: containernshide_suite_test_junit.xml
+      - name: powermanagement
+        junit: powermanagement_suite_test_junit.xml
+      - name: deploymenttypes
+        junit: deployment_suite_test_junit.xml
+  tasks:
+    - name: Ensure polarion and junit directories exist
+      ansible.builtin.file:
+        path: "{{ bastion_report_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - junit
+        - polarion
+
+    - name: Remove stale eco-gotests feature report files from previous runs
+      ansible.builtin.shell: |
+        rm -f "{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test.xml"
+        rm -f "{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test_polarion.xml"
+      loop: "{{ ptp_features }}"
+      changed_when: false
+
+    - name: Remove stale eco-gotests PTP cycle report files from previous runs
+      ansible.builtin.shell: |
+        rm -f {{ bastion_report_dir }}/junit/ptp_gm_*_suite_test.xml
+        rm -f {{ bastion_report_dir }}/polarion/ptp_gm_*_suite_test_polarion.xml
+      changed_when: false
+      failed_when: false
+
+    - name: Rename testsuite and prepare feature JUnit reports for ReportPortal
+      ansible.builtin.shell: |
+        src="/tmp/eco_gotests_{{ item.name }}_0/report/{{ item.junit }}"
+        dst="{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
+               s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "${src}" > "${dst}"
+        fi
+      loop: "{{ ptp_features }}"
+      changed_when: false
+
+    - name: Prepare feature Polarion reports for Polarion converter
+      ansible.builtin.shell: |
+        src="/tmp/eco_gotests_{{ item.name }}_0/report/report_testrun.xml"
+        dst="{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test_polarion.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "${src}" > "${dst}"
+        fi
+      loop: "{{ ptp_features }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Rename testsuite and prepare PTP ZTP cycle JUnit report for ReportPortal
+      ansible.builtin.shell: |
+        src="{{ eco_gotest_base_dir }}_0/report/ptp_suite_test_junit.xml"
+        dst="{{ bastion_report_dir }}/junit/ptp_gm_0_suite_test.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"gm\"/g;
+               s/testsuite name=\"[^\"]*\"/testsuite name=\"gm\"/g" \
+            "${src}" > "${dst}"
+        fi
+      changed_when: false
+
+    - name: Prepare PTP ZTP cycle Polarion report for Polarion converter
+      ansible.builtin.shell: |
+        src="{{ eco_gotest_base_dir }}_0/report/report_testrun.xml"
+        dst="{{ bastion_report_dir }}/polarion/ptp_gm_0_suite_test_polarion.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"gm\"/g" \
+            "${src}" > "${dst}"
+        fi
+      changed_when: false
+      failed_when: false
+
+    - name: Rename testsuite and prepare PTP GM cycle JUnit reports for ReportPortal
+      ansible.builtin.shell: |
+        src="{{ eco_gotest_base_dir }}_{{ cycle_idx + 1 }}/report/ptp_suite_test_junit.xml"
+        dst="{{ bastion_report_dir }}/junit/ptp_gm_{{ cycle_idx + 1 }}_suite_test.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
+               s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "${src}" > "${dst}"
+        fi
+      loop: "{{ ptp_cycle_configs }}"
+      loop_control:
+        index_var: cycle_idx
+      changed_when: false
+
+    - name: Prepare PTP GM cycle Polarion reports for Polarion converter
+      ansible.builtin.shell: |
+        src="{{ eco_gotest_base_dir }}_{{ cycle_idx + 1 }}/report/report_testrun.xml"
+        dst="{{ bastion_report_dir }}/polarion/ptp_gm_{{ cycle_idx + 1 }}_suite_test_polarion.xml"
+        if [ -f "${src}" ]; then
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "${src}" > "${dst}"
+        fi
+      loop: "{{ ptp_cycle_configs }}"
+      loop_control:
+        index_var: cycle_idx
+      changed_when: false
+      failed_when: false

@@ -1,22 +1,24 @@
 ---
-# Prepares the seed SNO for IBU seed image generation.
+# Prepares a spoke SNO for IBU operations (seed image generation or upgrade testing).
 #
 # This playbook:
-#   1. Retrieves the seed spoke kubeconfig from ACM on the hub cluster
-#   2. Attaches a dedicated container storage disk to the seed SNO VM
-#   3. Configures shared container storage mount on the seed SNO
+#   1. Retrieves the spoke kubeconfig from ACM on the hub cluster
+#   2. Creates and attaches a dedicated container storage disk to the spoke VM
+#      (disk is created automatically if not present — idempotent across runs)
+#   3. Configures shared container storage mount on the spoke SNO
 #
 # Prerequisites:
-#   - The containers qcow2 disk must already exist on the hypervisor
-#     (one-time manual step: qemu-img create -f qcow2 /var/lib/libvirt/images/<vm>-containers.qcow2 100G)
-#   - The seed SNO must be deployed and managed by ACM on the hub cluster
+#   - The spoke SNO must be deployed and managed by ACM on the hub cluster
 #
-# This playbook is intended to run before seed generation tests.
-#
-# Usage:
-#   ansible-playbook playbooks/ran/ibu-prepare-seed-sno.yml \
-#     -i inventories/cnf/switch-config.yaml \
+# Usage (seed spoke):
+#   ansible-playbook playbooks/ran/ibu-prepare-spoke-sno.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
 #     --extra-vars 'hub_cluster=kni-qe-108 spoke_cluster=ibu-seed seed_vm_name=master-0.kni-qe-108'
+#
+# Usage (target spoke):
+#   ansible-playbook playbooks/ran/ibu-prepare-spoke-sno.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'hub_cluster=kni-qe-109 spoke_cluster=ibu-target seed_vm_name=master-0.kni-qe-109'
 #
 # Parameters:
 #   hub_cluster: Hub cluster name (required)
@@ -82,6 +84,21 @@
         fail_msg: >-
           Both seed_vm_name and seed_kubeconfig must be provided
           as extra-vars
+
+    - name: Create containers qcow2 disk if not exists
+      ansible.builtin.command: >-
+        qemu-img create -f qcow2 {{ containers_disk_path }} 100G
+      args:
+        creates: "{{ containers_disk_path }}"
+      become: true
+
+    - name: Set ownership on containers disk
+      ansible.builtin.file:
+        path: "{{ containers_disk_path }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+      become: true
 
     - name: Check current VM disk list
       ansible.builtin.command: virsh domblklist {{ seed_vm_name }}

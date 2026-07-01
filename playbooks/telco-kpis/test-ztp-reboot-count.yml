@@ -1,0 +1,195 @@
+---
+# Standalone test for ZTP reboot count functionality
+# Run with: ansible-playbook test-ztp-reboot-count.yml
+- name: Test ZTP Reboot Count Extraction
+  hosts: localhost
+  gather_facts: false
+  vars:
+    spoke_cluster: "test-spoke"
+    ztp_start_time: "2026-07-02T15:09:01Z"
+    ztp_end_time: "2026-07-02T16:22:12Z"
+  tasks:
+    - name: Create test workspace
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: _ztp_test
+      register: test_workspace
+
+    - name: Create mock kubeconfig
+      ansible.builtin.copy:
+        dest: "{{ test_workspace.path }}/{{ spoke_cluster }}-kubeconfig"
+        content: |
+          # Mock kubeconfig for testing
+          apiVersion: v1
+          kind: Config
+        mode: '0644'
+
+    - name: Create mock oc script
+      ansible.builtin.copy:
+        dest: "{{ test_workspace.path }}/oc"
+        content: |
+          #!/bin/bash
+          set -o pipefail
+          # Mock oc command
+          if [[ "$*" == *"get node -oname"* ]]; then
+            echo "node/test-spoke-node-0"
+          elif [[ "$*" == *"journalctl --list-boots"* ]]; then
+            if [[ "$*" == *"--since"* ]] && [[ "$*" == *"--until"* ]]; then
+              # Extract scenario from environment or use default
+              case "${REBOOT_SCENARIO:-no-reboots}" in
+                "no-reboots") exit 0 ;;
+                "one-reboot")
+                  echo " 0 abc Mon 2026-07-02 15:30:00 UTC—Mon 2026-07-02 16:22:12 UTC"
+                  ;;
+                "two-reboots")
+                  echo " 0 abc Mon 2026-07-02 15:30:00 UTC—Mon 2026-07-02 15:45:00 UTC"
+                  echo " 1 def Mon 2026-07-02 15:45:01 UTC—Mon 2026-07-02 16:22:12 UTC"
+                  ;;
+                "three-reboots")
+                  echo " 0 abc Mon 2026-07-02 15:30:00 UTC—Mon 2026-07-02 15:40:00 UTC"
+                  echo " 1 def Mon 2026-07-02 15:40:01 UTC—Mon 2026-07-02 16:00:00 UTC"
+                  echo " 2 ghi Mon 2026-07-02 16:00:01 UTC—Mon 2026-07-02 16:22:12 UTC"
+                  ;;
+              esac
+            fi
+          fi
+        mode: '0755'
+
+    - name: Set PATH to use mock oc
+      ansible.builtin.set_fact:
+        ansible_env: >-
+          {{ ansible_env | combine({'PATH': test_workspace.path ~ ':' ~ ansible_env.PATH}) }}
+
+    # Test Scenario 1: No reboots
+    - name: "Scenario 1: Test no reboots (PASS)"
+      block:
+        - name: Run reboot count extraction (no reboots)
+          ansible.builtin.shell: |
+            set -o pipefail
+            export REBOOT_SCENARIO=no-reboots
+            kubeconfig="{{ test_workspace.path }}/{{ spoke_cluster }}-kubeconfig"
+            start_time="{{ ztp_start_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+            end_time="{{ ztp_end_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+
+            node_name=$({{ test_workspace.path }}/oc --kubeconfig "$kubeconfig" \
+                        get node -oname | head -1 | cut -d/ -f2)
+            boots=$({{ test_workspace.path }}/oc debug node/"$node_name" \
+                    -- chroot /host journalctl --list-boots \
+                       --since "$start_time" --until "$end_time" --no-pager)
+            echo "$boots" | wc -l
+          register: no_reboot_count
+          changed_when: false
+
+        - name: Verify no reboots scenario
+          ansible.builtin.assert:
+            that:
+              - no_reboot_count.stdout | int == 0
+            fail_msg: >-
+              ❌ No-reboots scenario failed: expected 0, got {{ no_reboot_count.stdout }}
+            success_msg: "✓ Scenario 1 PASSED: No reboots (0)"
+
+    # Test Scenario 2: One reboot
+    - name: "Scenario 2: Test one reboot (PASS)"
+      block:
+        - name: Run reboot count extraction (one reboot)
+          ansible.builtin.shell: |
+            set -o pipefail
+            export REBOOT_SCENARIO=one-reboot
+            kubeconfig="{{ test_workspace.path }}/{{ spoke_cluster }}-kubeconfig"
+            start_time="{{ ztp_start_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+            end_time="{{ ztp_end_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+
+            node_name=$({{ test_workspace.path }}/oc --kubeconfig "$kubeconfig" \
+                        get node -oname | head -1 | cut -d/ -f2)
+            boots=$({{ test_workspace.path }}/oc debug node/"$node_name" \
+                    -- chroot /host journalctl --list-boots \
+                       --since "$start_time" --until "$end_time" --no-pager)
+            echo "$boots" | wc -l
+          register: one_reboot_count
+          changed_when: false
+
+        - name: Verify one reboot scenario
+          ansible.builtin.assert:
+            that:
+              - one_reboot_count.stdout | int == 1
+            fail_msg: >-
+              ❌ One-reboot scenario failed: expected 1, got {{ one_reboot_count.stdout }}
+            success_msg: "✓ Scenario 2 PASSED: One reboot (1 <= 2)"
+
+    # Test Scenario 3: Two reboots (at threshold)
+    - name: "Scenario 3: Test two reboots (PASS - at threshold)"
+      block:
+        - name: Run reboot count extraction (two reboots)
+          ansible.builtin.shell: |
+            set -o pipefail
+            export REBOOT_SCENARIO=two-reboots
+            kubeconfig="{{ test_workspace.path }}/{{ spoke_cluster }}-kubeconfig"
+            start_time="{{ ztp_start_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+            end_time="{{ ztp_end_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+
+            node_name=$({{ test_workspace.path }}/oc --kubeconfig "$kubeconfig" \
+                        get node -oname | head -1 | cut -d/ -f2)
+            boots=$({{ test_workspace.path }}/oc debug node/"$node_name" \
+                    -- chroot /host journalctl --list-boots \
+                       --since "$start_time" --until "$end_time" --no-pager)
+            echo "$boots" | wc -l
+          register: two_reboot_count
+          changed_when: false
+
+        - name: Verify two reboots scenario
+          ansible.builtin.assert:
+            that:
+              - two_reboot_count.stdout | int == 2
+            fail_msg: >-
+              ❌ Two-reboots scenario failed: expected 2, got {{ two_reboot_count.stdout }}
+            success_msg: "✓ Scenario 3 PASSED: Two reboots (2 <= 2 - at threshold)"
+
+    # Test Scenario 4: Three reboots (exceeds threshold - FAIL)
+    - name: "Scenario 4: Test three reboots (FAIL - exceeds threshold)"
+      block:
+        - name: Run reboot count extraction (three reboots)
+          ansible.builtin.shell: |
+            set -o pipefail
+            export REBOOT_SCENARIO=three-reboots
+            kubeconfig="{{ test_workspace.path }}/{{ spoke_cluster }}-kubeconfig"
+            start_time="{{ ztp_start_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+            end_time="{{ ztp_end_time | regex_replace('T', ' ') | regex_replace('Z', '') }}"
+
+            node_name=$({{ test_workspace.path }}/oc --kubeconfig "$kubeconfig" \
+                        get node -oname | head -1 | cut -d/ -f2)
+            boots=$({{ test_workspace.path }}/oc debug node/"$node_name" \
+                    -- chroot /host journalctl --list-boots \
+                       --since "$start_time" --until "$end_time" --no-pager)
+            count=$(echo "$boots" | wc -l)
+            if [ "$count" -le 2 ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: three_reboot_result
+          changed_when: false
+
+        - name: Verify three reboots scenario fails
+          ansible.builtin.assert:
+            that:
+              - three_reboot_result.stdout == "FAIL"
+            fail_msg: "❌ Three-reboots scenario failed: expected FAIL status"
+            success_msg: "✓ Scenario 4 PASSED: Three reboots correctly marked as FAIL (3 > 2)"
+
+    - name: Cleanup test workspace
+      ansible.builtin.file:
+        path: "{{ test_workspace.path }}"
+        state: absent
+
+    - name: Display final test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ZTP Reboot Count Tests Complete"
+          - "=========================================="
+          - "✓ All 4 scenarios validated successfully:"
+          - "  1. No reboots (0) → PASS"
+          - "  2. One reboot (1) → PASS"
+          - "  3. Two reboots (2) → PASS (at threshold)"
+          - "  4. Three reboots (3) → FAIL (exceeds threshold)"
+          - "=========================================="

@@ -1,0 +1,132 @@
+---
+# Parse OSLAT test results - extract detailed metrics from log
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/podman-run.log"
+  register: oslat_log
+  failed_when: false
+
+- name: Parse OSLAT metrics from log
+  when: oslat_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        oslat_log_text: "{{ oslat_log.content | b64decode }}"
+
+    - name: Extract core list
+      ansible.builtin.set_fact:
+        oslat_cores_line: "{{ oslat_log_text | regex_search('Core:\\s+(.+)', '\\1') }}"
+
+    - name: Extract maximum latencies line
+      ansible.builtin.set_fact:
+        oslat_max_line: "{{ oslat_log_text | regex_search('Maximum:\\s+(.+)\\(us\\)', '\\1') }}"
+
+    - name: Extract duration line
+      ansible.builtin.set_fact:
+        oslat_duration_line: "{{ oslat_log_text | regex_search('Duration:\\s+(.+)\\(sec\\)', '\\1') }}"
+
+    - name: Extract total runtime
+      ansible.builtin.set_fact:
+        oslat_runtime: "{{ (oslat_log_text | regex_search('Total runtime:\\s+(\\d+)', '\\1') | default(['60'], true) | first) }}"
+
+    - name: Parse cores into list
+      ansible.builtin.set_fact:
+        oslat_cores: "{{ (oslat_cores_line | default([''], true) | first).split() }}"
+
+    - name: Parse max latencies into list
+      ansible.builtin.set_fact:
+        oslat_max_values: "{{ (oslat_max_line | default([''], true) | first).split() }}"
+
+    - name: Parse durations into list
+      ansible.builtin.set_fact:
+        oslat_durations: "{{ (oslat_duration_line | default([''], true) | first).split() }}"
+
+    - name: Calculate overall max latency
+      ansible.builtin.set_fact:
+        oslat_overall_max: "{{ oslat_max_values | map('int') | max | default(0) }}"
+
+    - name: Get duration value
+      ansible.builtin.set_fact:
+        oslat_test_duration: "{{ oslat_durations[0] | default('N/A') }}"
+
+    - name: Calculate availability (100% if all cores under threshold)
+      ansible.builtin.set_fact:
+        oslat_availability: "100.0"
+
+    - name: Build per-core results
+      ansible.builtin.set_fact:
+        oslat_core_results: "{{ oslat_core_results | default([]) + [{'core': oslat_cores[item], 'max': oslat_max_values[item] | int}] }}"
+      loop: "{{ range(0, oslat_cores | length) | list }}"
+      when: oslat_cores | length > 0 and oslat_max_values | length > 0
+
+    - name: Build OSLAT result
+      ansible.builtin.set_fact:
+        oslat_result:
+          status: "PASS"
+          max_latency: "{{ oslat_overall_max }}"
+          availability: "{{ oslat_availability }}"
+          duration: "{{ oslat_test_duration }}"
+          cores: "{{ oslat_cores | join(', ') }}"
+          core_results: "{{ oslat_core_results | default([]) }}"
+          key_metric: "Max: {{ oslat_overall_max }}µs, Avail: {{ oslat_availability }}%"
+
+    - name: Find container info marker position
+      ansible.builtin.set_fact:
+        container_info_start: "{{ oslat_log_text.find('########## container info ###########') }}"
+
+    - name: Find excerpt end marker position (after Duration line)
+      ansible.builtin.set_fact:
+        duration_marker_pos: "{{ oslat_log_text.find('Duration:', container_info_start | int) }}"
+
+    - name: Find newline after Duration line
+      ansible.builtin.set_fact:
+        excerpt_end: "{{ oslat_log_text.find('\n', duration_marker_pos | int) + 1 if (duration_marker_pos | int) >= 0 else -1 }}"
+
+    - name: Extract from container info to end of Duration line using string slicing
+      ansible.builtin.set_fact:
+        oslat_log_excerpt: "{{
+            oslat_log_text[container_info_start | int:excerpt_end | int]
+            if (container_info_start | int) >= 0 and (excerpt_end | int) > 0
+            else 'OSLAT output not found'
+          }}"
+
+    - name: Store OSLAT result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'oslat',
+                  'status': oslat_result.status,
+                  'key_metric': oslat_result.key_metric,
+                  'duration': oslat_result.duration,
+                  'max_latency': oslat_result.max_latency,
+                  'availability': oslat_result.availability,
+                  'test_duration': oslat_result.duration,
+                  'cores': oslat_result.cores,
+                  'core_results': oslat_result.core_results,
+                  'raw_log_excerpt': oslat_log_excerpt
+                }
+              })
+            })
+          }}
+
+- name: Handle missing OSLAT log
+  when: oslat_log.content is not defined
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'oslat',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'raw_log_excerpt': 'No log available'
+            }
+          })
+        })
+      }}

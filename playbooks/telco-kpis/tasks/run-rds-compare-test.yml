@@ -109,11 +109,15 @@
       - "Log: {{ artifacts_dir.path }}/cluster-compare.log"
       - "=========================================="
 
+- name: Set test name for artifact management
+  ansible.builtin.set_fact:
+    test_name: "rds_compare"
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
   vars:
-    artifact_management_test_name: "rds-compare"
+    artifact_management_test_name: "{{ test_name }}"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ compare_exit_code }}"

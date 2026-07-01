@@ -1,0 +1,160 @@
+---
+# Parse ZTP Deployment results - extract timeline and deployment summary
+
+- name: Find ZTP deployment JUnit XML files
+  ansible.builtin.find:
+    paths: "{{ current_test.dir_path }}"
+    patterns: "*ztp*.xml,*suite*.xml"
+  register: ztp_xml_files
+
+- name: Parse ZTP deployment results from XML
+  when: ztp_xml_files.files | length > 0
+  block:
+    - name: Read XML content
+      ansible.builtin.slurp:
+        src: "{{ ztp_xml_files.files[0].path }}"
+      register: xml_content
+
+    - name: Parse XML to extract test results
+      ansible.builtin.set_fact:
+        ztp_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Extract test counts from XML
+      ansible.builtin.set_fact:
+        ztp_tests: "{{ (ztp_xml | regex_search('tests=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        ztp_failures: "{{ (ztp_xml | regex_search('failures=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        ztp_skipped: "{{ (ztp_xml | regex_search('skipped=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+
+    - name: Extract deployment time from XML
+      ansible.builtin.set_fact:
+        deployment_time_match: "{{ ztp_xml | regex_search('time=\"([\\d.]+)\"', '\\1') }}"
+
+    - name: Build deployment time metric
+      ansible.builtin.set_fact:
+        deployment_time_seconds: "{{ (deployment_time_match[0] | float) if deployment_time_match and deployment_time_match | length > 0 else 0 }}"
+
+    - name: Convert seconds to human-readable format
+      ansible.builtin.set_fact:
+        deployment_hours: "{{ (deployment_time_seconds | float / 3600) | int }}"
+        deployment_minutes: "{{ ((deployment_time_seconds | float % 3600) / 60) | int }}"
+        deployment_secs: "{{ (deployment_time_seconds | float % 60) | int }}"
+
+    - name: Build human-readable deployment time
+      ansible.builtin.set_fact:
+        deployment_time_human: >-
+          {{ deployment_hours }}h{{ deployment_minutes }}m{{ deployment_secs }}s
+
+    - name: Read deployment-timeline-summary.txt for full timeline
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/deployment-timeline-summary.txt"
+      register: ztp_timeline_content
+      failed_when: false
+
+    - name: Read spoke-reboot-count.txt for reboot analysis
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/spoke-reboot-count.txt"
+      register: ztp_reboot_content
+      failed_when: false
+
+    - name: Extract timeline details when timeline file exists
+      when: ztp_timeline_content.content is defined
+      block:
+        - name: Decode timeline summary
+          ansible.builtin.set_fact:
+            ztp_timeline: "{{ ztp_timeline_content.content | b64decode }}"
+
+        - name: Use full timeline as raw log excerpt
+          ansible.builtin.set_fact:
+            ztp_log_excerpt: "{{ ztp_timeline }}"
+
+    - name: Extract reboot count details when reboot file exists
+      when: ztp_reboot_content.content is defined
+      block:
+        - name: Decode reboot analysis
+          ansible.builtin.set_fact:
+            ztp_reboot_analysis: "{{ ztp_reboot_content.content | b64decode }}"
+
+        - name: Extract reboot count from analysis
+          ansible.builtin.set_fact:
+            reboot_count_match: "{{ ztp_reboot_analysis | regex_search('Reboots During ZTP: (\\d+)', '\\1') }}"
+
+        - name: Set reboot count value
+          ansible.builtin.set_fact:
+            reboot_count: "{{ reboot_count_match[0] if reboot_count_match else 'N/A' }}"
+
+        - name: Extract reboot status from analysis
+          ansible.builtin.set_fact:
+            reboot_status_match: "{{ ztp_reboot_analysis | regex_search('Result: (PASS|FAIL)', '\\1') }}"
+
+        - name: Set reboot status value
+          ansible.builtin.set_fact:
+            reboot_status: "{{ reboot_status_match[0] if reboot_status_match else 'N/A' }}"
+
+    - name: Set defaults when no timeline file
+      when: ztp_timeline_content.content is not defined
+      ansible.builtin.set_fact:
+        ztp_log_excerpt: "Timeline data not available"
+
+    - name: Set defaults when no reboot file
+      when: ztp_reboot_content.content is not defined
+      ansible.builtin.set_fact:
+        reboot_count: "N/A"
+        reboot_status: "N/A"
+        ztp_reboot_analysis: "Reboot analysis not available"
+
+    - name: Build ZTP deployment result summary
+      ansible.builtin.set_fact:
+        ztp_result:
+          passed: "{{ ztp_tests }}"
+          failed: "{{ ztp_failures }}"
+          skipped: "{{ ztp_skipped }}"
+          status: "{{ 'PASS' if ztp_failures | int == 0 else 'FAIL' }}"
+          key_metric: "Time:{{ deployment_time_seconds }}s, Reboots:{{ reboot_count | default('N/A') }}"
+          deployment_time: "{{ deployment_time_seconds }}s"
+          deployment_time_human: "{{ deployment_time_human }}"
+          reboot_count: "{{ reboot_count | default('N/A') }}"
+          reboot_status: "{{ reboot_status | default('N/A') }}"
+          reboot_analysis: "{{ ztp_reboot_analysis | default('Reboot analysis not available') }}"
+
+    - name: Store ZTP deployment result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'ztp_ai_deployment_time',
+                  'status': ztp_result.status,
+                  'key_metric': ztp_result.key_metric,
+                  'duration': ztp_result.deployment_time,
+                  'passed': ztp_result.passed,
+                  'failed': ztp_result.failed,
+                  'skipped': ztp_result.skipped,
+                  'deployment_time_human': ztp_result.deployment_time_human,
+                  'reboot_count': ztp_result.reboot_count,
+                  'reboot_status': ztp_result.reboot_status,
+                  'reboot_analysis': ztp_result.reboot_analysis,
+                  'raw_log_excerpt': ztp_log_excerpt | default('Timeline data not available')
+                }
+              })
+            })
+          }}
+
+- name: Handle missing ZTP deployment results
+  when: ztp_xml_files.files | length == 0
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'ztp_ai_deployment_time',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'deployment_time_human': 'N/A',
+              'raw_log_excerpt': 'No JUnit XML results found'
+            }
+          })
+        })
+      }}

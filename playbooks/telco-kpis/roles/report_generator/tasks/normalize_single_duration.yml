@@ -1,0 +1,36 @@
+---
+# Normalize a single duration value to XhYYmZZs format
+
+- name: Get current test result
+  ansible.builtin.set_fact:
+    test_key: "{{ test_entry.key }}"
+    test_value: "{{ test_entry.value }}"
+    raw_duration: "{{ test_entry.value.duration | default('N/A') }}"
+
+- name: Skip if duration is N/A
+  when: raw_duration != 'N/A'
+  block:
+    - name: Parse duration and convert to seconds
+      ansible.builtin.set_fact:
+        total_seconds: "{{ raw_duration | telco_kpis_duration_to_seconds }}"
+
+    - name: Convert seconds to XhYYmZZs format
+      ansible.builtin.set_fact:
+        normalized_duration: "{{ total_seconds | telco_kpis_seconds_to_hms }}"
+
+    - name: Update test result with normalized duration
+      ansible.builtin.set_fact:
+        normalized_test_results: "{{
+          normalized_test_results | combine({
+            test_key: test_value | combine({'duration': normalized_duration})
+          })
+        }}"
+
+- name: Keep N/A durations as-is
+  when: raw_duration == 'N/A'
+  ansible.builtin.set_fact:
+    normalized_test_results: "{{
+      normalized_test_results | combine({
+        test_key: test_value
+      })
+    }}"

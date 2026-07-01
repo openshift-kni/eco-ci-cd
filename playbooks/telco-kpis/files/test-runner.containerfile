@@ -1,7 +1,7 @@
 # Containerfile for telco-kpis test runner
 # Used by --podman mode in run-local-test-*.sh scripts
 #
-# Build:  podman build -t telco-kpis-test-runner:latest -f Containerfile.test-runner .
+# Build:  podman build -t telco-kpis-test-runner:latest -f test-runner.containerfile .
 # Manual: podman run -it --rm -v /path/kubeconfig:/tmp/kubeconfig:ro telco-kpis-test-runner:latest bash
 
 FROM registry.access.redhat.com/ubi9-minimal:latest
@@ -58,6 +58,12 @@ RUN ARCH=$(uname -m) && \
 # Script is copied from cloned telco-kpis-test-local-scripts repo during build
 COPY analyze-podman-test-results.py /opt/analyze-podman-test-results.py
 RUN chmod 0755 /opt/analyze-podman-test-results.py
+
+# Copy registry authentication and certificates into image
+# These are generated during setup-test-runner.yml from vault credentials
+COPY auth.json /run/containers/0/auth.json
+COPY certs.d /etc/containers/certs.d
+RUN chmod 0600 /run/containers/0/auth.json
 
 ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.local/bin:${PATH}" \
     GOPATH="/root/go"

@@ -1,0 +1,114 @@
+---
+# Parse CPU_UTIL test results - extract individual test cases from JUnit XML
+
+- name: Find CPU_UTIL JUnit XML files
+  ansible.builtin.find:
+    paths: "{{ current_test.dir_path }}"
+    patterns: "*cpu*.xml,*suite*.xml"
+  register: cpu_util_xml_files
+
+- name: Parse CPU_UTIL results from XML
+  when: cpu_util_xml_files.files | length > 0
+  block:
+    - name: Read XML content
+      ansible.builtin.slurp:
+        src: "{{ cpu_util_xml_files.files[0].path }}"
+      register: xml_content
+
+    - name: Parse XML to extract test results
+      ansible.builtin.set_fact:
+        cpu_util_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Extract test counts from XML
+      ansible.builtin.set_fact:
+        cpu_util_tests: "{{ (cpu_util_xml | regex_search('tests=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        cpu_util_failures: "{{ (cpu_util_xml | regex_search('failures=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        cpu_util_skipped: "{{ (cpu_util_xml | regex_search('skipped=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+
+    - name: Extract suite time
+      ansible.builtin.set_fact:
+        suite_time_match: "{{ cpu_util_xml | regex_search('<testsuite[^>]+time=\"([\\d.]+)\"', '\\1') }}"
+
+    - name: Get suite time value
+      ansible.builtin.set_fact:
+        suite_time: "{{ (suite_time_match | default(['0'], true) | first) | float | round | int }}"
+
+    - name: Extract test case names and status
+      ansible.builtin.set_fact:
+        testcase_basic: "{{ cpu_util_xml | regex_findall('<testcase name=\"([^\"]+)\"[^>]+status=\"([^\"]+)\" time=\"([^\"]+)\"', multiline=True) }}"
+
+    - name: Extract skip messages
+      ansible.builtin.set_fact:
+        skip_msg_map: {}
+
+    - name: Build skip message mapping
+      ansible.builtin.set_fact:
+        skip_msg_map: >-
+          {{ skip_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ cpu_util_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<skipped message=\"([^\"]*)\"', multiline=True) }}"
+      when: cpu_util_xml | regex_search('skipped message')
+
+    - name: Build test case list
+      ansible.builtin.set_fact:
+        test_cases: >-
+          {{ test_cases | default([]) + [{
+            'name': item[0],
+            'status': item[1],
+            'time': item[2],
+            'skip_message': skip_msg_map.get(item[0], '')
+          }] }}
+      loop: "{{ testcase_basic }}"
+      when: testcase_basic | length > 0
+
+    - name: Filter out BeforeSuite/AfterSuite/ReportAfter from display
+      ansible.builtin.set_fact:
+        filtered_test_cases: "{{ (test_cases | default([])) | rejectattr('name', 'search', '\\[(?:Before|After|ReportAfter)') | list }}"
+
+    - name: Build CPU_UTIL result summary
+      ansible.builtin.set_fact:
+        cpu_util_result:
+          passed: "{{ (cpu_util_tests | int) - (cpu_util_failures | int) - (cpu_util_skipped | int) }}"
+          failed: "{{ cpu_util_failures }}"
+          skipped: "{{ cpu_util_skipped }}"
+          status: "{{ 'PASS' if cpu_util_failures | int == 0 else 'FAIL' }}"
+          key_metric: "P:{{ (cpu_util_tests | int) - (cpu_util_failures | int) - (cpu_util_skipped | int) }} F:{{ cpu_util_failures }} S:{{ cpu_util_skipped }}"
+          suite_time: "{{ suite_time }}s"
+
+    - name: Store CPU_UTIL result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'cpu_util',
+                  'status': cpu_util_result.status,
+                  'key_metric': cpu_util_result.key_metric,
+                  'duration': cpu_util_result.suite_time,
+                  'passed': cpu_util_result.passed,
+                  'failed': cpu_util_result.failed,
+                  'skipped': cpu_util_result.skipped,
+                  'suite_time': cpu_util_result.suite_time,
+                  'test_cases': filtered_test_cases | default([])
+                }
+              })
+            })
+          }}
+
+- name: Handle missing CPU_UTIL results
+  when: cpu_util_xml_files.files | length == 0
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'cpu_util',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'test_cases': []
+            }
+          })
+        })
+      }}

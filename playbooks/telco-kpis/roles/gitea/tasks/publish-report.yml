@@ -150,12 +150,16 @@
             [{
               'path': item.path,
               'basename': item.path | basename,
-              'test_name': (item.path | basename | regex_replace('^(.+)-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$', '\\1')),
-              'timestamp': (item.path | basename | regex_replace('^.+-' + spoke_cluster + '-([0-9]{8}-[0-9]{6})$', '\\1'))
+              'test_name': (item.path | basename | regex_replace('^(.+)-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$', '\1')),
+              'timestamp': (item.path | basename | regex_replace('^.+-' + spoke_cluster + '-([0-9]{8}-[0-9]{6})$', '\1'))
             }]
           }}
       loop: "{{ artifact_dirs.files }}"
       when: item.path | basename | regex_search('^.+-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$')
+
+    - name: Display parsed artifacts for debugging
+      ansible.builtin.debug:
+        msg: "Parsed artifacts: {{ parsed_artifacts | default([]) }}"
 
     - name: Group artifacts by test name and find latest timestamp for each
       ansible.builtin.set_fact:
@@ -170,6 +174,10 @@
             })
           }}
       loop: "{{ parsed_artifacts | default([]) }}"
+
+    - name: Display latest artifacts mapping for debugging
+      ansible.builtin.debug:
+        msg: "Latest artifacts to rename: {{ latest_artifacts | default({}) }}"
 
     - name: Identify directories to delete (older than latest per test)
       ansible.builtin.set_fact:

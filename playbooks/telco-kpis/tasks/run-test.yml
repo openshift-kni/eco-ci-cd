@@ -81,6 +81,8 @@
     volume:
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+    etc_hosts:
+      disconnected.registry.local: "{{ ansible_host }}"
   register: test_result
   failed_when: false
   changed_when: false
@@ -95,6 +97,11 @@
   ansible.builtin.set_fact:
     test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
 
+- name: Remove temporary auth.json file
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}/auth.json"
+    state: absent
+
 - name: Display test execution result
   ansible.builtin.debug:
     msg:
@@ -103,11 +110,15 @@
       - "{% if test_name == 'cpu_util' %}Baseline mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
       - "{% if test_name == 'reboot' %}Reboot count: {{ reboot_count | default(test_default_reboot_count) }}{% endif %}"
 
+- name: Convert test duration to seconds
+  ansible.builtin.set_fact:
+    duration_seconds: "{{ (duration | default(test_default_duration | default('0m'))) | community.general.to_seconds }}"
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
   vars:
-    artifact_management_test_name: "{{ test_artifact_name | default(test_name) }}"
+    artifact_management_test_name: "{{ test_name }}"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ test_exit_code }}"

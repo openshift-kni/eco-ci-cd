@@ -1,0 +1,12 @@
+---
+# Complete test playbook - runs all phases in sequence
+# Usage: ansible-playbook -i localhost, -c local molecule/default/test.yml
+
+- name: Prepare test environment
+  import_playbook: prepare.yml
+
+- name: Converge - Run report_generator role
+  import_playbook: converge.yml
+
+- name: Verify - Check report output
+  import_playbook: verify.yml

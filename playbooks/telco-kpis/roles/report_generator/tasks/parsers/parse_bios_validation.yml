@@ -1,0 +1,79 @@
+---
+# Parse BIOS Validation results from JUnit XML
+
+- name: Find BIOS validation JUnit XML files
+  ansible.builtin.find:
+    paths: "{{ current_test.dir_path }}"
+    patterns: "*bios*.xml,*suite*.xml"
+  register: bios_xml_files
+
+- name: Parse BIOS validation results from XML
+  when: bios_xml_files.files | length > 0
+  block:
+    - name: Read XML content
+      ansible.builtin.slurp:
+        src: "{{ bios_xml_files.files[0].path }}"
+      register: xml_content
+
+    - name: Parse XML to extract test results
+      ansible.builtin.set_fact:
+        bios_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Extract test counts from XML
+      ansible.builtin.set_fact:
+        bios_tests: "{{ (bios_xml | regex_search('tests=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        bios_failures: "{{ (bios_xml | regex_search('failures=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        bios_skipped: "{{ (bios_xml | regex_search('skipped=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+
+    - name: Build BIOS validation result summary
+      ansible.builtin.set_fact:
+        bios_result:
+          passed: "{{ bios_tests }}"
+          failed: "{{ bios_failures }}"
+          skipped: "{{ bios_skipped }}"
+          status: "{{ 'PASS' if bios_failures | int == 0 else 'FAIL' }}"
+          key_metric: "P:{{ bios_tests }} F:{{ bios_failures }} S:{{ bios_skipped }}"
+
+    - name: Read podman-run.log for detailed output
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/podman-run.log"
+      register: bios_log
+      failed_when: false
+
+    - name: Store BIOS validation result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'bios_validation',
+                  'status': bios_result.status,
+                  'key_metric': bios_result.key_metric,
+                  'duration': 'N/A',
+                  'detail': bios_log.content | b64decode if bios_log.content is defined else 'No log available',
+                  'passed': bios_result.passed,
+                  'failed': bios_result.failed,
+                  'skipped': bios_result.skipped
+                }
+              })
+            })
+          }}
+
+- name: Handle missing BIOS validation results
+  when: bios_xml_files.files | length == 0
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'bios_validation',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'detail': 'No JUnit XML results found'
+            }
+          })
+        })
+      }}

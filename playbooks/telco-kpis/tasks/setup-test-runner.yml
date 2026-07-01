@@ -1,6 +1,15 @@
 ---
 # Setup test-runner container image on bastion
 # This task ensures the telco-kpis-test-runner:latest container image exists on the bastion
+#
+# Optional variables:
+#   - skip_rebuild_image: Skip rebuild if image exists (default: false, always rebuild)
+
+- name: Remove existing test-runner image to ensure fresh credentials
+  containers.podman.podman_image:
+    name: telco-kpis-test-runner:latest
+    state: absent
+  when: not (skip_rebuild_image | default(false) | bool)
 
 - name: Check if test-runner container image exists
   containers.podman.podman_image_info:
@@ -21,8 +30,8 @@
 
 - name: Copy Containerfile to bastion
   ansible.builtin.copy:
-    src: files/Containerfile.test-runner
-    dest: "{{ build_dir.path }}/Containerfile.test-runner"
+    src: files/test-runner.containerfile
+    dest: "{{ build_dir.path }}/test-runner.containerfile"
     mode: '0644'
   when: not image_exists
 
@@ -43,13 +52,36 @@
     remote_src: true
   when: not image_exists
 
+- name: Create auth.json with disconnected registry credentials for image build
+  ansible.builtin.copy:
+    content: |
+      {
+        "auths": {
+          "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}": {
+            "auth": "{{ (ansible_user ~ ':' ~ ansible_password) | b64encode }}"
+          }
+        }
+      }
+    dest: "{{ build_dir.path }}/auth.json"
+    mode: '0600'
+  when: not image_exists
+  no_log: true
+
+- name: Copy registry certificates to build directory
+  ansible.builtin.copy:
+    src: /etc/containers/certs.d/
+    dest: "{{ build_dir.path }}/certs.d/"
+    remote_src: true
+    mode: preserve
+  when: not image_exists
+
 - name: Build test-runner container image
   containers.podman.podman_image:
     name: telco-kpis-test-runner
     tag: latest
     path: "{{ build_dir.path }}"
     build:
-      file: "{{ build_dir.path }}/Containerfile.test-runner"
+      file: "{{ build_dir.path }}/test-runner.containerfile"
       format: oci
     state: build
   register: build_result

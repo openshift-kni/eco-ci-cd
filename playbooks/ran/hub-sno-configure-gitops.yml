@@ -91,6 +91,9 @@
       delay: 5
       until: "repo_server_deployment_ready.resources[0].status.readyReplicas | default(0) == 1"
 
+    # Note: ArgoCD automatically reads TLS certs from /app/config/tls/ (argocd-tls-certs-cm ConfigMap),
+    # but curl doesn't check that directory. We must explicitly pass --cacert for this connectivity test.
+    # ArgoCD applications will connect to GitLab successfully without this flag.
     - name: Verify GitLab connectivity from repo server pod
       ansible.builtin.shell: |
         POD_NAME=$(oc get pod -n {{ gitops_namespace }} \
@@ -98,6 +101,7 @@
           -o jsonpath='{.items[0].metadata.name}')
         oc exec -n {{ gitops_namespace }} ${POD_NAME} -- \
           curl -sI --max-time 10 \
+            --cacert /app/config/tls/{{ gitlab_repo_url | urlsplit('hostname') }} \
             {{ gitlab_repo_url }}
       environment:
         KUBECONFIG: "{{ kubeconfig }}"

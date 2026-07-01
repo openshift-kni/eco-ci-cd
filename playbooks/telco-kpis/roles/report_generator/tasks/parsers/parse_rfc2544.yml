@@ -1,0 +1,83 @@
+---
+# Parse RFC2544 test results from podman-run.log
+# Note: This test often has errors/tracebacks
+
+- name: Read podman-run.log for RFC2544 test
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/podman-run.log"
+  register: rfc2544_log_content
+  failed_when: false
+
+- name: Parse RFC2544 results when log exists
+  when: rfc2544_log_content.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        rfc2544_log: "{{ rfc2544_log_content.content | b64decode }}"
+
+    - name: Check for errors and tracebacks
+      ansible.builtin.set_fact:
+        has_traceback: "{{ 'Traceback' in rfc2544_log }}"
+        has_error: "{{ 'ERROR' in rfc2544_log or 'Error' in rfc2544_log }}"
+        has_exception: "{{ 'Exception' in rfc2544_log }}"
+
+    - name: Check for success indicators
+      ansible.builtin.set_fact:
+        has_success: "{{ 'Test completed successfully' in rfc2544_log or 'PASS' in rfc2544_log }}"
+
+    - name: Extract throughput results if present
+      ansible.builtin.set_fact:
+        throughput_match: "{{ rfc2544_log | regex_search('Throughput:\\s*([\\d.]+)', '\\1') }}"
+
+    - name: Build throughput metric
+      ansible.builtin.set_fact:
+        throughput_value: "{{ throughput_match[0] if throughput_match and throughput_match | length > 0 else 'N/A' }}"
+
+    - name: Determine test status
+      ansible.builtin.set_fact:
+        rfc2544_passed: "{{ has_success and not (has_traceback or has_exception) }}"
+
+    - name: Build status description
+      ansible.builtin.set_fact:
+        status_desc: >-
+          {{
+            'Error/Traceback detected' if (has_traceback or has_exception)
+            else ('Throughput: ' + throughput_value if throughput_value != 'N/A' else 'Completed')
+          }}
+
+    - name: Store RFC2544 result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'rfc2544',
+                  'status': ('PASS' if rfc2544_passed else 'FAIL'),
+                  'key_metric': status_desc,
+                  'duration': 'N/A',
+                  'detail': rfc2544_log,
+                  'has_error': (has_traceback or has_exception),
+                  'throughput': throughput_value
+                }
+              })
+            })
+          }}
+
+- name: Handle missing RFC2544 log
+  when: rfc2544_log_content.content is not defined
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'rfc2544',
+              'status': 'N/A',
+              'key_metric': 'No log found',
+              'duration': 'N/A',
+              'detail': 'RFC2544 log file not found'
+            }
+          })
+        })
+      }}

@@ -1,0 +1,16 @@
+---
+# Normalize all duration values to XhYYmZZs format
+
+- name: Normalize duration values for all tests
+  ansible.builtin.set_fact:
+    normalized_test_results: {}
+
+- name: Process each test result
+  ansible.builtin.include_tasks: normalize_single_duration.yml
+  loop: "{{ report_data.test_results | dict2items }}"
+  loop_control:
+    loop_var: test_entry
+
+- name: Update report_data with normalized durations
+  ansible.builtin.set_fact:
+    report_data: "{{ report_data | combine({'test_results': normalized_test_results}) }}"

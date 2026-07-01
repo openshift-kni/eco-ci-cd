@@ -1,0 +1,20 @@
+---
+# Parse a single test run - routes to appropriate test-specific parser
+
+- name: Set current test context
+  ansible.builtin.set_fact:
+    current_test: "{{ test_run }}"
+    parser_task: "{{ report_generator_parsers[test_run.test_name] | default('parse_unknown.yml') }}"
+
+- name: Display parsing info
+  ansible.builtin.debug:
+    msg: "Parsing {{ test_run.test_name }} from {{ test_run.dir_name }}"
+
+- name: Route to test-specific parser
+  ansible.builtin.include_tasks: "parsers/{{ parser_task }}"
+  when: parser_task in report_generator_parsers.values()
+
+- name: Handle unknown test type
+  when: parser_task not in report_generator_parsers.values()
+  ansible.builtin.debug:
+    msg: "WARNING: No parser found for test type '{{ test_run.test_name }}', skipping"

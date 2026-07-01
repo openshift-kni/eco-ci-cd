@@ -1,0 +1,18 @@
+---
+# Molecule converge - runs report_generator role
+- name: Converge
+  hosts: localhost
+  gather_facts: true
+
+  vars:
+    spoke_cluster: test-spoke-01
+    test_artifact_base: /tmp/molecule-report-generator
+    shared_artifact_dir: "{{ test_artifact_base }}/artifacts"
+    output_filename: test-report.md
+    output_dir: "{{ test_artifact_base }}/output"
+    use_latest: true
+
+  tasks:
+    - name: Execute report_generator role
+      ansible.builtin.include_role:
+        name: report_generator

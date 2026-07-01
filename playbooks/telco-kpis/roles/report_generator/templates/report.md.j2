@@ -1,0 +1,220 @@
+# {{ report_generator_title }} - {{ report_data.cluster_info.cluster }}
+
+**Generated:** {{ report_timestamp }}
+
+---
+
+## Test Summary
+
+| Test | Ran | Result | Duration | Key Metric |
+|------|-----|--------|----------|------------|
+{% for test_name in report_generator_test_order %}
+{%   set test_run = report_data.test_runs | selectattr('test_name', 'equalto', test_name) | list | first | default(none) %}
+{%   if test_run %}
+{%     set result = report_data.test_results[test_run.dir_name] | default({'status': 'N/A', 'key_metric': '...', 'duration': 'N/A'}) %}
+{%     set test_display = test_name | upper | replace('-', '_') %}
+{%     set anchor = test_name | lower | replace('-', '_') %}
+{%     set status_icon = report_generator_status_icons.pass if result.status == 'PASS' else (report_generator_status_icons.fail if result.status == 'FAIL' else report_generator_status_icons.na) %}
+| [**{{ test_display }}**](#{{ anchor }}) | {{ report_generator_status_icons.ran }} | {{ status_icon }} | {{ result.duration }} | {{ result.key_metric }} |
+{%   endif %}
+{% endfor %}
+
+{% if output_filename %}
+
+📂 [Browse all test artifacts]({{ output_filename }}.artifacts/)
+{% endif %}
+
+---
+
+## Cluster Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Cluster** | {{ report_data.cluster_info.cluster }} |
+| **OCP Version** | {{ report_data.cluster_info.sw_version }} |
+| **Kernel** | {{ report_data.cluster_info.kernel_version }} |
+| **Power Mode** | {{ report_data.cluster_info.power_mode }} |
+| **BIOS Version** | {{ report_data.cluster_info.bios_version }} |
+| **Microcode** | {{ report_data.cluster_info.microcode_version }} |
+
+{% if report_data.proc_cmdline %}
+### Kernel cmdline (`/proc/cmdline`)
+
+```
+{{ report_data.proc_cmdline }}
+```
+{% endif %}
+
+---
+
+## Test Results
+
+{% for test_name in report_generator_test_order %}
+{%   set test_run = report_data.test_runs | selectattr('test_name', 'equalto', test_name) | list | first | default(none) %}
+{%   if test_run %}
+{%     set result = report_data.test_results[test_run.dir_name] | default({}) %}
+{%     set test_display = test_name | upper | replace('-', '_') %}
+
+### {{ test_display }}
+
+{% if output_filename %}
+{%   if result.test_type == 'ztp_ai_deployment_time' %}
+[Deployment Timeline Summary]({{ test_name }}/deployment-timeline-summary.txt) | [Timeline JSON]({{ test_name }}/deployment-timeline.json) | [All artifacts]({{ test_name }}/)
+{%   else %}
+[Raw Log]({{ test_name }}/podman-run.log) | [All artifacts]({{ test_name }}/)
+{%   endif %}
+{% endif %}
+
+{% if result.test_type == 'oslat' and result.max_latency is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - OSLAT KPI Result
+
+| Metric | Value |
+|--------|-------|
+| **Max Latency** | {{ result.max_latency }} µs |
+| **Availability** | {{ result.availability }}% |
+| **Duration** | {{ result.test_duration }}s |
+| **Cores** | {{ result.cores }} |
+
+{% if result.core_results %}
+| Core | Max | Result |
+|------|-----|--------|
+{%   for core in result.core_results %}
+| {{ core.core }} | {{ core.max }} µs | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% endif %}
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'ptp' and result.ptp4l_max is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - PTP KPI Result
+
+| Metric | Value |
+|--------|-------|
+| **PTP4L Max** | {{ result.ptp4l_max }} ns |
+| **PTP4L Min** | {{ result.ptp4l_min }} ns |
+| **PTP4L Avg** | {{ result.ptp4l_avg }} ns |
+| **PHC2SYS Max** | {{ result.phc2sys_max }} ns |
+| **PHC2SYS Min** | {{ result.phc2sys_min }} ns |
+| **PHC2SYS Avg** | {{ result.phc2sys_avg }} ns |
+| **ptp4l Restarts** | {{ result.ptp4l_restarts }} |
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'cyclictest' and result.max_overall is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CYCLICTEST KPI Result
+
+**Threads**: {{ result.threads }}
+**Max Latency**: {{ result.max_overall }} µs
+
+{% if result.thread_results %}
+| Thread | Min | Avg | Max | Result |
+|--------|-----|-----|-----|--------|
+{%   for thread in result.thread_results %}
+| {{ thread.thread }} | {{ thread.min }} µs | {{ thread.avg }} µs | {{ thread.max }} µs | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% endif %}
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'cpu_util' and result.test_cases is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CPU_UTIL KPI Result
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
+**Suite time**: {{ result.suite_time }}
+
+### Test Cases
+
+{% if result.test_cases %}
+| # | Test | Status | Time | Key Metric |
+|---|------|--------|------|------------|
+{%   for test in result.test_cases %}
+{%     set status_icon = '✅ passed' if test.status == 'passed' else ('❌ failed' if test.status == 'failed' else '⚠️ skipped') %}
+{%     set test_name_short = test.name | regex_replace('\\[It\\] SNO core reduction ', '') | regex_replace(' \\[\\d+, test_id:\\d+\\]', '') %}
+{%     set metric = 'skip: ' + test.skip_message if test.skip_message else '—' %}
+| {{ loop.index }} | {{ test_name_short[:80] }}{% if test_name_short | length > 80 %}...{% endif %} | {{ status_icon }} | {{ test.time if test.time | float > 0 else '—' }} | {{ metric }} |
+{%   endfor %}
+{% endif %}
+
+### Skipped Tests
+
+{% for test in result.test_cases if test.status == 'skipped' and test.skip_message %}
+- **{{ test.name | regex_replace('\\[It\\] SNO core reduction ', '') | regex_replace(' \\[\\d+, test_id:\\d+\\]', '') }}**: {{ test.skip_message }}
+{% endfor %}
+
+{% elif result.test_type == 'reboot' and result.reboot_count is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - REBOOT KPI Result
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
+**Reboot count**: {{ result.reboot_count }}
+
+### Log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'ztp_ai_deployment_time' and result.deployment_time_human is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - ZTP Assisted Installer Deployment Timeline
+
+**Total Time**: {{ result.deployment_time_human }}
+**Reboot Count**: {{ result.reboot_count | default('N/A') }} ({{ result.reboot_status | default('N/A') }})
+
+This section shows the complete ZTP/ACM deployment timeline for the spoke cluster,
+including all deployment phases from GitOps sync to workload readiness.
+
+{% if output_filename %}
+**📊 [View Raw Timeline JSON]({{ test_name }}/deployment-timeline.json)**
+{% endif %}
+
+<details>
+<summary><b>▶ Click to expand deployment timeline details</b></summary>
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+</details>
+
+{% if result.reboot_analysis is defined and result.reboot_analysis != 'Reboot analysis not available' %}
+<details>
+<summary><b>▶ Click to expand reboot analysis</b></summary>
+
+```
+{{ result.reboot_analysis }}
+```
+
+</details>
+{% endif %}
+
+{% else %}
+{{ result.detail | default('No detailed output available.') }}
+{% endif %}
+
+---
+
+{%   endif %}
+{% endfor %}
+
+## Report Metadata
+
+- **Generated by:** {{ report_generator_script_name }}
+- **Timestamp:** {{ report_timestamp }}
+- **Cluster:** {{ report_data.cluster_info.cluster }}

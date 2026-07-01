@@ -25,7 +25,6 @@
       - name: cnf-gotests
         url: "{{ telco_kpis_cnf_gotests_repo | default('https://gitlab.cee.redhat.com/cnf/cnf-gotests.git') }}"
     test_junit_pattern: "*cpu*.xml,*report*.xml,*junit*.xml"
-    test_artifact_name: "cpu-util"
     ran_integration_repo: "{{ telco_kpis_ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
 
 - name: Execute CPU utilization test

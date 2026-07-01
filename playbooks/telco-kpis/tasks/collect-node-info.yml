@@ -158,10 +158,10 @@
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
-    bmc_ip: >-
-      {{ (bmc_address | regex_search('https?://([^/]+)', '\\1'))[0]
-         if bmc_address and (bmc_address | regex_search('https?://([^/]+)', '\\1'))
-         else '' }}
+    bmc_ip: "{{
+      ((bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] | trim)
+      if (bmc_address and bmc_address | regex_search('https?://([^/]+)', '\\1'))
+      else '' }}"
   no_log: true
 
 - name: Query BIOS settings via Redfish (if BMC configured)

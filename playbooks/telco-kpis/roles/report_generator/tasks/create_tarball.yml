@@ -1,0 +1,24 @@
+---
+# Create compressed tarball of all artifacts
+
+- name: Set tarball name
+  ansible.builtin.set_fact:
+    tarball_name: "{{ tarball_name | default(spoke_cluster + '-artifacts-' + ansible_date_time.date + '.tar.gz') }}"
+
+- name: Compress shared artifacts into tarball
+  community.general.archive:
+    path: "{{ shared_artifact_dir }}/*"
+    dest: "{{ output_dir }}/{{ tarball_name }}"
+    format: gz
+    force_archive: true
+    mode: '0644'
+  register: compress_result
+
+- name: Get tarball size
+  ansible.builtin.stat:
+    path: "{{ output_dir }}/{{ tarball_name }}"
+  register: tarball_stat
+
+- name: Display tarball info
+  ansible.builtin.debug:
+    msg: "Tarball created: {{ tarball_name }} ({{ (tarball_stat.stat.size / 1024 / 1024) | round(2) }} MB)"

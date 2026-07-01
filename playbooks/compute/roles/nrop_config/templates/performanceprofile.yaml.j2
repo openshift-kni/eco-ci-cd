@@ -1,7 +1,7 @@
 apiVersion: performance.openshift.io/v2
 kind: PerformanceProfile
 metadata:
-  name: performance-nrop
+  name: "{{ target }}-performance-nrop"
   annotations:
     kubeletconfig.experimental: |
       {"topologyManagerScope": "pod",
@@ -12,9 +12,8 @@ spec:
     isolated: {{ cpu_isolated }}
     reserved: {{ cpu_reserved }} 
   machineConfigPoolSelector:
-    pools.operator.machineconfiguration.openshift.io/{{ nrop_target_pool }}: ""
+    pools.operator.machineconfiguration.openshift.io/{{ target }}: ""
   nodeSelector:
-    node-role.kubernetes.io/{{ nrop_target_pool }}: ""
+    node-role.kubernetes.io/{{ target }}: ""
   numa:
     topologyPolicy: single-numa-node
-

@@ -21,6 +21,17 @@
     ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
     ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+- name: Label masters as worker
+  kubernetes.core.k8s_json_patch:
+    api_version: config.openshift.io/v1
+    kind: Scheduler
+    name: cluster
+    patch:
+      - op: replace
+        path: /spec/mastersSchedulable
+        value: true
+  when: schedulable_master | bool
+
 - name: Deploy scheduler
   ansible.builtin.include_tasks: deploy_scheduler.yml
 

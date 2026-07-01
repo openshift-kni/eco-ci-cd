@@ -3,6 +3,7 @@ tmp_workdir: "/tmp/wip"
 manifest_dir: "{{ tmp_workdir }}/artifacts"
 
 # scheduler settings
+schedulable_master: false
 is_full_schedulable_cluster: false
 scheduler_image_name: noderesourcetopology-scheduler
 image_uri:

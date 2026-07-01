@@ -1,11 +1,4 @@
 ---
-- name: Collect Must Gather
-  ansible.builtin.shell: |
-    oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir="{{ tmp_must_gather_dir.path }}"
-  register: must_gather
-  no_log: true
-  changed_when: must_gather.rc == 0
-
 - name: Generate Performance Profile using PPC container
   containers.podman.podman_container:
     name: ppc_tool
@@ -13,16 +6,15 @@
     rm: true
     entrypoint: performance-profile-creator
     detach: false
-    authfile: /tmp/pull_secret
+    authfile: "{{ tmp_must_gather_dir.path }}/pull_secret"
     volumes:
       - "{{ tmp_must_gather_dir.path }}:/must-gather:Z"
     command: >
-      --mcp-name={{ nrop_target_pool }}
+      --mcp-name={{ target }}
       --reserved-cpu-count={{ reserved_cpu_count }}
       --rt-kernel={{ rt_kernel }}
       --must-gather-dir-path=/must-gather
       --power-consumption-mode=ultra-low-latency
-  no_log: true
   register: ppc_output
 
 - name: Save generated profile to file
@@ -45,4 +37,4 @@
   ansible.builtin.include_tasks: deploy_manifest.yml
   vars:
     template_name: "templates/performanceprofile.yaml.j2"
-    manifest_name: "{{ nrop_target_pool }}_performance-profile.yaml"
+    manifest_name: "{{ target }}_performance-profile.yaml"

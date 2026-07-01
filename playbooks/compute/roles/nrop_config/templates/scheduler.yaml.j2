@@ -20,11 +20,10 @@ spec:
   - machineConfigPoolSelector:
       matchLabels:
         pools.operator.machineconfiguration.openshift.io/{{ nrop_target_pool }}: ""
-        {% if is_full_schedulable_cluster | bool %}
+{% if is_full_schedulable_cluster | bool %}
         pools.operator.machineconfiguration.openshift.io/worker: ""
-        {% endif %}
 {% endif %}
-
+{% endif %}
 ---
 apiVersion: nodetopology.openshift.io/v1
 kind: NUMAResourcesScheduler

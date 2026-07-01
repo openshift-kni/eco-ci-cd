@@ -1,15 +1,4 @@
 ---
-- name: Create temporary build directory
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: must_gather
-  register: tmp_must_gather_dir
-
-- name: Ensure must gather directory is empty
-  ansible.builtin.file:
-    path: "{{ tmp_must_gather_dir.path }}"
-    state: absent
-
 - name: Set performance profile creator image based on OCP version
   ansible.builtin.set_fact:
     nrop_ppc_image: >-
@@ -17,13 +6,32 @@
 
 - name: Check if PPC needs to run on both master and worker nodes
   ansible.builtin.set_fact:
-    nrop_target_pool: "{{ 'master,worker' if is_full_schedulable_cluster | default(false) | bool is true else nrop_target_pool }}"
+    pp_target_pool: "{{ 'master,worker' if is_full_schedulable_cluster | default(false) | bool is true else nrop_target_pool }}"
 
-- name: Generate Performance Profile {{ nrop_target_pool }}
+- name: Create temporary build directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: must_gather
+  register: tmp_must_gather_dir
+
+- name: Collect Must Gather
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir="{{ tmp_must_gather_dir.path }}"
+  register: must_gather
+  no_log: true
+  changed_when: must_gather.rc == 0
+
+- name: Save pull secret
+  ansible.builtin.copy:
+    content: "{{ pull_secret_string | b64decode }}"
+    dest: "{{ tmp_must_gather_dir.path }}/pull_secret"
+    mode: '0660'
+
+- name: Generate Performance Profile {{ pp_target_pool }}
   ansible.builtin.include_tasks: pp_generator.yml
-  loop: "{{ nrop_target_pool.split(',') }}"
+  loop: "{{ pp_target_pool.split(',') }}"
   loop_control:
-    loop_var: nrop_target_pool
+    loop_var: target
 
 - name: Delete temporary must gather directory
   ansible.builtin.file:

@@ -116,17 +116,14 @@
       changed_when: true
       become: true
 
-- name: Configure shared container storage on seed SNO
-  hosts: bastion
-  vars:
-    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+- name: Configure storage partitions on spoke SNO
+  hosts: masters
   tasks:
     - name: Check if containers partition already exists
       ansible.builtin.stat:
         path: /dev/disk/by-partlabel/containers
       register: containers_partlabel
       become: true
-      delegate_to: "{{ groups['masters'][0] }}"
 
     - name: Create containers partition on vdb
       community.general.parted:
@@ -136,7 +133,6 @@
         part_type: primary
         name: containers
       become: true
-      delegate_to: "{{ groups['masters'][0] }}"
       when: not containers_partlabel.stat.exists
 
     - name: Create XFS filesystem on containers partition
@@ -145,9 +141,13 @@
         fstype: xfs
         opts: "-L containers"
       become: true
-      delegate_to: "{{ groups['masters'][0] }}"
       when: not containers_partlabel.stat.exists
 
+- name: Apply MachineConfig and wait for update
+  hosts: bastion
+  vars:
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+  tasks:
     - name: Apply var-lib-containers MachineConfig
       kubernetes.core.k8s:
         kubeconfig: "{{ seed_kubeconfig }}"

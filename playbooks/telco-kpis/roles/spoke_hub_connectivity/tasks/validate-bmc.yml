@@ -1,0 +1,29 @@
+---
+# Validate spoke BMC is reachable before setting up connectivity
+
+- name: Test spoke BMC reachability
+  ansible.builtin.command: ping -c 3 -W 2 {{ spoke_hub_connectivity_spoke_bmc_ip }}
+  register: bmc_ping_result
+  changed_when: false
+  failed_when: false
+
+- name: Display BMC reachability result
+  ansible.builtin.debug:
+    msg: >-
+      {% if bmc_ping_result.rc == 0 %}
+      ✓ Spoke BMC {{ spoke_hub_connectivity_spoke_bmc_ip }} is reachable
+      {% else %}
+      ✗ Spoke BMC {{ spoke_hub_connectivity_spoke_bmc_ip }} is NOT reachable
+      {% endif %}
+
+- name: Fail if BMC is not reachable
+  when: bmc_ping_result.rc != 0
+  ansible.builtin.fail:
+    msg: |
+      Spoke BMC {{ spoke_hub_connectivity_spoke_bmc_ip }} is not reachable from this host.
+      Cannot proceed with spoke-hub connectivity setup.
+
+      Troubleshooting:
+      - Verify spoke BMC IP is correct in vault
+      - Check network connectivity to BMC subnet
+      - Ensure BMC is powered on

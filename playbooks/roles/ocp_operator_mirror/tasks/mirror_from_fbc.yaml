@@ -1,3 +1,16 @@
+---
+# Spoke lockdown support:
+# - Use bundle digest if available (always - ensures bit-identical mirroring)
+# - Only extract catalog if no bundle digest available
+# - Generate flag controls metadata accumulation, not digest usage
+
+- name: Detect if bundle digest available (skip catalog extraction)
+  ansible.builtin.set_fact:
+    _skip_catalog_extraction: >-
+      {{
+        (operator.bundle is defined) and ((operator.bundle | length) > 0)
+      }}
+
 - name: Set extract directory path
   ansible.builtin.set_fact:
     extract_dir: "{{ ocp_operator_mirror_fbc_extract_dir }}/{{ operator.name }}-{{ ocp_operator_mirror_version }}"
@@ -154,112 +167,121 @@
           {{ item | to_nice_yaml(indent=2) }}
           {% endfor %}
 
-- name: Set FBC catalog file path (bundles.yaml vs catalog.yaml)
+- name: Extract bundle from catalog (generation mode or no bundle digest)
+  when: not (_skip_catalog_extraction | bool)
+  block:
+    - name: Set FBC catalog file path (bundles.yaml vs catalog.yaml)
+      ansible.builtin.set_fact:
+        catalog_path: "{{ fbc_pkg_catalog_dir }}/{{ 'bundles.yaml' if ((operator.multifile_catalog | default(false)) | bool) else 'catalog.yaml' }}"
+
+    - name: Read catalog file
+      ansible.builtin.slurp:
+        src: "{{ catalog_path }}"
+      register: cat
+
+    - name: Parse catalog file into documents
+      changed_when: false
+      ansible.builtin.set_fact:
+        docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
+
+    - name: Detect package name from catalog
+      changed_when: false
+      ansible.builtin.set_fact:
+        package: >-
+          {{
+            (docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | first)
+            if ((operator.multifile_catalog | default(false)) | bool)
+            else (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first)
+          }}
+
+    - name: Assert package is present in catalog
+      ansible.builtin.assert:
+        that:
+          - package is defined
+          - package | length > 0
+        fail_msg: >-
+          No package found in catalog (multifile_catalog={{ operator.multifile_catalog | default(false) }}).
+          olm.package names: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}.
+          olm.bundle package values: {{ docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | unique | list }}.
+
+    - name: Collect all entry names for package/channel
+      changed_when: false
+      ansible.builtin.set_fact:
+        # Prefer olm.channel entries when present; fallback to all bundle names for this package (FBC may have only bundles.yaml)
+        _channel_entries: >-
+          {{
+            (docs
+              | selectattr('schema','equalto','olm.channel')
+              | selectattr('package','equalto', package)
+              | selectattr('name','equalto', operator.channel)
+              | map(attribute='entries') | first | default([])
+              | map(attribute='name') | list)
+          }}
+
+    - name: Set entry_names from channel or from bundles
+      ansible.builtin.set_fact:
+        entry_names: >-
+          {{ _channel_entries if (_channel_entries | length) > 0 else
+          (docs | selectattr('schema', 'equalto', 'olm.bundle') | selectattr('package', 'equalto', package) | map(attribute='name') | list)
+          }}
+      changed_when: false
+
+    - name: Ensure channel has entries
+      ansible.builtin.assert:
+        that:
+          - (entry_names | default([])) | length > 0
+        fail_msg: >-
+          No entries for package '{{ package }}' channel '{{ operator.channel }}'.
+          Available channels: {{
+            docs | selectattr('schema','equalto','olm.channel')
+                 | selectattr('package','equalto', package)
+                 | map(attribute='name') | list
+          }}
+
+    - name: Filter entry names by version substring (optional)
+      changed_when: false
+      ansible.builtin.set_fact:
+        filtered_names: >-
+          {{
+            (entry_names | select('search', operator.bundle_version) | list)
+            if (operator.bundle_version is defined and (operator.bundle_version | length) > 0)
+            else entry_names
+          }}
+
+    - name: Ensure version filter matches at least one entry
+      ansible.builtin.fail:
+        msg: "No bundle entry matched version filter '{{ operator.bundle_version }}' in channel '{{ operator.channel }}'"
+      when: filtered_names | length == 0
+
+    - name: Select bundle (latest or filtered)
+      changed_when: false
+      ansible.builtin.set_fact:
+        chosen_name: "{{ (filtered_names | community.general.version_sort | last) }}"
+
+    - name: Collect images from selected bundle
+      changed_when: false
+      ansible.builtin.set_fact:
+        chosen_images: >-
+          {{
+            (docs
+            | selectattr('schema','equalto','olm.bundle')
+            | selectattr('name','equalto', chosen_name))
+            | first
+            | combine({})
+            | dict2items
+            | selectattr('key','in',['image','relatedImages'])
+            | map(attribute='value')
+          }}
+
+    - name: Build unique image list
+      changed_when: false
+      ansible.builtin.set_fact:
+        _image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
+
+- name: Use bundle digest directly (apply mode with bundle digest)
+  when: _skip_catalog_extraction | bool
   ansible.builtin.set_fact:
-    catalog_path: "{{ fbc_pkg_catalog_dir }}/{{ 'bundles.yaml' if ((operator.multifile_catalog | default(false)) | bool) else 'catalog.yaml' }}"
-
-- name: Read catalog file
-  ansible.builtin.slurp:
-    src: "{{ catalog_path }}"
-  register: cat
-
-- name: Parse catalog file into documents
-  changed_when: false
-  ansible.builtin.set_fact:
-    docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
-
-- name: Detect package name from catalog
-  changed_when: false
-  ansible.builtin.set_fact:
-    package: >-
-      {{
-        (docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | first)
-        if ((operator.multifile_catalog | default(false)) | bool)
-        else (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first)
-      }}
-
-- name: Assert package is present in catalog
-  ansible.builtin.assert:
-    that:
-      - package is defined
-      - package | length > 0
-    fail_msg: >-
-      No package found in catalog (multifile_catalog={{ operator.multifile_catalog | default(false) }}).
-      olm.package names: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}.
-      olm.bundle package values: {{ docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | unique | list }}.
-
-- name: Collect all entry names for package/channel
-  changed_when: false
-  ansible.builtin.set_fact:
-    # Prefer olm.channel entries when present; fallback to all bundle names for this package (FBC may have only bundles.yaml)
-    _channel_entries: >-
-      {{
-        (docs
-          | selectattr('schema','equalto','olm.channel')
-          | selectattr('package','equalto', package)
-          | selectattr('name','equalto', operator.channel)
-          | map(attribute='entries') | first | default([])
-          | map(attribute='name') | list)
-      }}
-- name: Set entry_names from channel or from bundles
-  ansible.builtin.set_fact:
-    entry_names: >-
-      {{ _channel_entries if (_channel_entries | length) > 0 else
-      (docs | selectattr('schema', 'equalto', 'olm.bundle') | selectattr('package', 'equalto', package) | map(attribute='name') | list)
-      }}
-  changed_when: false
-
-- name: Ensure channel has entries
-  ansible.builtin.assert:
-    that:
-      - (entry_names | default([])) | length > 0
-    fail_msg: >-
-      No entries for package '{{ package }}' channel '{{ operator.channel }}'.
-      Available channels: {{
-        docs | selectattr('schema','equalto','olm.channel')
-             | selectattr('package','equalto', package)
-             | map(attribute='name') | list
-      }}
-
-- name: Filter entry names by version substring (optional)
-  changed_when: false
-  ansible.builtin.set_fact:
-    filtered_names: >-
-      {{
-        (entry_names | select('search', operator.bundle_version) | list)
-        if (operator.bundle_version is defined and (operator.bundle_version | length) > 0)
-        else entry_names
-      }}
-
-- name: Ensure version filter matches at least one entry
-  ansible.builtin.fail:
-    msg: "No bundle entry matched version filter '{{ operator.bundle_version }}' in channel '{{ operator.channel }}'"
-  when: filtered_names | length == 0
-
-- name: Select bundle (latest or filtered)
-  changed_when: false
-  ansible.builtin.set_fact:
-    chosen_name: "{{ (filtered_names | community.general.version_sort | last) }}"
-
-- name: Collect images from selected bundle
-  changed_when: false
-  ansible.builtin.set_fact:
-    chosen_images: >-
-      {{
-        (docs
-        | selectattr('schema','equalto','olm.bundle')
-        | selectattr('name','equalto', chosen_name))
-        | first
-        | combine({})
-        | dict2items
-        | selectattr('key','in',['image','relatedImages'])
-        | map(attribute='value')
-      }}
-
-- name: Build unique image list
-  changed_when: false
-  ansible.builtin.set_fact:
-    _image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
+    _image_list: ["{{ operator.bundle }}"]
 
 - name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
   changed_when: false
@@ -397,3 +419,16 @@
       spec:
         sourceType: grpc
         image: "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
+
+- name: Accumulate lockdown metadata (spoke lockdown generation mode)
+  when:
+    - ocp_operator_mirror_generate_lockdown | default(false) | bool
+    - _image_list is defined
+    - (_image_list | length) > 0
+  ansible.builtin.include_role:
+    name: lockdowns
+    tasks_from: spoke/accumulate-metadata-fbc.yml
+  vars:
+    lockdown_operator_data: "{{ operator }}"
+    lockdown_bundle_digest: "{{ _image_list[0] }}"
+    lockdown_fbc_digest: "{{ operator.fbc | default(image_info.image[0].Digest) }}"

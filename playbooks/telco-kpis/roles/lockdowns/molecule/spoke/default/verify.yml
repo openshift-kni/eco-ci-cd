@@ -1,0 +1,194 @@
+---
+# Molecule verify phase - validates test results
+#
+# Runs assertions to verify parse and generate logic worked correctly
+
+- name: Verify spoke lockdown parse and generate results
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Display test summary header
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "  Lockdowns Role (Spoke) Tests"
+          - "=========================================="
+
+    # ========================================
+    # LEGACY FORMAT PARSE TESTS
+    # ========================================
+    - name: "TEST 1: Legacy format detected correctly"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_format == 'legacy'
+        fail_msg: "Legacy format not detected (got: {{ spoke_legacy_format }})"
+        success_msg: "✓ Legacy format detected correctly"
+
+    - name: "TEST 2: Legacy parse - spoke_lockdown_operators fact set"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_operators is defined
+          - spoke_legacy_operators | length == 3
+        fail_msg: "Legacy operators not parsed correctly (got {{ spoke_legacy_operators | default([]) | length }} operators)"
+        success_msg: "✓ Legacy operators parsed (3 operators)"
+
+    - name: "TEST 3: Legacy parse - OCP version extracted"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_ocp_version == "4.22"
+        fail_msg: "Legacy OCP version wrong (got: {{ spoke_legacy_ocp_version }})"
+        success_msg: "✓ Legacy OCP version correct (4.22)"
+
+    - name: "TEST 4: Legacy parse - OCP pull spec extracted"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_ocp_pull_spec is defined
+          - "'quay.io/openshift-release-dev/ocp-release' in spoke_legacy_ocp_pull_spec"
+        fail_msg: "Legacy OCP pull spec wrong"
+        success_msg: "✓ Legacy OCP pull spec correct"
+
+    - name: "TEST 5: Legacy parse - operator fields present"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.catalog is defined
+          - item.nsname is defined
+          - item.channel is defined
+          - item.bundle is defined
+          - item.fbc is defined
+        fail_msg: "Legacy operator {{ item.name }} missing required fields"
+        success_msg: "✓ Legacy operator {{ item.name }} has all fields"
+      loop: "{{ spoke_legacy_operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ========================================
+    # NEW FORMAT PARSE TESTS
+    # ========================================
+    - name: "TEST 6: New format detected correctly"
+      ansible.builtin.assert:
+        that:
+          - spoke_new_format == 'new'
+        fail_msg: "New format not detected (got: {{ spoke_new_format }})"
+        success_msg: "✓ New format detected correctly"
+
+    - name: "TEST 7: New parse - spoke_lockdown_operators fact set"
+      ansible.builtin.assert:
+        that:
+          - spoke_new_operators is defined
+          - spoke_new_operators | length == 3
+        fail_msg: "New operators not parsed correctly (got {{ spoke_new_operators | default([]) | length }} operators)"
+        success_msg: "✓ New operators parsed (3 operators)"
+
+    - name: "TEST 8: New parse - OCP version extracted and normalized"
+      ansible.builtin.assert:
+        that:
+          - spoke_new_ocp_version == "4.22"
+        fail_msg: "New OCP version wrong (got: {{ spoke_new_ocp_version }})"
+        success_msg: "✓ New OCP version normalized correctly (4.22)"
+
+    - name: "TEST 9: New parse - operator namespace field used"
+      ansible.builtin.assert:
+        that:
+          - item.namespace is defined
+        fail_msg: "New operator {{ item.name }} missing namespace field"
+        success_msg: "✓ New operator {{ item.name }} has namespace field"
+      loop: "{{ spoke_new_operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ========================================
+    # DUAL FORMAT COMPATIBILITY TEST
+    # ========================================
+    - name: "TEST 10: Both formats produce same operator count"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_operators | length == spoke_new_operators | length
+        fail_msg: "Operator counts differ between formats"
+        success_msg: "✓ Both formats produce same operator count"
+
+    - name: "TEST 11: Both formats produce same OCP version"
+      ansible.builtin.assert:
+        that:
+          - spoke_legacy_ocp_version == spoke_new_ocp_version
+        fail_msg: "OCP versions differ between formats"
+        success_msg: "✓ Both formats produce same OCP version"
+
+    # ========================================
+    # GENERATE TESTS
+    # ========================================
+    - name: "TEST 12: Generate - lockdown file created"
+      ansible.builtin.stat:
+        path: /tmp/molecule-tests/generated-lockdown.json
+      register: generated_file
+      failed_when: not generated_file.stat.exists
+
+    - name: "TEST 13: Generate - valid JSON structure"
+      ansible.builtin.assert:
+        that:
+          - generated_lockdown_data is defined
+          - generated_lockdown_data.deployment is defined
+          - generated_lockdown_data.operators is defined
+          - generated_lockdown_data.metadata is defined
+        fail_msg: "Generated lockdown has invalid structure"
+        success_msg: "✓ Generated lockdown has valid structure"
+
+    - name: "TEST 14: Generate - deployment section correct"
+      ansible.builtin.assert:
+        that:
+          - generated_lockdown_data.deployment.ocp_version == "4.22"
+          - generated_lockdown_data.deployment.architecture == "x86_64"
+          - generated_lockdown_data.deployment.ocp_pull_spec is defined
+          - "'__omit_place_holder__' not in generated_lockdown_data.deployment.ocp_pull_spec"
+        fail_msg: "Generated deployment section incorrect"
+        success_msg: "✓ Generated deployment section correct (no omit placeholders)"
+
+    - name: "TEST 15: Generate - operators included"
+      ansible.builtin.assert:
+        that:
+          - generated_lockdown_data.operators | length == 2
+        fail_msg: "Generated operators count wrong (got {{ generated_lockdown_data.operators | length }})"
+        success_msg: "✓ Generated operators count correct (2 operators)"
+
+    - name: "TEST 16: Generate - operator fields complete"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.catalog is defined
+          - item.nsname is defined
+          - item.channel is defined
+          - item.bundle is defined
+          - item.fbc is defined
+          - "'@sha256:' in item.bundle"
+          - "'@sha256:' in item.fbc"
+        fail_msg: "Generated operator {{ item.name }} missing fields or digests"
+        success_msg: "✓ Generated operator {{ item.name }} has all fields with digests"
+      loop: "{{ generated_lockdown_data.operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "TEST 17: Generate - metadata section correct"
+      ansible.builtin.assert:
+        that:
+          - generated_lockdown_data.metadata.hub_name == "test-hub"
+          - generated_lockdown_data.metadata.build_number == "999"
+          - generated_lockdown_data.metadata.mirror_timestamp is defined
+        fail_msg: "Generated metadata section incorrect"
+        success_msg: "✓ Generated metadata section correct"
+
+    # ========================================
+    # SUMMARY
+    # ========================================
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "  Lockdowns Role (Spoke) Tests: ALL PASSED"
+          - "=========================================="
+          - "✓ Legacy format parse: 5 tests passed"
+          - "✓ New format parse: 4 tests passed"
+          - "✓ Dual format compatibility: 2 tests passed"
+          - "✓ Generate lockdown: 6 tests passed"
+          - "=========================================="
+          - "Total: 17 tests passed"
+          - "=========================================="

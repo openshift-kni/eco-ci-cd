@@ -4,7 +4,7 @@ metadata:
   name: "{{ target }}-performance-nrop"
   annotations:
     kubeletconfig.experimental: |
-      {"topologyManagerScope": "pod",
+      {"topologyManagerScope": "{{ topology_manager_scope }}",
       "cpuManagerPolicyOptions": {"full-pcpus-only": "false"}
       }
 spec:

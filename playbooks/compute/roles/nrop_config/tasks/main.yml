@@ -8,6 +8,7 @@
 
 - name: Create workdir
   ansible.builtin.include_tasks: create_workdir.yml
+  when: deploy_performance_profile_only | bool is false
 
 - name: Get Cluster version
   kubernetes.core.k8s_info:
@@ -30,7 +31,7 @@
       - op: replace
         path: /spec/mastersSchedulable
         value: true
-  when: schedulable_master | bool
+  when: schedulable_master | bool and deploy_performance_profile_only | bool is false
 
 - name: Deploy scheduler
   ansible.builtin.include_tasks: deploy_scheduler.yml
@@ -39,6 +40,7 @@
   ansible.builtin.include_tasks: preformance_profile.yml
 
 - name: Deploy Sample Device
+  when: deploy_performance_profile_only | bool is false
   ansible.builtin.include_tasks: deploy_manifest.yml
   vars:
     template_name: "templates/{{ item }}.yaml.j2"

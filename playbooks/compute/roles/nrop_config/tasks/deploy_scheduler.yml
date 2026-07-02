@@ -48,3 +48,4 @@
   vars:
     template_name: "templates/scheduler.yaml.j2"
     manifest_name: "operator-scheduler.yaml"
+  when: deploy_performance_profile_only | bool is false

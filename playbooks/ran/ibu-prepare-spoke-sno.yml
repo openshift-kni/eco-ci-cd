@@ -117,31 +117,27 @@
       become: true
 
 - name: Configure storage partitions on spoke SNO
-  hosts: masters
+  hosts: bastion
+  vars:
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
   tasks:
-    - name: Check if containers partition already exists
-      ansible.builtin.stat:
-        path: /dev/disk/by-partlabel/containers
-      register: containers_partlabel
-      become: true
+    - name: Get SNO node name
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ seed_kubeconfig }}"
+        api_version: v1
+        kind: Node
+      register: sno_nodes
 
-    - name: Create containers partition on vdb
-      community.general.parted:
-        device: /dev/vdb
-        number: 1
-        state: present
-        part_type: primary
-        name: containers
-      become: true
-      when: not containers_partlabel.stat.exists
-
-    - name: Create XFS filesystem on containers partition
-      community.general.filesystem:
-        dev: /dev/vdb1
-        fstype: xfs
-        opts: "-L containers"
-      become: true
-      when: not containers_partlabel.stat.exists
+    - name: Create containers partition and XFS filesystem on vdb if not present
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ seed_kubeconfig }}
+        debug node/{{ sno_nodes.resources[0].metadata.name }} --
+        nsenter -a -t 1 -- bash -c
+        "if [ ! -e /dev/disk/by-partlabel/containers ]; then
+        sgdisk -n 1:0:0 -c 1:containers /dev/vdb &&
+        udevadm settle --timeout=30 &&
+        mkfs.xfs -f -L containers /dev/vdb1; fi"
+      changed_when: true
 
 - name: Apply MachineConfig and wait for update
   hosts: bastion

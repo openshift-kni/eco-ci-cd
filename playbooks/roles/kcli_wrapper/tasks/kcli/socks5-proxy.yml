@@ -1,0 +1,182 @@
+---
+- name: Delete Socks5 proxy config files
+  become: true
+  when: kcli_wrp_socks5_proxy.listen_port is defined and
+        ('rollback' in ansible_run_tags)
+  tags:
+    - rollback
+  vars:
+    semodule_name: "socks5-proxy-port-{{ kcli_wrp_socks5_proxy.listen_port }}"
+    ssh_private_key_file: "~/.ssh/id_ed25519_kcli_wrp_socks5_proxy_ssh_key"
+  block:
+
+    - name: Get stats of SSH connections from a systemd unit
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ semodule_name }}.service"
+      register: _systemd_unit_file
+
+    - name: Stop Socks5 proxy
+      when: _systemd_unit_file.stat.exists
+      ansible.builtin.systemd_service:
+        state: stopped
+        name: "{{ semodule_name }}.service"
+        enabled: false
+
+    - name: Removing all related SE Molude for SSH connection from Systemd unit
+      ansible.builtin.file:
+        path: "{{ semodule_related_file }}"
+        state: absent
+      loop:
+        - "/tmp/{{ semodule_name }}"
+        - "/etc/systemd/system/{{ semodule_name }}.service"
+      loop_control:
+        loop_var: semodule_related_file
+
+    - name: Removing all related SSH key files for SSH connection from Systemd unit
+      when: kcli_wrp_socks5_proxy.username is defined
+      become_user: "{{ kcli_wrp_socks5_proxy.username }}"
+      ansible.builtin.file:
+        path: "{{ ssh_related_key_file }}"
+        state: absent
+      loop:
+        - "{{ ssh_private_key_file }}.pub"
+        - "{{ ssh_private_key_file }}"
+      loop_control:
+        loop_var: ssh_related_key_file
+
+    - name: Clean up the authorized_keys file
+      when: kcli_wrp_socks5_proxy.username is defined
+      become_user: "{{ kcli_wrp_socks5_proxy.username }}"
+      ansible.builtin.lineinfile:
+        path: ~/.ssh/authorized_keys
+        state: absent
+        regexp: "{{ ssh_private_key_file | basename }}"
+
+    - name: Removing SE Module for SSH connections from a systemd unit
+      ansible.builtin.shell: |-
+        se_module=$(semodule -l | grep -w '{{ semodule_name }}')
+        if [[ "${se_module}" != "" ]]; then
+          echo "Removing {{ semodule_name }} semodule..."
+          semodule -v -X 300 -r {{ semodule_name }}
+        else
+          echo "{{ semodule_name }} semodule not found."
+        fi
+        echo "Asserting it was removed..."
+        ( semodule -l | grep -w '{{ semodule_name }}' && exit 1 ) || exit 0
+
+    - name: Reload systemd units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+###    - name: Disallow Socks5 proxy to use any port
+###      ansible.builtin.command: |-
+###        setsebool ssh_sysadm_login=off
+
+- name: Create Socks5 proxy config files
+  when: kcli_wrp_socks5_proxy.listen_port is defined and
+        ('rollback' not in ansible_run_tags)
+  become: true
+  vars:
+    semodule_name: "socks5-proxy-port-{{ kcli_wrp_socks5_proxy.listen_port }}"
+    ssh_private_key_file: "~/.ssh/id_ed25519_kcli_wrp_socks5_proxy_ssh_key"
+  block:
+
+    - name: Generate SSH keys for Socks5 proxy
+      when: kcli_wrp_socks5_proxy.username is defined
+      become_user: "{{ kcli_wrp_socks5_proxy.username }}"
+      ansible.builtin.shell: |-
+        if [[ ! -f {{ ssh_private_key_file }} || ! -f {{ ssh_private_key_file }}.pub ]]; then
+          ssh-keygen \
+            -t ed25519 \
+            -N '' \
+            -C '{{ ssh_private_key_file | basename }}' \
+            -f {{ ssh_private_key_file }}
+          cat {{ ssh_private_key_file }}.pub >> ~/.ssh/authorized_keys
+        else
+          ls -l {{ ssh_private_key_file }}*
+        fi
+
+    - name: Creating Socks5 proxy systemd file
+      when: kcli_wrp_socks5_proxy.host is defined and
+            kcli_wrp_socks5_proxy.username is defined
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ semodule_name }}.service"
+        content: |
+          [Unit]
+          Description={{ kcli_wrp_socks5_proxy.description | default('Socks5 proxy systemd unit') }}
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/ssh \
+            -i {{ ssh_private_key_file }} \
+            -D {{ kcli_wrp_socks5_proxy.host }}:{{ kcli_wrp_socks5_proxy.listen_port }} \
+            -N -o StrictHostKeyChecking=no {{ kcli_wrp_socks5_proxy.ssh_options | default('') }} localhost
+          Restart=on-failure
+          RestartSec=5
+          User={{ kcli_wrp_socks5_proxy.username }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+###    - name: Allow Socks5 proxy to use any port
+###      ansible.builtin.command: |-
+###        setsebool ssh_sysadm_login=on
+
+    - name: Creating SE Molude directory for SSH connection from Systemd unit
+      ansible.builtin.file:
+        path: "/tmp/{{ semodule_name }}"
+        state: directory
+
+    - name: Creating SE Molude for SSH connection from Systemd unit
+      ansible.builtin.copy:
+        dest: "/tmp/{{ semodule_name }}/{{ semodule_name }}.te"
+        content: |
+          module {{ semodule_name }} 1.0;
+
+          require {
+            type ssh_exec_t;
+            type init_t;
+            type ssh_port_t;
+            type ssh_home_t;
+            class file { execute execute_no_trans map open read };
+            class tcp_socket name_connect;
+          }
+
+          #============= init_t ==============
+          allow init_t ssh_exec_t:file { execute execute_no_trans open read };
+
+          #!!!! This avc can be allowed using the boolean 'domain_can_mmap_files'
+          allow init_t ssh_exec_t:file map;
+          allow init_t ssh_home_t:file { open read };
+
+          #!!!! This avc can be allowed using the boolean 'nis_enabled'
+          allow init_t ssh_port_t:tcp_socket name_connect;
+
+    - name: Install SE Module for SSH connections from a systemd unit
+      ansible.builtin.shell: |-
+        se_module=$(semodule -l | grep -w '{{ semodule_name }}')
+        if [[ "${se_module}" == "" ]]; then
+          echo "Installing {{ semodule_name }} semodule..."
+          d="/tmp/{{ semodule_name }}"
+          checkmodule -M -m -o ${d}/{{ semodule_name }}.mod ${d}/{{ semodule_name }}.te
+          semodule_package -o ${d}/{{ semodule_name }}.pp -m ${d}/{{ semodule_name }}.mod
+          semodule -v -X 300 -i ${d}/{{ semodule_name }}.pp
+        else
+          echo "{{ semodule_name }} semodule already installed."
+        fi
+
+    - name: Restart Socks5 proxy
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        state: restarted
+        name: "{{ semodule_name }}.service"
+        enabled: true
+
+    - name: Test the Socks5 proxy is available
+      ansible.builtin.shell: |-
+        ( semodule -l | grep -w '{{ semodule_name }}' && \
+        nc -vz {{ kcli_wrp_socks5_proxy.host }} {{ kcli_wrp_socks5_proxy.listen_port }} && \
+        ss -puntal | \
+          grep -w "{{ kcli_wrp_socks5_proxy.listen_port }}" ) \
+        || exit 1

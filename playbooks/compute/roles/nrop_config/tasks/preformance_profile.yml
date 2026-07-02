@@ -8,10 +8,10 @@
   ansible.builtin.set_fact:
     pp_target_pool: "{{ 'master,worker' if is_full_schedulable_cluster | default(false) | bool is true else nrop_target_pool }}"
 
-- name: Create temporary build directory
+- name: Create temporary must gather directory
   ansible.builtin.tempfile:
     state: directory
-    suffix: must_gather
+    suffix: _must_gather
   register: tmp_must_gather_dir
 
 - name: Collect Must Gather

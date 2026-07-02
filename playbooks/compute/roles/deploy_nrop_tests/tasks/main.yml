@@ -1,0 +1,41 @@
+---
+- name: Create workdir
+  ansible.builtin.include_tasks: create_workdir.yml
+
+- name: Get Cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: api_version
+
+- name: Set ocp_version
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
+    ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
+
+- name: Set Gather Image version
+  ansible.builtin.set_fact:
+    must_gather_image: "{{ numa_mustgather_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+
+- name: Ensure MCP is ready
+  ansible.builtin.include_tasks: wait_for_mcp.yml
+
+- name: Set Scope if Reboot
+  ansible.builtin.set_fact:
+    scope: "reboot"
+  when: run_reboot_tests_only | bool
+
+- name: Generate performance profile
+  ansible.builtin.include_role:
+    name: nrop_config
+  vars:
+    deploy_performance_profile_only: true
+    topology_manager_scope: "{% if scope == 'reboot' %}pod{% else %}{{ scope }}{% endif %}"
+  when: scope != "reboot"
+
+- name: Gather sha images
+  ansible.builtin.include_tasks: get_image_sha.yml
+
+- name: Get Skip list
+  ansible.builtin.include_tasks: skip_list.yml

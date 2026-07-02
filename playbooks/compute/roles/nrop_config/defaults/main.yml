@@ -1,10 +1,12 @@
 # workdir settings
-tmp_workdir: "/tmp/wip"
-manifest_dir: "{{ tmp_workdir }}/artifacts"
+tmp_workdir: "/tmp/wip/artifacts"
+manifest_dir: "{{ tmp_workdir }}/manifests"
 
 # scheduler settings
 schedulable_master: false
 is_full_schedulable_cluster: false
+deploy_performance_profile_only: false
+topology_manager_scope: "pod"
 scheduler_image_name: noderesourcetopology-scheduler
 image_uri:
   prod: registry.redhat.io/openshift4

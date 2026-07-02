@@ -7,6 +7,8 @@ run_reboot_tests_only: false
 nrop_test_dir: "{{ tmp_workdir }}/tests"
 test_env: prod
 
+topology_manager_scope: "pod"
+
 # Images
 numa_mustgather_image: "registry.stage.redhat.io/openshift4/numaresources-must-gather-rhel9"
 nrop_test_image_tag: "quay.io/openshift-kni/numaresources-operator-tests:latest"

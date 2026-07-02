@@ -1,0 +1,62 @@
+---
+# Unified lockdown role for hub and spoke operator lockdown management
+#
+# This role provides a flexible interface for lockdown operations:
+# - Hub and spoke operator lockdown capture from clusters
+# - Hub and spoke lockdown JSON parsing and transformation
+# - Common utilities: download from URI, generate gitea symlinks, validation
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: lockdowns
+#     vars:
+#       lockdown_mode: hub             # Required: 'hub' or 'spoke'
+#       lockdown_action: parse         # Required: 'parse' or 'capture'
+#       lockdown_uri: "{{ hub_lockdown_uri }}"  # For parse action
+#       # ... other mode-specific vars
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - lockdown_mode is defined
+      - lockdown_mode in ['hub', 'spoke']
+      - lockdown_action is defined
+      - lockdown_action in ['parse', 'capture']
+    fail_msg: >-
+      lockdown_mode (hub|spoke) and lockdown_action (parse|capture) are required
+    success_msg: "Lockdown operation: {{ lockdown_mode }} {{ lockdown_action }}"
+
+- name: Display lockdown operation details
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Lockdown Role Execution"
+      - "=========================================="
+      - "Mode: {{ lockdown_mode }}"
+      - "Action: {{ lockdown_action }}"
+      - "=========================================="
+
+# Dispatch to appropriate task file based on mode and action
+- name: Execute hub parse
+  ansible.builtin.include_tasks: hub/parse.yml
+  when:
+    - lockdown_mode == 'hub'
+    - lockdown_action == 'parse'
+
+- name: Execute hub capture
+  ansible.builtin.include_tasks: hub/capture.yml
+  when:
+    - lockdown_mode == 'hub'
+    - lockdown_action == 'capture'
+
+- name: Execute spoke parse
+  ansible.builtin.include_tasks: spoke/parse.yml
+  when:
+    - lockdown_mode == 'spoke'
+    - lockdown_action == 'parse'
+
+- name: Execute spoke capture
+  ansible.builtin.include_tasks: spoke/capture.yml
+  when:
+    - lockdown_mode == 'spoke'
+    - lockdown_action == 'capture'

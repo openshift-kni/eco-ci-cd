@@ -1,0 +1,41 @@
+---
+# Spoke-specific: Capture spoke lockdown from cluster
+#
+# Queries spoke cluster for operator state and generates lockdown JSON
+#
+# Required variables:
+#   - kubeconfig: Path to spoke cluster kubeconfig
+#   - spoke_cluster: Spoke cluster name
+#   - spoke_lockdown_output_file: Path where to save generated lockdown JSON
+#
+# Sets facts:
+#   - spoke_lockdown_operators: Captured operator list
+#   - spoke_lockdown_file: Path to generated lockdown JSON
+
+- name: Validate capture parameters
+  ansible.builtin.assert:
+    that:
+      - kubeconfig is defined
+      - spoke_cluster is defined
+      - spoke_lockdown_output_file is defined
+    fail_msg: "kubeconfig, spoke_cluster, and spoke_lockdown_output_file required for capture"
+    success_msg: "Spoke lockdown capture: {{ spoke_cluster }}"
+
+# TODO: Implement capture logic
+# This will query the spoke cluster using kubernetes.core.k8s_info for:
+# - ClusterVersion (OCP pull spec and version)
+# - Subscriptions (operator details)
+# - OperatorGroups (operator group specs)
+# Then generate lockdown JSON from template
+
+- name: Placeholder - Capture logic to be implemented
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke Lockdown Capture"
+      - "=========================================="
+      - "Cluster: {{ spoke_cluster }}"
+      - "Kubeconfig: {{ kubeconfig }}"
+      - "Output: {{ spoke_lockdown_output_file }}"
+      - "=========================================="
+      - "TODO: Implement capture logic"

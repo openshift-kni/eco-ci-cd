@@ -1,0 +1,125 @@
+---
+# Check status of specific spoke-hub connectivity configuration
+# Validates THREE sets of iptables rules:
+# 1. BMC → Hub cluster (metal3)
+# 2. Cluster → Hub cluster (HTTP/API)
+# 3. Cluster → Hub bastion (registry)
+
+- name: Display check configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Checking Spoke-Hub Connectivity Status"
+      - "=========================================="
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "BMC Source: {{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
+      - "Cluster Source: {{ spoke_hub_connectivity_spoke_cluster_ip_range }}"
+      - "=========================================="
+
+# Check BMC → Hub cluster rules
+- name: Generate BMC check script from template
+  ansible.builtin.template:
+    src: check-bmc-iptables-rules.sh.j2
+    dest: /tmp/check-bmc-iptables-rules.sh
+    mode: '0755'
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Check BMC iptables rules on hypervisor
+  ansible.builtin.command: /tmp/check-bmc-iptables-rules.sh
+  register: bmc_rules_check
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up BMC check script
+  ansible.builtin.file:
+    path: /tmp/check-bmc-iptables-rules.sh
+    state: absent
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Check Cluster → Hub cluster rules
+- name: Generate cluster check script from template
+  ansible.builtin.template:
+    src: check-cluster-iptables-rules.sh.j2
+    dest: /tmp/check-cluster-iptables-rules.sh
+    mode: '0755'
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Check cluster iptables rules on hypervisor
+  ansible.builtin.command: /tmp/check-cluster-iptables-rules.sh
+  register: cluster_rules_check
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up cluster check script
+  ansible.builtin.file:
+    path: /tmp/check-cluster-iptables-rules.sh
+    state: absent
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+# Check Cluster → Hub bastion rules
+- name: Generate registry check script from template
+  ansible.builtin.template:
+    src: check-registry-iptables-rules.sh.j2
+    dest: /tmp/check-registry-iptables-rules.sh
+    mode: '0755'
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Check registry iptables rules on hypervisor
+  ansible.builtin.command: /tmp/check-registry-iptables-rules.sh
+  register: registry_rules_check
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Clean up registry check script
+  ansible.builtin.file:
+    path: /tmp/check-registry-iptables-rules.sh
+    state: absent
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+
+- name: Parse check results
+  ansible.builtin.set_fact:
+    bmc_rules_status: "{{ bmc_rules_check.stdout }}"
+    cluster_rules_status: "{{ cluster_rules_check.stdout }}"
+    registry_rules_status: "{{ registry_rules_check.stdout }}"
+
+- name: Determine overall status
+  ansible.builtin.set_fact:
+    all_rules_configured: >-
+      {{
+        bmc_rules_check.stdout.split('/')[0] == bmc_rules_check.stdout.split('/')[1] and
+        cluster_rules_check.stdout.split('/')[0] == cluster_rules_check.stdout.split('/')[1] and
+        registry_rules_check.stdout.split('/')[0] == registry_rules_check.stdout.split('/')[1]
+      }}
+
+- name: Display connectivity status report
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke-Hub Connectivity Status Report"
+      - "=========================================="
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name }}"
+      - "  BMC IP: {{ spoke_hub_connectivity_spoke_bmc_ip }}"
+      - "  Cluster IP: {{ spoke_hub_connectivity_spoke_cluster_ip }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name }}"
+      - "  Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+      - "  Bastion IP: {{ spoke_hub_connectivity_hub_bastion_ip }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "  Corporate IP: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - ""
+      - "Overall Status: {{ 'READY ✓' if all_rules_configured else 'INCOMPLETE ✗' }}"
+      - ""
+      - "iptables Rules:"
+      - "  BMC → Hub cluster:       {{ bmc_rules_status }} configured"
+      - "  Cluster → Hub cluster:   {{ cluster_rules_status }} configured"
+      - "  Cluster → Hub bastion:   {{ registry_rules_status }} configured"
+      - "=========================================="
+
+- name: Fail if configuration incomplete
+  when: not all_rules_configured
+  ansible.builtin.fail:
+    msg: "Spoke-hub connectivity is NOT fully configured. See status report above."

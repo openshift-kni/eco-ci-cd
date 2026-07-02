@@ -1,0 +1,12 @@
+---
+# Combined test playbook - runs all phases in sequence
+# This ensures facts from prepare phase are available in converge and verify
+
+- name: Prepare test environment
+  import_playbook: prepare.yml
+
+- name: Converge - Run hub parse logic
+  import_playbook: converge.yml
+
+- name: Verify - Run assertions
+  import_playbook: verify.yml

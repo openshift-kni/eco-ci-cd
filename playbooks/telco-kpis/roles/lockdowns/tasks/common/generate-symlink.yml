@@ -1,0 +1,44 @@
+---
+# Common task: Generate symlink for latest lockdown in Gitea
+#
+# Creates a "latest" symlink pointing to the newest lockdown file for easy reference
+#
+# Required variables:
+#   - lockdown_output_file: Path to generated lockdown JSON
+#   - lockdown_mode: 'hub' or 'spoke'
+
+- name: Validate parameters
+  ansible.builtin.assert:
+    that:
+      - lockdown_output_file is defined
+      - lockdown_mode is defined
+      - lockdown_mode in ['hub', 'spoke']
+    fail_msg: "lockdown_output_file and lockdown_mode required for symlink generation"
+
+- name: Extract lockdown directory and filename
+  ansible.builtin.set_fact:
+    lockdown_dir: "{{ lockdown_output_file | dirname }}"
+    lockdown_filename: "{{ lockdown_output_file | basename }}"
+
+- name: Create symlink to latest lockdown
+  ansible.builtin.file:
+    src: "{{ lockdown_filename }}"
+    dest: "{{ lockdown_dir }}/{{ lockdown_mode }}-lockdown-latest.json"
+    state: link
+    force: true
+  register: symlink_result
+  failed_when: false
+
+- name: Display symlink creation result
+  ansible.builtin.debug:
+    msg:
+      - "Symlink created: {{ lockdown_dir }}/{{ lockdown_mode }}-lockdown-latest.json"
+      - "Target: {{ lockdown_filename }}"
+  when: symlink_result is succeeded
+
+- name: Warning if symlink creation failed
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: Could not create symlink (may not be supported on this filesystem)"
+      - "Latest lockdown file: {{ lockdown_output_file }}"
+  when: symlink_result is failed

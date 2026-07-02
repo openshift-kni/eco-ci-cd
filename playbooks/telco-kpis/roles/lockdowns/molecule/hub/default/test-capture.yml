@@ -1,0 +1,12 @@
+---
+# Combined test playbook for hub CAPTURE action
+# Tests the full capture workflow: mock cluster → capture → verify JSON
+
+- name: Prepare capture test environment
+  import_playbook: prepare-capture.yml
+
+- name: Converge - Run hub capture logic
+  import_playbook: converge-capture.yml
+
+- name: Verify - Validate generated lockdown JSON
+  import_playbook: verify-capture.yml

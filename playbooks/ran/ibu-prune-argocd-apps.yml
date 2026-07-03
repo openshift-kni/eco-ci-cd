@@ -4,6 +4,7 @@
   gather_facts: false
   vars:
     hub_kubeconfig: "{{ hub_kubeconfig }}"
+    spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
     openshift_gitops_namespace: "openshift-gitops"
     argocd_apps:
       - clusters
@@ -75,5 +76,26 @@
         kubeconfig: "{{ hub_kubeconfig }}"
       register: managedcluster_check
       until: managedcluster_check.resources | length == 0
+      retries: 30
+      delay: 10
+
+    - name: Delete klusterlet from spoke to complete hub detachment
+      kubernetes.core.k8s:
+        state: absent
+        api_version: operator.open-cluster-management.io/v1
+        kind: Klusterlet
+        name: klusterlet
+        kubeconfig: "{{ spoke_kubeconfig }}"
+
+    - name: Wait for ACM agent namespaces to be removed from spoke
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        kubeconfig: "{{ spoke_kubeconfig }}"
+      register: spoke_namespaces
+      until: >-
+        spoke_namespaces.resources |
+        selectattr('metadata.name', 'match', '^open-cluster-management') |
+        list | length == 0
       retries: 30
       delay: 10

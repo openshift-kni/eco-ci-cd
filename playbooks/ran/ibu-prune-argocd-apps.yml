@@ -3,7 +3,6 @@
   hosts: bastion
   gather_facts: false
   vars:
-    hub_kubeconfig: "{{ hub_kubeconfig }}"
     spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
     openshift_gitops_namespace: "openshift-gitops"
     argocd_apps:
@@ -11,6 +10,29 @@
       - policies
 
   tasks:
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster is defined and spoke_cluster | length > 0
+          - hub_kubeconfig is defined and hub_kubeconfig | length > 0
+        fail_msg: "spoke_cluster and hub_kubeconfig must be provided as extra-vars"
+
+    - name: Get spoke cluster admin kubeconfig secret from hub
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ hub_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ spoke_cluster }}"
+        name: "{{ spoke_cluster }}-admin-kubeconfig"
+      register: spoke_kubeconfig_secret
+
+    - name: Extract spoke kubeconfig to specified path
+      ansible.builtin.copy:
+        content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+        dest: "{{ spoke_kubeconfig }}"
+        mode: '0600'
+
     - name: Remove finalizers from ArgoCD apps # noqa: ignore-errors
       kubernetes.core.k8s:
         state: patched

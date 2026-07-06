@@ -301,7 +301,7 @@
   tags: process
   vars:
     eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests_ptp_gm') }}"
-    bastion_report_dir: "{{ ptp_report_dir | default('/tmp/ptp_reports') }}"
+    bastion_report_dir: "{{ ptp_report_dir | default('/tmp/test_reports') }}"
     ptp_cycle_configs: "{{ ptp_cycle_configs | default([]) }}"
     ptp_features:
       - name: containernshide
@@ -322,22 +322,22 @@
 
     - name: Remove stale eco-gotests feature report files from previous runs
       ansible.builtin.shell: |
-        rm -f "{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test.xml"
-        rm -f "{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test_polarion.xml"
+        rm -f "{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test.xml"
+        rm -f "{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test_polarion.xml"
       loop: "{{ ptp_features }}"
       changed_when: false
 
     - name: Remove stale eco-gotests PTP cycle report files from previous runs
       ansible.builtin.shell: |
-        rm -f {{ bastion_report_dir }}/junit/ptp_gm_*_suite_test.xml
-        rm -f {{ bastion_report_dir }}/polarion/ptp_gm_*_suite_test_polarion.xml
+        rm -f {{ bastion_report_dir }}/polarion/ptp_gm_*_suite_test.xml
+        rm -f {{ bastion_report_dir }}/junit/ptp_gm_*_suite_test_polarion.xml
       changed_when: false
       failed_when: false
 
     - name: Rename testsuite and prepare feature JUnit reports for ReportPortal
       ansible.builtin.shell: |
         src="/tmp/eco_gotests_{{ item.name }}_0/report/{{ item.junit }}"
-        dst="{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test.xml"
+        dst="{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test.xml"
         if [ -f "${src}" ]; then
           sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
                s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
@@ -349,10 +349,9 @@
     - name: Prepare feature Polarion reports for Polarion converter
       ansible.builtin.shell: |
         src="/tmp/eco_gotests_{{ item.name }}_0/report/report_testrun.xml"
-        dst="{{ bastion_report_dir }}/polarion/{{ item.name }}_suite_test_polarion.xml"
+        dst="{{ bastion_report_dir }}/junit/{{ item.name }}_suite_test_polarion.xml"
         if [ -f "${src}" ]; then
-          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
-            "${src}" > "${dst}"
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" "${src}" > "${dst}"
         fi
       loop: "{{ ptp_features }}"
       changed_when: false
@@ -361,7 +360,7 @@
     - name: Rename testsuite and prepare PTP ZTP cycle JUnit report for ReportPortal
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_0/report/ptp_suite_test_junit.xml"
-        dst="{{ bastion_report_dir }}/junit/ptp_gm_0_suite_test.xml"
+        dst="{{ bastion_report_dir }}/polarion/ptp_gm_0_suite_test.xml"
         if [ -f "${src}" ]; then
           sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"gm\"/g;
                s/testsuite name=\"[^\"]*\"/testsuite name=\"gm\"/g" \
@@ -372,10 +371,9 @@
     - name: Prepare PTP ZTP cycle Polarion report for Polarion converter
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_0/report/report_testrun.xml"
-        dst="{{ bastion_report_dir }}/polarion/ptp_gm_0_suite_test_polarion.xml"
+        dst="{{ bastion_report_dir }}/junit/ptp_gm_0_suite_test_polarion.xml"
         if [ -f "${src}" ]; then
-          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"gm\"/g" \
-            "${src}" > "${dst}"
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"gm\"/g" "${src}" > "${dst}"
         fi
       changed_when: false
       failed_when: false
@@ -383,7 +381,7 @@
     - name: Rename testsuite and prepare PTP GM cycle JUnit reports for ReportPortal
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_{{ cycle_idx + 1 }}/report/ptp_suite_test_junit.xml"
-        dst="{{ bastion_report_dir }}/junit/ptp_gm_{{ cycle_idx + 1 }}_suite_test.xml"
+        dst="{{ bastion_report_dir }}/polarion/ptp_gm_{{ cycle_idx + 1 }}_suite_test.xml"
         if [ -f "${src}" ]; then
           sed "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
                s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
@@ -397,10 +395,9 @@
     - name: Prepare PTP GM cycle Polarion reports for Polarion converter
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_{{ cycle_idx + 1 }}/report/report_testrun.xml"
-        dst="{{ bastion_report_dir }}/polarion/ptp_gm_{{ cycle_idx + 1 }}_suite_test_polarion.xml"
+        dst="{{ bastion_report_dir }}/junit/ptp_gm_{{ cycle_idx + 1 }}_suite_test_polarion.xml"
         if [ -f "${src}" ]; then
-          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
-            "${src}" > "${dst}"
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" "${src}" > "${dst}"
         fi
       loop: "{{ ptp_cycle_configs }}"
       loop_control:

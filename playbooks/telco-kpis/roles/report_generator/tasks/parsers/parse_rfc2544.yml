@@ -20,49 +20,206 @@
         has_traceback: "{{ 'Traceback' in rfc2544_log }}"
         has_error: "{{ 'ERROR' in rfc2544_log or 'Error' in rfc2544_log }}"
         has_exception: "{{ 'Exception' in rfc2544_log }}"
+        has_test_complete: "{{ 'Test complete!' in rfc2544_log }}"
 
-    - name: Check for success indicators
+    - name: Parse RFC2544 test configuration parameters from log
       ansible.builtin.set_fact:
-        has_success: "{{ 'Test completed successfully' in rfc2544_log or 'PASS' in rfc2544_log }}"
+        config_lat_duration: "{{
+          (rfc2544_log | regex_search('LAT_DURATION:\\s+(\\d+)', '\\1'))[0] | default('N/A') }}"
+        config_frame_size: "{{
+          (rfc2544_log | regex_search('FRAME_SIZE:\\s+(\\d+)', '\\1'))[0] | default('N/A') }}"
+        config_lat_rate: "{{
+          (rfc2544_log | regex_search('LAT_RATE:\\s+([\\d.]+)', '\\1'))[0] | default('N/A') }}"
+        config_port1: "{{
+          (rfc2544_log | regex_search('PORT1:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+        config_port2: "{{
+          (rfc2544_log | regex_search('PORT2:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+        config_testcfg: "{{
+          (rfc2544_log | regex_search('TESTCFG:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+        config_chassis: "{{
+          (rfc2544_log | regex_search('CHASSIS:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
 
-    - name: Extract throughput results if present
+    - name: Extract throughput percentage
       ansible.builtin.set_fact:
-        throughput_match: "{{ rfc2544_log | regex_search('Throughput:\\s*([\\d.]+)', '\\1') }}"
+        throughput_match: "{{
+          rfc2544_log | regex_search('Max throughput observed:\\s*([\\d.]+)', '\\1') }}"
 
-    - name: Build throughput metric
+    - name: Set throughput value
       ansible.builtin.set_fact:
-        throughput_value: "{{ throughput_match[0] if throughput_match and throughput_match | length > 0 else 'N/A' }}"
+        throughput_percent: "{{
+          throughput_match[0] | float if throughput_match and throughput_match | length > 0 else 0.0 }}"
 
-    - name: Determine test status
+    - name: Extract latency metrics from output line
       ansible.builtin.set_fact:
-        rfc2544_passed: "{{ has_success and not (has_traceback or has_exception) }}"
+        metrics_line: "{{
+          rfc2544_log | regex_findall('^([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)$', multiline=True) }}"
 
-    - name: Build status description
+    - name: Parse latency metrics
       ansible.builtin.set_fact:
-        status_desc: >-
-          {{
-            'Error/Traceback detected' if (has_traceback or has_exception)
-            else ('Throughput: ' + throughput_value if throughput_value != 'N/A' else 'Completed')
-          }}
+        frame_size_measured: "{{ metrics_line[0][0] | float }}"
+        actual_rate: "{{ metrics_line[0][1] | float }}"
+        avg_latency: "{{ metrics_line[0][2] | float }}"
+        max_latency: "{{ metrics_line[0][3] | float }}"
+      when: metrics_line | length > 0 and metrics_line[0] | length == 5
+
+    - name: Set default latency values when parsing fails
+      ansible.builtin.set_fact:
+        frame_size_measured: 0.0
+        actual_rate: 0.0
+        avg_latency: 0.0
+        max_latency: 999.0
+      when: not metrics_line or metrics_line | length == 0
+
+    - name: Extract histogram data for tolerance calculation
+      ansible.builtin.set_fact:
+        histogram_line: "{{
+          rfc2544_log | regex_search('\\{[^}]+\\}.*', multiline=False) }}"
+
+    - name: Calculate latency distribution nines (samples < 30μs)
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "{{ histogram_line }}" | \
+        awk -F';' '{
+          total=0; under_30=0
+          for(i=1; i<=NF; i++) {
+            if(match($i, /\{.*x<([0-9.]+)\}.*,([0-9]+),([0-9]+)/, arr)) {
+              lat_upper=arr[1]; count1=arr[2]; count2=arr[3]
+              total += count1 + count2
+              if(lat_upper < 30) under_30 += count1 + count2
+            } else if(match($i, /\{([0-9.]+)<=x<([0-9.]+)\}.*,([0-9]+),([0-9]+)/, arr)) {
+              lat_upper=arr[2]; count1=arr[3]; count2=arr[4]
+              total += count1 + count2
+              if(lat_upper < 30) under_30 += count1 + count2
+            }
+          }
+          if(total > 0) {
+            percent = (under_30 / total) * 100
+            nines = 0
+            if(percent >= 99.9999) nines=6
+            else if(percent >= 99.999) nines=5
+            else if(percent >= 99.99) nines=4
+            else if(percent >= 99.9) nines=3
+            else if(percent >= 99) nines=2
+            printf "%.6f,%d\n", percent, nines
+          } else {
+            print "0.0,0"
+          }
+        }'
+      register: distribution_calc
+      changed_when: false
+      failed_when: false
+      when: histogram_line is defined and histogram_line | length > 0
+
+    - name: Parse distribution calculation
+      ansible.builtin.set_fact:
+        latency_distribution_percent: "{{
+          distribution_calc.stdout.split(',')[0] | float if distribution_calc.stdout else 0.0 }}"
+        latency_distribution_nines: "{{
+          distribution_calc.stdout.split(',')[1] | int if distribution_calc.stdout else 0 }}"
+      when: distribution_calc.stdout is defined
+
+    - name: Set default distribution values when calculation fails
+      ansible.builtin.set_fact:
+        latency_distribution_percent: 0.0
+        latency_distribution_nines: 0
+      when: not distribution_calc.stdout is defined
+
+    - name: Load RFC2544 thresholds from test directory
+      ansible.builtin.stat:
+        path: "{{ current_test.dir_path }}/rfc2544-thresholds.yml"
+      register: thresholds_file
+
+    - name: Read RFC2544 thresholds
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/rfc2544-thresholds.yml"
+      register: thresholds_content
+      when: thresholds_file.stat.exists
+      failed_when: false
+
+    - name: Parse thresholds from file
+      ansible.builtin.set_fact:
+        throughput_threshold: "{{ (thresholds_content.content | b64decode | from_yaml).throughput_threshold }}"
+        max_latency_threshold: "{{ (thresholds_content.content | b64decode | from_yaml).max_latency_threshold }}"
+        tolerance_nines: "{{ (thresholds_content.content | b64decode | from_yaml).tolerance_nines }}"
+        absolute_max_latency: "{{ (thresholds_content.content | b64decode | from_yaml).absolute_max_latency }}"
+      when: thresholds_file.stat.exists and thresholds_content.content is defined
+
+    - name: Set default thresholds if file not found
+      ansible.builtin.set_fact:
+        throughput_threshold: 99.9
+        max_latency_threshold: 30
+        tolerance_nines: 6
+        absolute_max_latency: 50
+      when: not thresholds_file.stat.exists
+
+    - name: Apply pass/fail logic (KPI standard)
+      ansible.builtin.set_fact:
+        # RDS Primary: throughput ≥ 99.9% AND max_latency < 30μs
+        rds_criteria_met: "{{
+          (throughput_percent | float >= (throughput_threshold | float)) and
+          (max_latency | float < (max_latency_threshold | float)) }}"
+        # Tolerance Fallback: distribution_nines ≥ 6 AND max_latency < 50μs
+        tolerance_criteria_met: "{{
+          (latency_distribution_nines | int >= (tolerance_nines | int)) and
+          (max_latency | float < (absolute_max_latency | float)) }}"
+
+    - name: Determine final test status
+      ansible.builtin.set_fact:
+        test_passed: "{{
+          (not (has_traceback or has_exception)) and
+          has_test_complete and
+          (rds_criteria_met or tolerance_criteria_met) }}"
+        pass_criteria: "{{
+          'RDS' if rds_criteria_met
+          else ('Tolerance' if tolerance_criteria_met else 'None') }}"
+
+    - name: Build detailed status description
+      ansible.builtin.set_fact:
+        status_desc: "{{
+          'Error/Traceback detected' if (has_traceback or has_exception)
+          else ('Throughput: ' + (throughput_percent | string) + '%, Max Latency: ' +
+                (max_latency | string) + 'μs (' + pass_criteria + ')') }}"
 
     - name: Store RFC2544 result in report data
       ansible.builtin.set_fact:
-        report_data: >-
-          {{
-            report_data | combine({
-              'test_results': report_data.test_results | combine({
-                current_test.dir_name: {
-                  'test_type': 'rfc2544',
-                  'status': ('PASS' if rfc2544_passed else 'FAIL'),
-                  'key_metric': status_desc,
-                  'duration': 'N/A',
-                  'detail': rfc2544_log,
-                  'has_error': (has_traceback or has_exception),
-                  'throughput': throughput_value
+        report_data: "{{
+          report_data | combine({
+            'test_results': report_data.test_results | combine({
+              current_test.dir_name: {
+                'test_type': 'rfc2544',
+                'status': ('PASS' if test_passed else 'FAIL'),
+                'key_metric': status_desc,
+                'duration': 'N/A',
+                'detail': rfc2544_log,
+                'has_error': (has_traceback or has_exception),
+                'throughput_percent': throughput_percent,
+                'max_latency': max_latency,
+                'avg_latency': avg_latency,
+                'actual_rate': actual_rate,
+                'frame_size': frame_size_measured,
+                'latency_distribution_percent': latency_distribution_percent,
+                'latency_distribution_nines': latency_distribution_nines,
+                'rds_criteria_met': rds_criteria_met,
+                'tolerance_criteria_met': tolerance_criteria_met,
+                'pass_criteria': pass_criteria,
+                'thresholds': {
+                  'throughput': throughput_threshold,
+                  'max_latency': max_latency_threshold,
+                  'tolerance_nines': tolerance_nines,
+                  'absolute_max_latency': absolute_max_latency
+                },
+                'config': {
+                  'lat_duration': config_lat_duration,
+                  'frame_size': config_frame_size,
+                  'lat_rate': config_lat_rate,
+                  'port1': config_port1,
+                  'port2': config_port2,
+                  'testcfg': config_testcfg,
+                  'chassis': config_chassis
                 }
-              })
+              }
             })
-          }}
+          }) }}"
 
 - name: Handle missing RFC2544 log
   when: rfc2544_log_content.content is not defined

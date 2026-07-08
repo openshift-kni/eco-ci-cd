@@ -41,7 +41,9 @@ export RAN_METRICS_URL=https://pushgateway.ran-metrics.telco5g.corp.redhat.com/m
 
 # Clone ran-integration repository
 echo "Cloning ran-integration repository..."
-git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration
+set -x
+git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration --branch {{ ran_integration_branch | default('master') }}
+set +x
 cd /workspace/ran-integration{% if test_working_subdir is defined %}/{{ test_working_subdir }}{% endif %}
 
 

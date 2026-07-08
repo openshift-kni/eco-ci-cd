@@ -96,12 +96,63 @@
         fail_msg: "RDS Compare parser did not extract CR metrics"
         success_msg: "RDS Compare parser working correctly"
 
-    - name: Verify RFC2544 parser detected error
+    - name: Extract RFC2544 section for debugging
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -A50 "RFC2544" /tmp/molecule-debug-report.md || echo "RFC2544 section not found"
+      register: rfc2544_section
+      changed_when: false
+      failed_when: false
+
+    - name: Display RFC2544 section
+      ansible.builtin.debug:
+        msg: "{{ rfc2544_section.stdout_lines }}"
+
+    - name: Verify RFC2544 parser extracted metrics and pass/fail logic
       ansible.builtin.assert:
         that:
-          - "'Error/Traceback detected' in (report_content.content | b64decode)"
-        fail_msg: "RFC2544 parser did not detect error/traceback"
+          - "'RFC2544 Network Performance' in (report_content.content | b64decode)"
+          - "'99.999' in (report_content.content | b64decode)"
+          - "'Test Configuration' in (report_content.content | b64decode)"
+          - "'Test Results' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 parser did not extract metrics or apply pass/fail logic correctly"
         success_msg: "RFC2544 parser working correctly"
+
+    - name: Verify RFC2544 Test Configuration table structure
+      ansible.builtin.assert:
+        that:
+          - "'| Parameter | Value |' in (report_content.content | b64decode)"
+          - "'| **Duration** |' in (report_content.content | b64decode)"
+          - "'| **Frame Size** |' in (report_content.content | b64decode)"
+          - "'| **LAT Rate** |' in (report_content.content | b64decode)"
+          - "'| **Port 1** |' in (report_content.content | b64decode)"
+          - "'| **Port 2** |' in (report_content.content | b64decode)"
+          - "'| **Test Config** |' in (report_content.content | b64decode)"
+          - "'| **Chassis** |' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Configuration table structure incorrect"
+        success_msg: "RFC2544 Test Configuration table structure correct"
+
+    - name: Verify RFC2544 Test Configuration parameter values
+      ansible.builtin.assert:
+        that:
+          - "'| **Duration** | 600s |' in (report_content.content | b64decode)"
+          - "'| **Frame Size** | 512 bytes |' in (report_content.content | b64decode)"
+          - "'| **LAT Rate** | 0.8 |' in (report_content.content | b64decode)"
+          - "'| **Port 1** | //spirent-n4u-01/1/13 |' in (report_content.content | b64decode)"
+          - "'| **Port 2** | //spirent-n4u-01/1/14 |' in (report_content.content | b64decode)"
+          - "'| **Test Config** | spirent_testcfg.xml |' in (report_content.content | b64decode)"
+          - "'| **Chassis** | spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com |' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Configuration parameter values incorrect"
+        success_msg: "RFC2544 Test Configuration parameter values correct"
+
+    - name: Verify RFC2544 Test Results table contains measured values
+      ansible.builtin.assert:
+        that:
+          - "'| **Throughput** | 99.999%' in (report_content.content | b64decode)"
+          - "'| **Max Latency** | 26.527μs' in (report_content.content | b64decode)"
+          - "'| **Avg Latency** | 5.678μs' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Results table values incorrect"
+        success_msg: "RFC2544 Test Results table values correct"
 
     - name: Verify BIOS Validation parser shows failure
       ansible.builtin.assert:
@@ -188,7 +239,7 @@
           - "  - Cyclictest: per-thread metrics extracted ✓"
           - "  - CPU_UTIL: test cases extracted ✓"
           - "  - RDS Compare: CR metrics extracted ✓"
-          - "  - RFC2544: error detection ✓"
+          - "  - RFC2544: metrics extracted, pass/fail logic applied ✓"
           - "  - BIOS Validation: JUnit XML parsed ✓"
           - "  - ZTP Deployment: time extracted ✓"
           - "=========================================="

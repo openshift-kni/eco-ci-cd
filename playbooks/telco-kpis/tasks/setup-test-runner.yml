@@ -5,6 +5,14 @@
 # Optional variables:
 #   - skip_rebuild_image: Skip rebuild if image exists (default: false, always rebuild)
 
+- name: Force remove existing test container if present
+  containers.podman.podman_container:
+    name: "telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
+    state: absent
+    force: true
+  when: not (skip_rebuild_image | default(false) | bool)
+  failed_when: false
+
 - name: Remove existing test-runner image to ensure fresh credentials
   containers.podman.podman_image:
     name: telco-kpis-test-runner:latest

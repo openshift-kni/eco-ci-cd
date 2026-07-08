@@ -176,7 +176,7 @@
       ansible.builtin.debug:
         msg: "Cluster version: {{ version }}"
 
-    - name: Mirror eco-gotests image to disconnected registry
+    - name: Mirror images to disconnected registry
       when: mirror_registry | default('') | length > 0
       block:
         - name: Set eco-gotests mirror tag
@@ -196,9 +196,6 @@
           ansible.builtin.set_fact:
             eco_gotests_image: "{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}"
 
-    - name: Mirror PTP images to disconnected registry
-      when: mirror_registry | default('') | length > 0
-      block:
         - name: Write pull secret auth file for registry mirroring
           no_log: true
           ansible.builtin.copy:
@@ -246,6 +243,34 @@
           when: version.split('.')[1] | int < 21
           ansible.builtin.set_fact:
             ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
+
+        - name: Mirror cnf test image (ubi9/ubi) to disconnected registry
+          ansible.builtin.command: >
+            skopeo copy
+            --dest-tls-verify=false
+            docker://registry.access.redhat.com/ubi9/ubi:latest
+            docker://{{ mirror_registry }}/ubi9/ubi:latest
+          register: skopeo_ubi_result
+          changed_when: skopeo_ubi_result.rc == 0
+
+        - name: Override cnf_test_image to disconnected registry location
+          ansible.builtin.set_fact:
+            cnf_test_image: "{{ mirror_registry }}/ubi9/ubi:latest"
+
+        - name: Apply ImageTagMirrorSet for cnf test image on spoke cluster
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: config.openshift.io/v1
+              kind: ImageTagMirrorSet
+              metadata:
+                name: eco-gotests-images
+              spec:
+                imageTagMirrors:
+                  - mirrors:
+                      - "{{ mirror_registry }}/ubi9/ubi"
+                    source: registry.access.redhat.com/ubi9/ubi
 
     - name: Remove eco-gotests image
       when: pull_container_image is true

@@ -70,6 +70,25 @@
       delay: 10
       loop: "{{ argocd_apps }}"
 
+    - name: Get LocalVolume resources on spoke
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ spoke_kubeconfig }}"
+        api_version: local.storage.openshift.io/v1
+        kind: LocalVolume
+        namespace: openshift-local-storage
+      register: local_volumes
+
+    - name: Delete LocalVolume resources on spoke
+      kubernetes.core.k8s:
+        kubeconfig: "{{ spoke_kubeconfig }}"
+        state: absent
+        api_version: local.storage.openshift.io/v1
+        kind: LocalVolume
+        name: "{{ item.metadata.name }}"
+        namespace: openshift-local-storage
+      loop: "{{ local_volumes.resources | default([]) }}"
+      when: local_volumes.resources | length > 0
+
     - name: Remove finalizers from seed ManagedCluster # noqa: ignore-errors
       kubernetes.core.k8s:
         state: patched

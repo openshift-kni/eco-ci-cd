@@ -70,6 +70,32 @@
       delay: 10
       loop: "{{ argocd_apps }}"
 
+    - name: Get spoke pull secret from hub
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ hub_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ spoke_cluster }}"
+        name: "{{ spoke_cluster }}-pull-secret"
+      register: spoke_pull_secret
+      no_log: true
+
+    - name: Sync full pull secret to spoke openshift-config
+      kubernetes.core.k8s:
+        kubeconfig: "{{ spoke_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pull-secret
+            namespace: openshift-config
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: "{{ spoke_pull_secret.resources[0].data['.dockerconfigjson'] }}"
+      when: spoke_pull_secret.resources | length > 0
+      no_log: true
+
     - name: Get LocalVolume resources on spoke
       kubernetes.core.k8s_info:
         kubeconfig: "{{ spoke_kubeconfig }}"

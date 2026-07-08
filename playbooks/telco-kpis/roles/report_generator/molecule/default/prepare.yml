@@ -289,14 +289,44 @@
         state: directory
         mode: '0755'
 
-    - name: Create mock RFC2544 log with error
+    - name: Create mock RFC2544 log with successful test (RDS criteria met)
       ansible.builtin.copy:
         content: |
-          Starting RFC2544 test
-          Traceback (most recent call last):
-            File "test.py", line 42, in run_test
-          Exception: Connection timeout
+          Cloning into '/workspace/ran-integration'...
+          2026-07-06 09:50:51.328227: === RFC2544 Parameters ===
+          2026-07-06 09:50:51.328250: LAT_DURATION: 600 (type: int)
+          2026-07-06 09:50:51.328260: FRAME_SIZE: 512 (type: int)
+          2026-07-06 09:50:51.328270: LAT_RATE: 0.8 (type: float)
+          2026-07-06 09:50:51.328280: PORT1: //spirent-n4u-01/1/13
+          2026-07-06 09:50:51.328290: PORT2: //spirent-n4u-01/1/14
+          2026-07-06 09:50:51.328300: STCWEB: spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888
+          2026-07-06 09:50:51.328310: CHASSIS: spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com
+          2026-07-06 09:50:51.328320: TESTCFG: spirent_testcfg.xml
+          2026-07-06 09:50:51.328330: CLUSTER: test-spoke-01
+          2026-07-06 09:50:51.328340: ========================
+          2026-07-06 09:50:51.328350: Setting up spirent configuration...
+          2026-07-06 09:51:17.345902: Connecting to 'spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com'
+          2026-07-06 09:51:17.960867: Preparing ports: //spirent-n4u-01/1/13 //spirent-n4u-01/1/14
+          2026-07-06 09:54:11.417380: Measuring throughput...
+          2026-07-06 10:28:01.462162: Max throughput observed: 99.999
+          2026-07-06 10:28:01.464546: Running latency test for 600s...
+          2026-07-06 10:38:38.959103: Test complete!
+          99.999
+          512.0 79.999 5.678 26.527 6.946
+          600
+          {x<-2.92},0,0;{-2.92<=x<-0.36},0,0;{-0.36<=x<2.20},0,0;{2.20<=x<4.76},0,0;{4.76<=x<7.32},1323242801,1316971678;{7.32<=x<9.88},86389244,92659443;{9.88<=x<12.44},95767,96388;{12.44<=x<15.00},26756,27134;{15.00<=x<17.56},4157,4049;{17.56<=x<20.12},939,922;{20.12<=x<22.68},502,550;{22.68<=x<25.24},142,175;{25.24<=x<27.80},31,0;{27.80<=x<30.36},0,0;{30.36<=x<32.92},0,0;{x>=32.92},0,0;
         dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/podman-run.log"
+        mode: '0644'
+
+    - name: Create mock RFC2544 thresholds file
+      ansible.builtin.copy:
+        content: |
+          ---
+          throughput_threshold: 99.9
+          max_latency_threshold: 30
+          tolerance_nines: 6
+          absolute_max_latency: 50
+        dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/rfc2544-thresholds.yml"
         mode: '0644'
 
     - name: Create mock BIOS Validation test directory

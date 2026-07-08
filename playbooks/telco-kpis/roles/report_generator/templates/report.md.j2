@@ -204,6 +204,64 @@ including all deployment phases from GitOps sync to workload readiness.
 </details>
 {% endif %}
 
+{% elif result.test_type == 'rfc2544' and result.throughput_percent is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - RFC2544 Network Performance ({{ result.pass_criteria }})
+
+{% if result.config is defined %}
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Duration** | {{ result.config.lat_duration }}s |
+| **Frame Size** | {{ result.config.frame_size }} bytes |
+| **LAT Rate** | {{ result.config.lat_rate }} |
+| **Port 1** | {{ result.config.port1 }} |
+| **Port 2** | {{ result.config.port2 }} |
+| **Test Config** | {{ result.config.testcfg }} |
+| **Chassis** | {{ result.config.chassis }} |
+
+{% endif %}
+### Test Results
+
+| Metric | Measured | Threshold | Status |
+|--------|----------|-----------|--------|
+| **Throughput** | {{ result.throughput_percent }}% | ≥ {{ result.thresholds.throughput }}% | {{ '✅' if (result.throughput_percent | float) >= (result.thresholds.throughput | float) else '❌' }} |
+| **Max Latency** | {{ result.max_latency }}μs | < {{ result.thresholds.max_latency }}μs | {{ '✅' if (result.max_latency | float) < (result.thresholds.max_latency | float) else '❌' }} |
+| **Avg Latency** | {{ result.avg_latency }}μs | - | - |
+| **Frame Size** | {{ result.frame_size | int }} bytes | - | - |
+| **Line Rate** | {{ result.actual_rate }}% | 80% | - |
+
+### Pass/Fail Criteria
+
+{% if result.rds_criteria_met %}
+**✅ RDS Primary Criteria Met:**
+- Throughput ≥ {{ result.thresholds.throughput }}% ✓
+- Max Latency < {{ result.thresholds.max_latency }}μs ✓
+{% elif result.tolerance_criteria_met %}
+**✅ Tolerance Fallback Criteria Met:**
+- Latency Distribution: {{ result.latency_distribution_nines }} nines ({{ result.latency_distribution_percent }}%)
+- Max Latency < {{ result.thresholds.absolute_max_latency }}μs ✓
+- Note: RDS primary latency threshold missed, but tolerance maintained
+{% else %}
+**❌ Test Failed:**
+- RDS Primary: {{ '✓' if result.rds_criteria_met else '✗' }} (Throughput ≥ {{ result.thresholds.throughput }}% AND Max Latency < {{ result.thresholds.max_latency }}μs)
+- Tolerance Fallback: {{ '✓' if result.tolerance_criteria_met else '✗' }} ({{ result.thresholds.tolerance_nines }} nines AND Max Latency < {{ result.thresholds.absolute_max_latency }}μs)
+{% endif %}
+
+### Latency Distribution
+
+**Distribution Quality**: {{ result.latency_distribution_nines }} nines ({{ result.latency_distribution_percent }}% of samples < 30μs)
+
+<details>
+<summary><b>▶ Click to expand raw test output</b></summary>
+
+```
+{{ result.detail }}
+```
+
+</details>
+
 {% else %}
 {{ result.detail | default('No detailed output available.') }}
 {% endif %}

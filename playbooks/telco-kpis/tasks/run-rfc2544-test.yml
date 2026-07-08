@@ -100,17 +100,55 @@
         port2_from_inventory: "{{ port_params | regex_search('PORT2=([^;]+)', '\\1') | first | default('') }}"
       when: port_params | length > 0
 
-- name: Set RFC2544 Spirent configuration from inventory (with fallbacks)
+- name: Set RFC2544 Spirent configuration from inventory or parameters
   ansible.builtin.set_fact:
-    chassis: >-
-      {{ chassis | default(chassis_from_inventory | default('', true)) | default(telco_kpis_default_spirent_chassis, true) }}
-    stcweb: >-
-      {{ stcweb | default(stcweb_from_inventory | default('', true)) | default(telco_kpis_default_spirent_stcweb, true) }}
-    port1: >-
-      {{ port1 | default(port1_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port1, true) }}
-    port2: >-
-      {{ port2 | default(port2_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port2, true) }}
-    spirent_config: "{{ telco_kpis_default_spirent_config | default('spirent_testcfg.xml') }}"
+    chassis: "{{ chassis | default(chassis_from_inventory | default('')) }}"
+    stcweb: "{{ stcweb | default(stcweb_from_inventory | default('')) }}"
+    port1: "{{ port1 | default(port1_from_inventory | default('')) }}"
+    port2: "{{ port2 | default(port2_from_inventory | default('')) }}"
+    spirent_config: "{{ spirent_config_file | default('spirent_testcfg.xml') }}"
+
+- name: Validate required RFC2544 Spirent configuration parameters
+  ansible.builtin.assert:
+    that:
+      - chassis is defined and chassis | length > 0
+      - stcweb is defined and stcweb | length > 0
+      - port1 is defined and port1 | length > 0
+      - port2 is defined and port2 | length > 0
+    fail_msg: |
+      ❌ Missing required Spirent configuration for RFC2544 test
+
+      REQUIRED PARAMETERS:
+        • chassis  - Spirent chassis hostname/IP
+        • stcweb   - Spirent Test Center Web API (hostname:port)
+        • port1    - First test port (format: //chassis/slot/port)
+        • port2    - Second test port (format: //chassis/slot/port)
+
+      CONFIGURATION SOURCES (in priority order):
+        1. Jenkins job parameters (chassis, stcweb, port1, port2)
+        2. ran-integration inventory file:
+           {{ ran_inventory_file }}
+
+      CURRENT VALUES:
+        chassis: {{ chassis if (chassis is defined and chassis | length > 0) else '❌ NOT SET' }}
+        stcweb:  {{ stcweb if (stcweb is defined and stcweb | length > 0) else '❌ NOT SET' }}
+        port1:   {{ port1 if (port1 is defined and port1 | length > 0) else '❌ NOT SET' }}
+        port2:   {{ port2 if (port2 is defined and port2 | length > 0) else '❌ NOT SET' }}
+
+      RAN-INTEGRATION INVENTORY:
+        File exists: {{ ran_inventory_stat.stat.exists }}
+        Path: {{ ran_inventory_file }}
+
+      EXAMPLE INVENTORY CONTENT:
+        CHASSIS=spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com
+        STCWEB=spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888
+        PORT_PARAMS=PORT1=//spirent-n4u-01/1/16;PORT2=//spirent-n4u-01/1/15
+
+      RESOLUTION:
+        • Provide parameters via Jenkins job, OR
+        • Ensure ran-integration inventory exists with Spirent configuration, OR
+        • Verify cluster FQDN matches inventory filename: hosts.{{ cluster_fqdn }}
+    success_msg: "✓ All required Spirent configuration parameters validated"
 
 - name: Display Spirent configuration source
   ansible.builtin.debug:
@@ -119,11 +157,25 @@
 
 - name: Build RFC2544_PARAMS string
   ansible.builtin.set_fact:
-    rfc2544_params: >-
-      PORT1={{ port1 }};PORT2={{ port2 }};STCWEB={{ stcweb }};CHASSIS={{ chassis }};
-      LAT_DURATION={{ duration_seconds }};TESTCFG={{ spirent_config }};CLUSTER={{ spoke_cluster }};
-      FRAME_SIZE={{ frame_size | default(telco_kpis_default_frame_size) }};
-      LAT_RATE={{ lat_rate | default(telco_kpis_default_lat_rate) }}
+    rfc2544_params: "{{ rfc2544_params_list | join(';') }}"
+  vars:
+    rfc2544_params_list:
+      - "PORT1={{ port1 }}"
+      - "PORT2={{ port2 }}"
+      - "STCWEB={{ stcweb }}"
+      - "CHASSIS={{ chassis }}"
+      - "LAT_DURATION={{ duration_seconds }}"
+      - "TESTCFG={{ spirent_config }}"
+      - "CLUSTER={{ spoke_cluster }}"
+      - "FRAME_SIZE={{ frame_size | default(telco_kpis_default_frame_size) }}"
+      - "LAT_RATE={{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+
+- name: Set RFC2544 pass/fail thresholds with defaults
+  ansible.builtin.set_fact:
+    rfc2544_throughput_threshold: "{{ throughput_threshold | default('99.9') }}"
+    rfc2544_max_latency_threshold: "{{ max_latency_threshold | default('30') }}"
+    rfc2544_tolerance_nines: "{{ tolerance_nines | default('6') }}"
+    rfc2544_absolute_max_latency: "{{ absolute_max_latency | default('50') }}"
 
 - name: Display test configuration
   ansible.builtin.debug:
@@ -146,6 +198,10 @@
       - "  PORT1: {{ port1 }}"
       - "  PORT2: {{ port2 }}"
       - "  TESTCFG: {{ spirent_config }}"
+      - "=========================================="
+      - "Pass/Fail Criteria (KPI Standard):"
+      - "  RDS Primary: Throughput ≥ {{ rfc2544_throughput_threshold }}% AND Max Latency < {{ rfc2544_max_latency_threshold }}μs"
+      - "  Tolerance Fallback: {{ rfc2544_tolerance_nines }} nines AND Max Latency < {{ rfc2544_absolute_max_latency }}μs"
       - "=========================================="
       - "RFC2544_PARAMS: {{ rfc2544_params }}"
       - "=========================================="
@@ -190,14 +246,25 @@
       pip3 install --user stcrestclient || true
     test_command_prefix: |
       echo "RFC2544_PARAMS: {{ rfc2544_params }}"
-      # WORKAROUND: Spirent XML has ErrorHandler=PAUSE_ON_ERROR which stalls automated runs
-      # Patch to STOP_ON_ERROR for automated execution
-      sed -i "s/    subscribe_results(stc)/    subscribe_results(stc)\\n    \
-        stc.config(\"sequencer1\", ErrorHandler=\"STOP_ON_ERROR\"); \
-        stc.apply(); \
-        print(\"WARNING: patched ErrorHandler to STOP_ON_ERROR (workaround)\", file=sys.stderr)/" main.py
+      ### # WORKAROUND: Spirent XML has ErrorHandler=PAUSE_ON_ERROR which stalls automated runs
+      ### # Patch to STOP_ON_ERROR for automated execution (using multiple sed for proper indentation)
+      ### sed -i '/subscribe_results(stc)/a\    stc.config("sequencer1", ErrorHandler="STOP_ON_ERROR")' main.py
+      ### sed -i '/stc.config("sequencer1", ErrorHandler="STOP_ON_ERROR")/a\    stc.apply()' main.py
+      ### sed -i '/stc.apply()/a\    print("WARNING: patched ErrorHandler to STOP_ON_ERROR (workaround)", file=sys.stderr)' main.py
     test_command: 'python3 main.py "{{ rfc2544_params }}" 2>&1 | tee /workspace/artifacts/rfc2544-output.log'
     ran_integration_repo: "{{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
+    ran_integration_branch: "{{ ran_integration_branch | default('master') }}"
+
+- name: Save RFC2544 thresholds for parser
+  ansible.builtin.copy:
+    content: |
+      ---
+      throughput_threshold: {{ rfc2544_throughput_threshold }}
+      max_latency_threshold: {{ rfc2544_max_latency_threshold }}
+      tolerance_nines: {{ rfc2544_tolerance_nines }}
+      absolute_max_latency: {{ rfc2544_absolute_max_latency }}
+    dest: "{{ artifacts_dir.path }}/rfc2544-thresholds.yml"
+    mode: '0644'
 
 - name: Template RFC2544 test script to bastion
   ansible.builtin.template:

@@ -41,3 +41,4 @@
         mode: '0775'
         format: gz
       become: true
+      no_log: true

@@ -52,3 +52,4 @@
         dest: "{{ must_gather_artifacts_dir }}/must-gather-{{ scope }}.tar.gz"
         mode: '0775'
         format: gz
+      no_log: true

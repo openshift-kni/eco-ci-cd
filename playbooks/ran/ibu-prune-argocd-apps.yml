@@ -146,7 +146,7 @@
       retries: 30
       delay: 10
 
-    - name: Delete klusterlet from spoke to complete hub detachment
+    - name: Delete klusterlet from spoke to complete hub detachment # noqa: ignore-errors
       kubernetes.core.k8s:
         state: absent
         api_version: operator.open-cluster-management.io/v1

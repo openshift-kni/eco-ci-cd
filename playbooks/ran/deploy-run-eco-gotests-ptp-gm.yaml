@@ -133,9 +133,9 @@
             kubeconfig: "{{ hub_kubeconfig }}"
           register: spoke_bmc_host
 
-        - name: Extract BMC IP from spoke BMC address
+        - name: Extract BMC host from spoke BMC address
           ansible.builtin.set_fact:
-            spoke_bmc_ip: "{{ (spoke_bmc_host.resources[0].spec.bmc.address | ansible.builtin.urlsplit).hostname }}"
+            spoke_bmc_ip: "{{ spoke_bmc_host.resources[0].spec.bmc.address | ansible.builtin.urlsplit('netloc') }}"
 
         - name: Write spoke kubeconfig to test directory
           ansible.builtin.copy:

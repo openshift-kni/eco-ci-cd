@@ -153,6 +153,7 @@
         kind: Klusterlet
         name: klusterlet
         kubeconfig: "{{ spoke_kubeconfig }}"
+      ignore_errors: true
 
     - name: Wait for ACM agent namespaces to be removed from spoke
       kubernetes.core.k8s_info:

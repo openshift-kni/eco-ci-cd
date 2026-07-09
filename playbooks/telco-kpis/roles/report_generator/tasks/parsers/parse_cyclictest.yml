@@ -1,6 +1,10 @@
 ---
 # Parse Cyclictest results - extract detailed per-thread metrics
 
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Read podman-run.log for Cyclictest
   ansible.builtin.slurp:
     src: "{{ current_test.dir_path }}/podman-run.log"
@@ -13,6 +17,12 @@
     - name: Decode log content
       ansible.builtin.set_fact:
         cyclictest_log: "{{ cyclictest_log_content.content | b64decode }}"
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ cyclictest_log }}"
+
 
     - name: Extract Min/Avg/Max latency lines
       ansible.builtin.set_fact:
@@ -100,11 +110,19 @@
                   'test_type': 'cyclictest',
                   'status': ('PASS' if cyclictest_passed else 'FAIL'),
                   'key_metric': cyclictest_key_metric,
-                  'duration': cyclictest_duration,
+                  'duration': test_duration_human,
                   'max_overall': max_overall,
                   'threads': thread_results | length if thread_results is defined else 0,
                   'thread_results': thread_results | default([]),
-                  'raw_log_excerpt': cyclictest_log_excerpt
+                  'raw_log_excerpt': cyclictest_log_excerpt,
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  },
                 }
               })
             })

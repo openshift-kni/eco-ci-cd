@@ -1,6 +1,9 @@
 ---
 # Parse reboot test results from JUnit XML
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Find reboot JUnit XML files
   ansible.builtin.find:
     paths: "{{ current_test.dir_path }}"
@@ -18,6 +21,19 @@
     - name: Parse XML to extract test results
       ansible.builtin.set_fact:
         reboot_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Read podman-run.log
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/podman-run.log"
+      register: reboot_log_content
+      failed_when: false
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ reboot_log_content.content | b64decode if reboot_log_content.content is defined else '' }}"
+      when: reboot_log_content.content is defined
+
 
     - name: Extract test counts from XML
       ansible.builtin.set_fact:
@@ -56,6 +72,49 @@
         reboot_count: "N/A"
         reboot_log_excerpt: "No log available"
 
+    - name: Extract test case names and status
+      ansible.builtin.set_fact:
+        reboot_testcase_basic: "{{ reboot_xml | regex_findall('<testcase name=\"([^\"]+)\"[^>]+status=\"([^\"]+)\" time=\"([^\"]+)\"', multiline=True) }}"
+
+    - name: Extract skip messages
+      ansible.builtin.set_fact:
+        reboot_skip_msg_map: {}
+
+    - name: Build skip message mapping
+      ansible.builtin.set_fact:
+        reboot_skip_msg_map: >-
+          {{ reboot_skip_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ reboot_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<skipped message=\"([^\"]*)\"', multiline=True) }}"
+      when: reboot_xml | regex_search('skipped message')
+
+    - name: Extract failure messages
+      ansible.builtin.set_fact:
+        reboot_failure_msg_map: {}
+
+    - name: Build failure message mapping
+      ansible.builtin.set_fact:
+        reboot_failure_msg_map: >-
+          {{ reboot_failure_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ reboot_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<failure message=\"([^\"]*)\"', multiline=True) }}"
+      when: reboot_xml | regex_search('failure message')
+
+    - name: Build test case list
+      ansible.builtin.set_fact:
+        reboot_test_cases: >-
+          {{ reboot_test_cases | default([]) + [{
+            'name': item[0],
+            'status': item[1],
+            'time': item[2],
+            'skip_message': reboot_skip_msg_map.get(item[0], ''),
+            'failure_message': reboot_failure_msg_map.get(item[0], '')
+          }] }}
+      loop: "{{ reboot_testcase_basic }}"
+      when: reboot_testcase_basic | length > 0
+
+    - name: Filter out BeforeSuite/AfterSuite/ReportAfter from display
+      ansible.builtin.set_fact:
+        reboot_filtered_test_cases: "{{ (reboot_test_cases | default([])) | rejectattr('name', 'search', '\\[(?:Before|After|ReportAfter)') | list }}"
+
     - name: Build reboot result summary
       ansible.builtin.set_fact:
         reboot_result:
@@ -65,6 +124,7 @@
           status: "{{ 'PASS' if reboot_failures | int == 0 else 'FAIL' }}"
           key_metric: "P:{{ reboot_tests }} F:{{ reboot_failures }} S:{{ reboot_skipped }}"
           reboot_count: "{{ reboot_count }}"
+          test_cases: "{{ reboot_filtered_test_cases | default([]) }}"
 
     - name: Store reboot result in report data
       ansible.builtin.set_fact:
@@ -76,12 +136,21 @@
                   'test_type': 'reboot',
                   'status': reboot_result.status,
                   'key_metric': reboot_result.key_metric,
-                  'duration': 'N/A',
+                  'duration': test_duration_human,
                   'passed': reboot_result.passed,
                   'failed': reboot_result.failed,
                   'skipped': reboot_result.skipped,
                   'reboot_count': reboot_result.reboot_count,
-                  'raw_log_excerpt': reboot_log_excerpt | default('No log available')
+                  'test_cases': reboot_result.test_cases,
+                  'raw_log_excerpt': reboot_log_excerpt | default('No log available'),
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  },
                 }
               })
             })

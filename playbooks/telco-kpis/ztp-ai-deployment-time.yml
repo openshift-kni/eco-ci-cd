@@ -249,6 +249,15 @@
       loop: "{{ test_artifact_files.files }}"
       when: test_artifact_files.files | length > 0
 
+    - name: Cleanup old ZTP test artifacts (keep only latest)
+      ansible.builtin.include_role:
+        name: artifact_management
+        tasks_from: cleanup-old-artifacts.yml
+      vars:
+        artifact_management_shared_base: "/home/telcov10n/telco-kpis-artifacts"
+        artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+        artifact_management_test_name: "{{ test_name }}"
+
     - name: Create local artifact directory
       ansible.builtin.file:
         path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_artifacts_name }}"

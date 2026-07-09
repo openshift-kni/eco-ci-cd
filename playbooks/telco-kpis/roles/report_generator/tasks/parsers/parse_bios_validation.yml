@@ -1,6 +1,9 @@
 ---
 # Parse BIOS Validation results from JUnit XML
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Find BIOS validation JUnit XML files
   ansible.builtin.find:
     paths: "{{ current_test.dir_path }}"
@@ -50,7 +53,7 @@
                   'test_type': 'bios_validation',
                   'status': bios_result.status,
                   'key_metric': bios_result.key_metric,
-                  'duration': 'N/A',
+                  'duration': test_duration_human,
                   'detail': bios_log.content | b64decode if bios_log.content is defined else 'No log available',
                   'passed': bios_result.passed,
                   'failed': bios_result.failed,

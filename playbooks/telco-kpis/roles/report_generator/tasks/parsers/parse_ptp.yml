@@ -1,6 +1,9 @@
 ---
 # Parse PTP test results from podman-run.log
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Read podman-run.log for PTP test
   ansible.builtin.slurp:
     src: "{{ current_test.dir_path }}/podman-run.log"
@@ -13,6 +16,11 @@
     - name: Decode log content
       ansible.builtin.set_fact:
         ptp_log: "{{ ptp_log_content.content | b64decode }}"
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ ptp_log }}"
 
     - name: Extract PTP metrics from log
       ansible.builtin.set_fact:
@@ -68,7 +76,7 @@
                   'test_type': 'ptp',
                   'status': ('PASS' if ptp_passed else 'FAIL'),
                   'key_metric': ptp_key_metric,
-                  'duration': ptp_duration,
+                  'duration': test_duration_human,
                   'ptp4l_max': ptp4l_max,
                   'ptp4l_min': ptp4l_min,
                   'ptp4l_avg': ptp4l_avg,
@@ -76,7 +84,15 @@
                   'phc2sys_min': phc2sys_min,
                   'phc2sys_avg': phc2sys_avg,
                   'ptp4l_restarts': ptp4l_restarts,
-                  'raw_log_excerpt': ptp_log_excerpt
+                  'raw_log_excerpt': ptp_log_excerpt,
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  }
                 }
               })
             })

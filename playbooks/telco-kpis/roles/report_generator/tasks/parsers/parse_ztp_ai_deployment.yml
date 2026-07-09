@@ -109,7 +109,7 @@
           failed: "{{ ztp_failures }}"
           skipped: "{{ ztp_skipped }}"
           status: "{{ 'PASS' if ztp_failures | int == 0 else 'FAIL' }}"
-          key_metric: "Time:{{ deployment_time_seconds }}s, Reboots:{{ reboot_count | default('N/A') }}"
+          key_metric: "Deployment Time:{{ deployment_time_seconds }}s, Reboot Count:{{ reboot_count | default('N/A') }}"
           deployment_time: "{{ deployment_time_seconds }}s"
           deployment_time_human: "{{ deployment_time_human }}"
           reboot_count: "{{ reboot_count | default('N/A') }}"

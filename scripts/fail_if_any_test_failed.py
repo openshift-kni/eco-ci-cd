@@ -199,8 +199,10 @@ def _print_summary_and_return_status(total_tests: int, failed_tests: int,
 
 def main() -> int:
     """Main entry point."""
-    shared_dir = os.getenv('SHARED_DIR', '.')
-    return verify_junit_reports(shared_dir)
+    tests_file_dir = os.getenv('TESTS_DIR', os.getenv('SHARED_DIR', '.'))
+
+    print(f'Using Dirctory {tests_file_dir}')
+    return verify_junit_reports(tests_file_dir)
 
 
 if __name__ == "__main__":

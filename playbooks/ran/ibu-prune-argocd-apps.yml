@@ -76,7 +76,7 @@
         api_version: v1
         kind: Secret
         namespace: "{{ spoke_cluster }}"
-        name: "{{ spoke_cluster }}-pull-secret"
+        name: "{{ spoke_cluster }}-merged-pull-secret"
       register: spoke_pull_secret
       no_log: true
 

@@ -1,0 +1,200 @@
+---
+# Workaround: Prometheus pod stuck in Init:0/1 state
+#
+# Issue: prometheus-k8s-0 pod stuck in Pending/Init state blocking reboot tests
+# Root Causes:
+#   1. Corrupted alertmanager-main-generated ConfigMap (OCPBUGS-65953, OCPBUGS-70352)
+#   2. Missing ACM observability secrets (hub-alertmanager-router-ca, observability-alertmanager-accessor)
+# Affected: OCP 4.16+ deployments with ACM spoke configuration
+# Impact: CNF-gotests reboot test BeforeEach health check skips all test cases
+# Expected Removal: When upstream bugs are fixed in OCP 4.17+
+#
+# This workaround:
+# 1. Detects if prometheus-k8s-0 is stuck
+# 2. Checks for missing ACM observability secrets
+# 3. Creates dummy secrets if missing (allows pod to start without observability)
+# 4. Replaces corrupted alertmanager ConfigMap if needed
+# 5. Recreates pod and waits for Ready state
+
+- name: Check if prometheus-k8s-0 pod exists
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+    kind: Pod
+    namespace: openshift-monitoring
+    name: prometheus-k8s-0
+  register: prometheus_pod
+  failed_when: false
+
+- name: Check alertmanager-main-generated ConfigMap
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+    kind: ConfigMap
+    namespace: openshift-monitoring
+    name: alertmanager-main-generated
+  register: alertmanager_cm
+  when: prometheus_pod.resources | length > 0
+
+- name: Check for ACM observability secrets
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+    kind: Secret
+    namespace: openshift-monitoring
+    name: "{{ item }}"
+  register: acm_secrets
+  loop:
+    - hub-alertmanager-router-ca
+    - observability-alertmanager-accessor
+  when: prometheus_pod.resources | length > 0
+
+- name: Determine if WA is needed
+  ansible.builtin.set_fact:
+    prometheus_stuck: >-
+      {{ prometheus_pod.resources | length > 0 and
+         (prometheus_pod.resources[0].status.phase == 'Pending' or
+          (prometheus_pod.resources[0].status.containerStatuses is defined and
+           prometheus_pod.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'prometheus') | map(attribute='ready') | first == false)) }}
+    wa_already_applied: >-
+      {{ alertmanager_cm.resources | length > 0 and
+         alertmanager_cm.resources[0].data['alertmanager.yaml.gz'] == 'H4sIAAAAAAAA/0yOQQrCMBBF95wiSxeVQhcu3HoCwY1gF0k6bQOdSTOTUsRzdmgXrt7j///x5gkf4C8LDmYSaIBzWSnpoGjYo3xVdWAXQmWXCNnSPBg0SBxhzm0p2xrPo1qQVvd+hN9uRs4x8S+VQW9kF+LrO3U51OBaT02BVTwBUZs+8lAyxV3k88SYOr72yC1bX1G6t7neMu08nVmz/QMAAP//jkUArgAAAA==' }}
+    missing_acm_secrets: >-
+      {{ acm_secrets.results | selectattr('resources', 'equalto', []) | map(attribute='item') | list }}
+  when: prometheus_pod.resources | length > 0
+
+- name: No WA needed - prometheus-k8s-0 not found
+  ansible.builtin.debug:
+    msg: "✓ No WA needed - prometheus-k8s-0 pod does not exist"
+  when: prometheus_pod.resources | length == 0
+
+- name: No WA needed - prometheus-k8s-0 is healthy
+  ansible.builtin.debug:
+    msg: "✓ No WA needed - prometheus-k8s-0 is running and healthy"
+  when:
+    - prometheus_pod.resources | length > 0
+    - not prometheus_stuck
+    - not wa_already_applied
+
+- name: WA already applied - prometheus-k8s-0 is healthy with fix
+  ansible.builtin.debug:
+    msg: "ℹ️  WA already applied - prometheus-k8s-0 is healthy with workaround ConfigMap"
+  when:
+    - prometheus_pod.resources | length > 0
+    - not prometheus_stuck
+    - wa_already_applied
+
+- name: Apply Prometheus stuck workaround
+  when:
+    - prometheus_pod.resources | length > 0
+    - prometheus_stuck
+  block:
+    - name: Display WARNING about prometheus-k8s-0 stuck issue
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "⚠️  WARNING: Prometheus pod stuck detected!"
+          - "=========================================="
+          - "Issue: prometheus-k8s-0 is stuck in Pending/Init state"
+          - "Root Causes:"
+          - "  - Missing ACM secrets: {{ missing_acm_secrets | join(', ') if missing_acm_secrets | length > 0 else 'None' }}"
+          - "  - Corrupted ConfigMap: {{ 'Yes' if not wa_already_applied else 'No' }}"
+          - "Related Bugs: OCPBUGS-65953, OCPBUGS-70352"
+          - "Action: Applying workaround to fix the pod"
+          - "=========================================="
+
+    - name: Create hub-alertmanager-router-ca secret (dummy self-signed CA cert)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: hub-alertmanager-router-ca
+            namespace: openshift-monitoring
+          type: Opaque
+          stringData:
+            service-ca.crt: |
+              -----BEGIN CERTIFICATE-----
+              MIIDBzCCAe+gAwIBAgIUK7UiagLMxBIIYcU0UGOXhb9lbuEwDQYJKoZIhvcNAQEL
+              BQAwEzERMA8GA1UEAwwIZHVtbXktY2EwHhcNMjYwNzEwMTMwMTM3WhcNMjcwNzEw
+              MTMwMTM3WjATMREwDwYDVQQDDAhkdW1teS1jYTCCASIwDQYJKoZIhvcNAQEBBQAD
+              ggEPADCCAQoCggEBANWid8B2jyWM4h+XcqdK7cAdyd6OTNBpuT1vl5Twq9jhC9AO
+              brTnyz34/d/EeCA7Ovsut0jAfP3/g1LwqrjfamF3+lgc8xZ+jQ28vshNK+LrEkYo
+              HcAQG9OAid5/X5+mEHn4DvCNq8Cy28TxCy0MsdkuvTxKFYmBCClr6IcRlMKmPrBb
+              KOFNvMDq1+rR79C7EQaZepaB0VM0A0/d7Y1l3nStao5hW8LQQ3akdQCVHin4mIbz
+              oB6LtLP3hx475r39QZhQHrRULZ7X3YFJ/QzS/4edVdfGS71R00PzEOzuAROLU8mz
+              Nbq8NqtGqIZF/ez+VPDD6Ss9/CSiwreJGAr4oZsCAwEAAaNTMFEwHQYDVR0OBBYE
+              FFgWMUCYnbEVjIADMJMVWYJWStHDMB8GA1UdIwQYMBaAFFgWMUCYnbEVjIADMJMV
+              WYJWStHDMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAM60qw9w
+              KjNFNwpYvT/pO2Vw9l1ao9w0pJHmQspIc8a64eaIfN4knzWqIUIfW1PrBzqa7bKn
+              YMC9esz6K/EC4WqyR7AvOWIu+GwQMpPFE0ayts1cVsM+f4NMSszYHeZm4hyS2Txv
+              rgc4Qrrk2XLCjJkTlBf+xPDHqZGqKGcG/j4SJrOcuuU5SLbK5qfdWqBvCEyVH+Wv
+              xQl/WJPqdgrgyAFFdHY3P9xcz1VM1mFh03En+m53ROGymwrFLRHj8SQu4OkQ40u7
+              rCBPkvwTZ6zNiP4xdlQWTDfYiED/30YG197P39QPk4xFuIXUf8LWJHAKAFSazvMz
+              9pdErnfZ0sxx32g=
+              -----END CERTIFICATE-----
+      when: "'hub-alertmanager-router-ca' in missing_acm_secrets"
+
+    - name: Create observability-alertmanager-accessor secret (dummy token)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: observability-alertmanager-accessor
+            namespace: openshift-monitoring
+          type: Opaque
+          stringData:
+            token: ""
+      when: "'observability-alertmanager-accessor' in missing_acm_secrets"
+
+    - name: Apply fixed alertmanager ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: alertmanager-main-generated
+            namespace: openshift-monitoring
+          data:
+            alertmanager.yaml.gz: H4sIAAAAAAAA/0yOQQrCMBBF95wiSxeVQhcu3HoCwY1gF0k6bQOdSTOTUsRzdmgXrt7j///x5gkf4C8LDmYSaIBzWSnpoGjYo3xVdWAXQmWXCNnSPBg0SBxhzm0p2xrPo1qQVvd+hN9uRs4x8S+VQW9kF+LrO3U51OBaT02BVTwBUZs+8lAyxV3k88SYOr72yC1bX1G6t7neMu08nVmz/QMAAP//jkUArgAAAA==
+      when: not wa_already_applied
+
+    - name: Delete stuck prometheus-k8s-0 pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+        state: absent
+        kind: Pod
+        namespace: openshift-monitoring
+        name: prometheus-k8s-0
+
+    - name: Wait for prometheus-k8s-0 to be recreated and ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ workarounds_prometheus_kubeconfig }}"
+        kind: Pod
+        namespace: openshift-monitoring
+        name: prometheus-k8s-0
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      register: prometheus_fixed
+
+    - name: Display WA success message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "✅ Prometheus workaround applied successfully"
+          - "=========================================="
+          - "Actions taken:"
+          - "  - Created missing secrets: {{ missing_acm_secrets | join(', ') if missing_acm_secrets | length > 0 else 'None' }}"
+          - "  - Fixed alertmanager ConfigMap: {{ 'Yes' if not wa_already_applied else 'No (already fixed)' }}"
+          - "  - Recreated prometheus-k8s-0 pod"
+          - ""
+          - "prometheus-k8s-0 is now Running and Ready"
+          - "Reboot test can now proceed"
+          - "=========================================="

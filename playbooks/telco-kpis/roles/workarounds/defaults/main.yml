@@ -8,3 +8,10 @@ workarounds_talm_manifestwork_crd_operators: []
 # ManifestWork CRD URL (upstream OCM project)
 workarounds_manifestwork_crd_url: >-
   https://raw.githubusercontent.com/open-cluster-management-io/api/main/work/v1/0000_00_work.open-cluster-management.io_manifestworks.crd.yaml
+
+# Prometheus Stuck Init Workaround
+# Enable prometheus-k8s-0 stuck detection and fix
+workarounds_prometheus_enabled: false
+
+# Kubeconfig for prometheus workaround (spoke cluster)
+workarounds_prometheus_kubeconfig: "{{ spoke_kubeconfig | default('/tmp/kubeconfig') }}"

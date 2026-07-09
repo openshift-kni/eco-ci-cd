@@ -1,6 +1,9 @@
 ---
 # Parse RDS Compare results from cluster-compare.log
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Read cluster-compare.log for RDS Compare test
   ansible.builtin.slurp:
     src: "{{ current_test.dir_path }}/cluster-compare.log"
@@ -44,7 +47,7 @@
                   'test_type': 'rds_compare',
                   'status': ('PASS' if rds_passed else 'FAIL'),
                   'key_metric': rds_key_metric,
-                  'duration': 'N/A',
+                  'duration': test_duration_human,
                   'detail': rds_log,
                   'crs_with_diffs': crs_with_diffs,
                   'total_crs': total_crs,

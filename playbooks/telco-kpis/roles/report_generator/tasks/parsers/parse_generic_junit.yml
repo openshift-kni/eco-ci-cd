@@ -1,0 +1,101 @@
+---
+# Generic JUnit XML parser - fallback for tests that don't have specific test_cases parsing
+# This extracts test case information from any junit*.xml files found in the test directory
+# Only runs if the specific parser didn't already populate test_cases
+
+- name: Check if test_cases already exists
+  ansible.builtin.set_fact:
+    has_test_cases: "{{
+      report_data.test_results[current_test.dir_name].test_cases is defined and
+      report_data.test_results[current_test.dir_name].test_cases | length > 0 }}"
+
+- name: Find JUnit XML files in test directory
+  ansible.builtin.find:
+    paths: "{{ current_test.dir_path }}"
+    patterns: 'junit*.xml'
+    recurse: false
+  register: generic_junit_files
+  when: not has_test_cases
+
+- name: Parse generic JUnit XML files
+  when:
+    - not has_test_cases
+    - generic_junit_files.files | length > 0
+  block:
+    - name: Read first JUnit XML file
+      ansible.builtin.slurp:
+        src: "{{ generic_junit_files.files[0].path }}"
+      register: generic_junit_content
+
+    - name: Decode JUnit XML
+      ansible.builtin.set_fact:
+        generic_junit_xml: "{{ generic_junit_content.content | b64decode }}"
+
+    - name: Extract test case names and status
+      ansible.builtin.set_fact:
+        generic_testcase_basic: "{{
+          generic_junit_xml | regex_findall(
+            '<testcase name=\"([^\"]+)\"[^>]+status=\"([^\"]+)\" time=\"([^\"]+)\"',
+            multiline=True
+          ) }}"
+
+    - name: Extract skip messages
+      ansible.builtin.set_fact:
+        generic_skip_msg_map: {}
+
+    - name: Build skip message mapping
+      ansible.builtin.set_fact:
+        generic_skip_msg_map: >-
+          {{ generic_skip_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ generic_junit_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<skipped message=\"([^\"]*)\"', multiline=True) }}"
+      when: generic_junit_xml | regex_search('skipped message')
+
+    - name: Extract failure messages
+      ansible.builtin.set_fact:
+        generic_failure_msg_map: {}
+
+    - name: Build failure message mapping
+      ansible.builtin.set_fact:
+        generic_failure_msg_map: >-
+          {{ generic_failure_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ generic_junit_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<failure message=\"([^\"]*)\"', multiline=True) }}"
+      when: generic_junit_xml | regex_search('failure message')
+
+    - name: Build test case list
+      ansible.builtin.set_fact:
+        generic_test_cases: >-
+          {{ generic_test_cases | default([]) + [{
+            'name': item[0],
+            'status': item[1],
+            'time': item[2],
+            'skip_message': generic_skip_msg_map.get(item[0], ''),
+            'failure_message': generic_failure_msg_map.get(item[0], '')
+          }] }}
+      loop: "{{ generic_testcase_basic }}"
+      when: generic_testcase_basic | length > 0
+
+    - name: Filter out BeforeSuite/AfterSuite/ReportAfter from display
+      ansible.builtin.set_fact:
+        generic_filtered_test_cases: "{{ (generic_test_cases | default([])) | rejectattr('name', 'search', '\\[(?:Before|After|ReportAfter)') | list }}"
+
+    - name: Update report data with generic test cases
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: report_data.test_results[current_test.dir_name] | combine({
+                  'test_cases': generic_filtered_test_cases | default([])
+                })
+              })
+            })
+          }}
+      when: generic_filtered_test_cases is defined and generic_filtered_test_cases | length > 0
+
+    - name: Log generic JUnit XML parsing result
+      ansible.builtin.debug:
+        msg:
+          - "Generic JUnit XML parser found {{ generic_filtered_test_cases | default([]) | length }} test cases"
+          - "Failed: {{ (generic_filtered_test_cases | default([]) | selectattr('status', 'equalto', 'failed') | list) | length }}"
+          - "Skipped: {{ (generic_filtered_test_cases | default([]) | selectattr('status', 'equalto', 'skipped') | list) | length }}"
+      when: generic_filtered_test_cases is defined

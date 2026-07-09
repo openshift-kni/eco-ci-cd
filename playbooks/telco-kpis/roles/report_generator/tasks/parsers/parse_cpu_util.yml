@@ -1,6 +1,10 @@
 ---
 # Parse CPU_UTIL test results - extract individual test cases from JUnit XML
 
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Find CPU_UTIL JUnit XML files
   ansible.builtin.find:
     paths: "{{ current_test.dir_path }}"
@@ -18,6 +22,19 @@
     - name: Parse XML to extract test results
       ansible.builtin.set_fact:
         cpu_util_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Read podman-run.log
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/podman-run.log"
+      register: cpu_util_log_content
+      failed_when: false
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ cpu_util_log_content.content | b64decode if cpu_util_log_content.content is defined else '' }}"
+      when: cpu_util_log_content.content is defined
+
 
     - name: Extract test counts from XML
       ansible.builtin.set_fact:
@@ -84,12 +101,20 @@
                   'test_type': 'cpu_util',
                   'status': cpu_util_result.status,
                   'key_metric': cpu_util_result.key_metric,
-                  'duration': cpu_util_result.suite_time,
+                  'duration': test_duration_human,
                   'passed': cpu_util_result.passed,
                   'failed': cpu_util_result.failed,
                   'skipped': cpu_util_result.skipped,
                   'suite_time': cpu_util_result.suite_time,
-                  'test_cases': filtered_test_cases | default([])
+                  'test_cases': filtered_test_cases | default([]),
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  }
                 }
               })
             })

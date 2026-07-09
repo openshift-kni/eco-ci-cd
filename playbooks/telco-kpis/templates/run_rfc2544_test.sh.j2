@@ -1,0 +1,102 @@
+#!/bin/bash
+################################################################################
+# Script: run_rfc2544_test.sh
+# Purpose: Execute RFC2544 test via ran-integration scripts
+# Generated from: playbooks/telco-kpis/templates/run_rfc2544_test.sh.j2
+#
+# Description:
+#   This script sets up the environment and invokes ran-integration's
+#   run-rfc-2544-tests.sh which handles:
+#   - dpdk-testpmd pod deployment and lifecycle
+#   - RFC2544 test execution via main.py
+#   - JUnit XML generation with Polarion IDs
+#   - Histogram breakdown analysis
+#   - Threshold validation
+#
+#   This approach ensures legacy compatibility and automatic updates from
+#   ran-integration improvements.
+#
+# Environment Variables (set by container/playbook):
+#   KUBECONFIG           - Path to kubeconfig file
+#   GIT_SSL_NO_VERIFY    - Disable SSL verification for git operations
+#   WORKSPACE            - Working directory for test execution
+#
+# Artifacts:
+#   Test results are written to /workspace/artifacts/ which is mounted
+#   from the bastion host's artifacts directory.
+#
+################################################################################
+
+set -e
+
+# Copy kubeconfig to writable location (mounted as read-only)
+cp /tmp/kubeconfig-ro /tmp/kubeconfig
+export KUBECONFIG=/tmp/kubeconfig
+
+# Configure git
+export GIT_SSL_NO_VERIFY=true
+
+# Clone ran-integration repository
+echo "Cloning ran-integration repository..."
+set -x
+git clone --depth 1 {{ ran_integration_repo | default("https://gitlab.cee.redhat.com/ran/ran-integration.git") }} /workspace/ran-integration --branch {{ ran_integration_branch | default('master') }}
+set +x
+
+# WORKAROUND: Patch ran-integration's set_ran_test_image() to use correct registry regex
+# The original grep pattern 'registry.*500.' is too loose and causes authentication failures
+# We replace it with the actual disconnected registry FQDN pattern
+echo "Patching ran-integration's set_ran_test_image() function for correct registry detection..."
+sed -i "s|grep -E \"registry\.\*500\.\"|grep -E \"{{ rfc2544_disconnected_registry }}\"|g" /workspace/ran-integration/scripts/ranStageUtils.sh
+
+# Set up environment variables for ran-integration script
+export SCRIPTS_DIR="/workspace/ran-integration/scripts"
+export WORKSPACE="/workspace/ran-integration"
+export DURATION="{{ duration }}"
+export RAN_METRICS_URL="{{ rfc2544_ran_metrics_url }}"
+export RFC2544_PARAMS="{{ rfc2544_params }}"
+
+# Create inventory directory and file for ran-integration
+mkdir -p "${SCRIPTS_DIR}/../inventory"
+cat > "${SCRIPTS_DIR}/../inventory/hosts.{{ spoke_cluster }}" <<'INVENTORY_EOF'
+CHASSIS={{ chassis }}
+STCWEB={{ stcweb }}
+PORT_PARAMS=PORT1={{ port1 }};PORT2={{ port2 }}
+INVENTORY_EOF
+
+# Create artifacts symlink for test output
+echo "Creating artifacts symlink..."
+ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
+
+# Change to RFC2544 test directory
+cd /workspace/ran-integration/scripts/test_rfc2544
+
+# Execute RFC2544 test via ran-integration wrapper script
+# This script handles:
+# - Cluster validation
+# - dpdk-testpmd pod deployment
+# - Test execution with main.py
+# - JUnit XML generation (3 test cases with Polarion IDs)
+# - Histogram breakdown analysis
+# - Pod cleanup
+echo "=========================================="
+echo "Starting RFC2544 test via ran-integration script..."
+echo "Cluster: {{ spoke_cluster }}"
+echo "Duration: {{ duration }}"
+echo "Frame Size: {{ frame_size | default(telco_kpis_default_frame_size) }}"
+echo "LAT Rate: {{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+TEST_START_TIME=$(date +%s)
+echo "Start time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "=========================================="
+
+set +e
+bash ./run-rfc-2544-tests.sh rfc2544
+exit_code=$?
+
+TEST_END_TIME=$(date +%s)
+TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
+echo "=========================================="
+echo "RFC2544 test completed with exit code: $exit_code"
+echo "End time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Test execution time: ${TEST_DURATION}s ($(printf '%02dh%02dm%02ds' $((TEST_DURATION/3600)) $((TEST_DURATION%3600/60)) $((TEST_DURATION%60))))"
+echo "=========================================="
+exit $exit_code

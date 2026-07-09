@@ -20,60 +20,93 @@
         has_traceback: "{{ 'Traceback' in rfc2544_log }}"
         has_error: "{{ 'ERROR' in rfc2544_log or 'Error' in rfc2544_log }}"
         has_exception: "{{ 'Exception' in rfc2544_log }}"
-        has_test_complete: "{{ 'Test complete!' in rfc2544_log }}"
+        has_test_complete: "{{ 'RFC2544 test completed with exit code:' in rfc2544_log }}"
 
-    - name: Parse RFC2544 test configuration parameters from log
+    - name: Extract RFC2544_PARAMS line from log
+      ansible.builtin.set_fact:
+        rfc2544_params_line: "{{
+          (rfc2544_log | regex_search('RFC2544_PARAMS:\\s*(.+)', '\\1'))[0] | default('') }}"
+
+    - name: Parse RFC2544 test configuration parameters from RFC2544_PARAMS
       ansible.builtin.set_fact:
         config_lat_duration: "{{
-          (rfc2544_log | regex_search('LAT_DURATION:\\s+(\\d+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('LAT_DURATION=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_frame_size: "{{
-          (rfc2544_log | regex_search('FRAME_SIZE:\\s+(\\d+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('FRAME_SIZE=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_lat_rate: "{{
-          (rfc2544_log | regex_search('LAT_RATE:\\s+([\\d.]+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('LAT_RATE=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_port1: "{{
-          (rfc2544_log | regex_search('PORT1:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('PORT1=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_port2: "{{
-          (rfc2544_log | regex_search('PORT2:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('PORT2=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_testcfg: "{{
-          (rfc2544_log | regex_search('TESTCFG:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('TESTCFG=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
         config_chassis: "{{
-          (rfc2544_log | regex_search('CHASSIS:\\s+([^ \\n]+)', '\\1'))[0] | default('N/A') }}"
+          (rfc2544_params_line | regex_search('CHASSIS=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
+        config_stcweb: "{{
+          (rfc2544_params_line | regex_search('STCWEB=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
+        config_cluster: "{{
+          (rfc2544_params_line | regex_search('CLUSTER=([^;\\n]+)', '\\1'))[0] | default('N/A')
+            if rfc2544_params_line else 'N/A' }}"
 
-    - name: Extract throughput percentage
+    - name: Read test duration from test-duration.yml
+      ansible.builtin.include_tasks: read_test_duration.yml
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ rfc2544_log }}"
+
+    - name: Extract throughput from RANMETRICS
       ansible.builtin.set_fact:
         throughput_match: "{{
-          rfc2544_log | regex_search('Max throughput observed:\\s*([\\d.]+)', '\\1') }}"
+          rfc2544_log | regex_search('RANMETRICS_RFC2544_MAX_THROUGHPUT=([\\d.]+)', '\\1') }}"
 
     - name: Set throughput value
       ansible.builtin.set_fact:
         throughput_percent: "{{
           throughput_match[0] | float if throughput_match and throughput_match | length > 0 else 0.0 }}"
 
-    - name: Extract latency metrics from output line
+    - name: Extract latency metrics from RANMETRICS
       ansible.builtin.set_fact:
-        metrics_line: "{{
-          rfc2544_log | regex_findall('^([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)$', multiline=True) }}"
+        min_latency_match: "{{ rfc2544_log | regex_search('RANMETRICS_RFC2544_MIN=([\\d.]+)', '\\1') }}"
+        avg_latency_match: "{{ rfc2544_log | regex_search('RANMETRICS_RFC2544_AVG=([\\d.]+)', '\\1') }}"
+        max_latency_match: "{{ rfc2544_log | regex_search('RANMETRICS_RFC2544_MAX=([\\d.]+)', '\\1') }}"
+        frame_size_match: "{{ rfc2544_log | regex_search('RANMETRICS_RFC2544_FRAMESIZE=([\\d.]+)', '\\1') }}"
+        test_throughput_match: "{{ rfc2544_log | regex_search('RANMETRICS_RFC2544_TEST_THROUGHPUT=([\\d.]+)', '\\1') }}"
 
-    - name: Parse latency metrics
+    - name: Parse latency metrics from RANMETRICS
       ansible.builtin.set_fact:
-        frame_size_measured: "{{ metrics_line[0][0] | float }}"
-        actual_rate: "{{ metrics_line[0][1] | float }}"
-        avg_latency: "{{ metrics_line[0][2] | float }}"
-        max_latency: "{{ metrics_line[0][3] | float }}"
-      when: metrics_line | length > 0 and metrics_line[0] | length == 5
+        frame_size_measured: "{{ frame_size_match[0] | float if frame_size_match and frame_size_match | length > 0 else 0.0 }}"
+        actual_rate: "{{ test_throughput_match[0] | float if test_throughput_match and test_throughput_match | length > 0 else 0.0 }}"
+        min_latency: "{{ min_latency_match[0] | float if min_latency_match and min_latency_match | length > 0 else 0.0 }}"
+        avg_latency: "{{ avg_latency_match[0] | float if avg_latency_match and avg_latency_match | length > 0 else 0.0 }}"
+        max_latency: "{{ max_latency_match[0] | float if max_latency_match and max_latency_match | length > 0 else 999.0 }}"
 
     - name: Set default latency values when parsing fails
       ansible.builtin.set_fact:
         frame_size_measured: 0.0
         actual_rate: 0.0
+        min_latency: 0.0
         avg_latency: 0.0
         max_latency: 999.0
-      when: not metrics_line or metrics_line | length == 0
+      when: >
+        not min_latency_match or min_latency_match | length == 0 or
+        not avg_latency_match or avg_latency_match | length == 0 or
+        not max_latency_match or max_latency_match | length == 0
 
-    - name: Extract histogram data for tolerance calculation
+    - name: Extract histogram data from RANMETRICS
       ansible.builtin.set_fact:
         histogram_line: "{{
-          rfc2544_log | regex_search('\\{[^}]+\\}.*', multiline=False) }}"
+          rfc2544_log | regex_search(\"RANMETRICS_RFC2544_HISTOGRAM='([^']+)'\", '\\1') | first | default('') }}"
 
     - name: Calculate latency distribution nines (samples < 30μs)
       ansible.builtin.shell: |
@@ -123,6 +156,20 @@
         latency_distribution_percent: 0.0
         latency_distribution_nines: 0
       when: not distribution_calc.stdout is defined
+
+    - name: Extract RANMETRICS summary section from log
+      ansible.builtin.shell: |
+        set -o pipefail
+        awk '/^RANMETRICS_RFC2544_FRAMESIZE/,/^ Over:/' << 'EOF' | head -50
+        {{ rfc2544_log }}
+        EOF
+      register: ranmetrics_summary
+      changed_when: false
+      failed_when: false
+
+    - name: Set RANMETRICS summary
+      ansible.builtin.set_fact:
+        rfc2544_ranmetrics_summary: "{{ ranmetrics_summary.stdout | default('') }}"
 
     - name: Load RFC2544 thresholds from test directory
       ansible.builtin.stat:
@@ -189,12 +236,14 @@
                 'test_type': 'rfc2544',
                 'status': ('PASS' if test_passed else 'FAIL'),
                 'key_metric': status_desc,
-                'duration': 'N/A',
+                'duration': test_duration_human,
                 'detail': rfc2544_log,
+                'ranmetrics_summary': rfc2544_ranmetrics_summary,
                 'has_error': (has_traceback or has_exception),
                 'throughput_percent': throughput_percent,
-                'max_latency': max_latency,
+                'min_latency': min_latency,
                 'avg_latency': avg_latency,
+                'max_latency': max_latency,
                 'actual_rate': actual_rate,
                 'frame_size': frame_size_measured,
                 'latency_distribution_percent': latency_distribution_percent,
@@ -215,7 +264,17 @@
                   'port1': config_port1,
                   'port2': config_port2,
                   'testcfg': config_testcfg,
-                  'chassis': config_chassis
+                  'chassis': config_chassis,
+                  'stcweb': config_stcweb,
+                  'cluster': config_cluster
+                },
+                'duration_breakdown': {
+                  'total_seconds': actual_test_duration_seconds,
+                  'total_human': test_duration_human,
+                  'test_execution_seconds': test_execution_seconds,
+                  'test_execution_human': test_execution_human,
+                  'overhead_seconds': overhead_seconds,
+                  'overhead_human': overhead_human
                 }
               }
             })

@@ -7,12 +7,20 @@
   register: oslat_log
   failed_when: false
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Parse OSLAT metrics from log
   when: oslat_log.content is defined
   block:
     - name: Decode log content
       ansible.builtin.set_fact:
         oslat_log_text: "{{ oslat_log.content | b64decode }}"
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ oslat_log_text }}"
 
     - name: Extract core list
       ansible.builtin.set_fact:
@@ -101,13 +109,21 @@
                   'test_type': 'oslat',
                   'status': oslat_result.status,
                   'key_metric': oslat_result.key_metric,
-                  'duration': oslat_result.duration,
+                  'duration': test_duration_human,
                   'max_latency': oslat_result.max_latency,
                   'availability': oslat_result.availability,
                   'test_duration': oslat_result.duration,
                   'cores': oslat_result.cores,
                   'core_results': oslat_result.core_results,
-                  'raw_log_excerpt': oslat_log_excerpt
+                  'raw_log_excerpt': oslat_log_excerpt,
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  }
                 }
               })
             })

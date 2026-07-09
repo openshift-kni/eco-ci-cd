@@ -18,3 +18,7 @@
   when: parser_task not in report_generator_parsers.values()
   ansible.builtin.debug:
     msg: "WARNING: No parser found for test type '{{ test_run.test_name }}', skipping"
+
+- name: Parse generic JUnit XML files (fallback if test_cases not already parsed)
+  ansible.builtin.include_tasks: parsers/parse_generic_junit.yml
+  when: parser_task in report_generator_parsers.values()

@@ -122,26 +122,30 @@
       ansible.builtin.assert:
         that:
           - "'| Parameter | Value |' in (report_content.content | b64decode)"
-          - "'| **Duration** |' in (report_content.content | b64decode)"
+          - "'| **Latency Test Duration** |' in (report_content.content | b64decode)"
           - "'| **Frame Size** |' in (report_content.content | b64decode)"
           - "'| **LAT Rate** |' in (report_content.content | b64decode)"
           - "'| **Port 1** |' in (report_content.content | b64decode)"
           - "'| **Port 2** |' in (report_content.content | b64decode)"
-          - "'| **Test Config** |' in (report_content.content | b64decode)"
+          - "'| **Test Config File** |' in (report_content.content | b64decode)"
           - "'| **Chassis** |' in (report_content.content | b64decode)"
+          - "'| **STC Web Server** |' in (report_content.content | b64decode)"
+          - "'| **Cluster** |' in (report_content.content | b64decode)"
         fail_msg: "RFC2544 Test Configuration table structure incorrect"
         success_msg: "RFC2544 Test Configuration table structure correct"
 
     - name: Verify RFC2544 Test Configuration parameter values
       ansible.builtin.assert:
         that:
-          - "'| **Duration** | 600s |' in (report_content.content | b64decode)"
+          - "'| **Latency Test Duration** | 600s |' in (report_content.content | b64decode)"
           - "'| **Frame Size** | 512 bytes |' in (report_content.content | b64decode)"
           - "'| **LAT Rate** | 0.8 |' in (report_content.content | b64decode)"
           - "'| **Port 1** | //spirent-n4u-01/1/13 |' in (report_content.content | b64decode)"
           - "'| **Port 2** | //spirent-n4u-01/1/14 |' in (report_content.content | b64decode)"
-          - "'| **Test Config** | spirent_testcfg.xml |' in (report_content.content | b64decode)"
+          - "'| **Test Config File** | spirent_testcfg.xml |' in (report_content.content | b64decode)"
           - "'| **Chassis** | spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com |' in (report_content.content | b64decode)"
+          - "'| **STC Web Server** | spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888 |' in (report_content.content | b64decode)"
+          - "'| **Cluster** | test-spoke-01 |' in (report_content.content | b64decode)"
         fail_msg: "RFC2544 Test Configuration parameter values incorrect"
         success_msg: "RFC2544 Test Configuration parameter values correct"
 
@@ -196,11 +200,12 @@
         that:
           - "'ZTP Assisted Installer Deployment Timeline' in (report_content.content | b64decode)"
           - "'## ✅ **PASS** - ZTP Assisted Installer Deployment Timeline' in (report_content.content | b64decode)"
-          - "'**Total Time**: 1h13m11s' in (report_content.content | b64decode)"
-          - "'**Reboot Count**: 2 (PASS)' in (report_content.content | b64decode)"
+          - "'Pass criteria: Deployment duration ≤ 2h0m (120 min) AND Reboot count ≤ 2' in (report_content.content | b64decode)"
+          - "'| **ZTP Deployment Duration** | **Reboot Count** |' in (report_content.content | b64decode)"
+          - "'| 1h13m11s | 2 (PASS) |' in (report_content.content | b64decode)"
           - "'Deployment Timeline Summary' in (report_content.content | b64decode)"
           - "'Click to expand deployment timeline details' in (report_content.content | b64decode)"
-          - "'Click to expand reboot analysis' in (report_content.content | b64decode)"
+          - "'ZTP Deployment Reboot Analysis' in (report_content.content | b64decode)"
           - "'ZTP AI DEPLOYMENT TIME TEST SUMMARY' in (report_content.content | b64decode)"
           - "'Reboots During ZTP: 2' in (report_content.content | b64decode)"
         fail_msg: "ZTP Deployment parser did not extract deployment time, status, reboot count, or timeline details"

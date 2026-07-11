@@ -171,3 +171,80 @@
           type: Updated
           status: "True"
         wait_timeout: 1200
+
+- name: Fix extensions image for IBU seed generation (MCO workaround)
+  hosts: bastion
+  gather_facts: true
+  vars:
+    _pull_secret_path: /tmp/pull-secret.json
+    _registry: >-
+      {{ disconnected_registry_url }}:{{ disconnected_registry_port }}
+  tasks:
+    - name: Get release image from spoke ClusterVersion
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ seed_kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: _cv
+
+    - name: Set release image facts
+      ansible.builtin.set_fact:
+        _release_version: "{{ _cv.resources[0].status.desired.version }}"
+        _release_digest: >-
+          {{ _cv.resources[0].status.desired.image
+          | regex_search('sha256:[a-f0-9]{64}') }}
+        _registry_path: >-
+          ocp{{ _cv.resources[0].status.desired.version.split('.')[0] }}/openshift
+
+    - name: Fix extensions image in disconnected registry
+      when: _release_version.split('.')[1] | int >= 20
+      block:
+        - name: Write pull secret to temp file
+          ansible.builtin.copy:
+            content: "{{ pull_secret_string | b64decode }}"
+            dest: "{{ _pull_secret_path }}"
+            mode: "0600"
+          no_log: true
+
+        - name: Get extensions image sha256
+          ansible.builtin.command: >-
+            {{ ansible_user_dir }}/.local/bin/oc adm release info
+            --image-for=rhel-coreos-extensions
+            --insecure=true
+            --registry-config={{ _pull_secret_path }}
+            {{ _registry }}/{{ _registry_path
+            }}/release-images@{{ _release_digest }}
+          register: _ext_sha_result
+          changed_when: false
+          failed_when: false
+
+        - name: Copy extensions to first IDMS mirror path
+          when: _ext_sha_result.rc == 0
+          vars:
+            _digest: >-
+              {{ _release_digest | regex_replace('^sha256:', '') }}
+            _sha: >-
+              {{ _ext_sha_result.stdout
+              | regex_search('sha256:[a-f0-9]{64}') }}
+            _src: >-
+              docker://{{ _registry
+              }}/{{ _registry_path
+              }}/release:{{ _digest }}-rhel-coreos-extensions
+            _dest: "docker://{{ _registry }}/{{ _registry_path }}@{{ _sha }}"
+          ansible.builtin.command: >-
+            skopeo copy
+            --authfile={{ _pull_secret_path }}
+            --src-tls-verify=false
+            --dest-tls-verify=false
+            {{ _src }}
+            {{ _dest }}
+          register: _ext_copy
+          changed_when: "'Copying' in _ext_copy.stdout"
+          failed_when: false
+
+      always:
+        - name: Remove pull secret temp file
+          ansible.builtin.file:
+            path: "{{ _pull_secret_path }}"
+            state: absent

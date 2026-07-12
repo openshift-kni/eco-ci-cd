@@ -177,6 +177,7 @@
   gather_facts: true
   vars:
     _pull_secret_path: /tmp/pull-secret.json
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
     _registry: >-
       {{ disconnected_registry_url }}:{{ disconnected_registry_port }}
   tasks:

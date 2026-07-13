@@ -16,6 +16,7 @@
   vars:
     valid_tests:
       - cpu_util
+      - cpu_util_baseline
       - cyclictest
       - oslat
       - ptp

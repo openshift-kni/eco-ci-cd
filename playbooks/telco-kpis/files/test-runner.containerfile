@@ -65,7 +65,7 @@ COPY auth.json /run/containers/0/auth.json
 COPY certs.d /etc/containers/certs.d
 RUN chmod 0600 /run/containers/0/auth.json
 
-ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.local/bin:${PATH}" \
+ENV PATH="/usr/local/go/bin:/root/go/bin:/root/bin:/root/.local/bin:${PATH}" \
     GOPATH="/root/go"
 
 WORKDIR /workspace

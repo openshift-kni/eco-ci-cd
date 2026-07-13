@@ -1,0 +1,47 @@
+---
+# Molecule converge phase - generates check-status templates
+#
+# Tests that templates render correctly with proper variables
+
+- name: Converge - Generate check-status templates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Generate check-bmc-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/check-bmc-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/check-status/check-bmc-iptables-rules.sh
+        mode: '0755'
+
+    - name: Generate check-cluster-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/check-cluster-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/check-status/check-cluster-iptables-rules.sh
+        mode: '0755'
+
+    - name: Generate check-registry-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/check-registry-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/check-status/check-registry-iptables-rules.sh
+        mode: '0755'
+
+    - name: Read generated BMC check script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/check-status/check-bmc-iptables-rules.sh
+      register: bmc_check_script
+
+    - name: Read generated cluster check script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/check-status/check-cluster-iptables-rules.sh
+      register: cluster_check_script
+
+    - name: Read generated registry check script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/check-status/check-registry-iptables-rules.sh
+      register: registry_check_script
+
+    - name: Store script contents as facts
+      ansible.builtin.set_fact:
+        bmc_check_content: "{{ bmc_check_script.content | b64decode }}"
+        cluster_check_content: "{{ cluster_check_script.content | b64decode }}"
+        registry_check_content: "{{ registry_check_script.content | b64decode }}"

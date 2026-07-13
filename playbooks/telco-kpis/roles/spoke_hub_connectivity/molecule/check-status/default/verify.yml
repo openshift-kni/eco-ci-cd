@@ -1,0 +1,116 @@
+---
+# Molecule verify phase - validates generated check-status templates
+#
+# Runs assertions to ensure templates rendered correctly
+
+- name: Verify - Validate generated templates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Verify BMC check script has correct shebang
+      ansible.builtin.assert:
+        that:
+          - bmc_check_content is search('#!/bin/bash')
+        fail_msg: "BMC check script missing shebang"
+        success_msg: "✓ BMC check script has correct shebang"
+
+    - name: Verify BMC check script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - bmc_check_content is search('SOURCE_RANGE="10.6.214.10/32"')
+          - bmc_check_content is search('HV_IP="10.19.138.54"')
+          - bmc_check_content is search('HUB_IP="10.6.204.64"')
+          - bmc_check_content is search('TOTAL=4')
+        fail_msg: "BMC check script has incorrect variables"
+        success_msg: "✓ BMC check script variables are correct"
+
+    - name: Verify BMC check script contains all ports
+      ansible.builtin.assert:
+        that:
+          - bmc_check_content is search('--dport 6180')
+          - bmc_check_content is search('--dport 6181')
+          - bmc_check_content is search('--dport 6183')
+          - bmc_check_content is search('--dport 6385')
+        fail_msg: "BMC check script missing ports"
+        success_msg: "✓ BMC check script contains all required ports"
+
+    - name: Verify cluster check script has correct shebang
+      ansible.builtin.assert:
+        that:
+          - cluster_check_content is search('#!/bin/bash')
+        fail_msg: "Cluster check script missing shebang"
+        success_msg: "✓ Cluster check script has correct shebang"
+
+    - name: Verify cluster check script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - cluster_check_content is search('SOURCE_RANGE="10.6.214.20/32"')
+          - cluster_check_content is search('HV_IP="10.19.138.54"')
+          - cluster_check_content is search('HUB_IP="10.6.204.64"')
+          - cluster_check_content is search('TOTAL=4')
+        fail_msg: "Cluster check script has incorrect variables"
+        success_msg: "✓ Cluster check script variables are correct"
+
+    - name: Verify cluster check script contains all ports
+      ansible.builtin.assert:
+        that:
+          - cluster_check_content is search('--dport 80')
+          - cluster_check_content is search('--dport 443')
+          - cluster_check_content is search('--dport 6443')
+          - cluster_check_content is search('--dport 22624')
+        fail_msg: "Cluster check script missing ports"
+        success_msg: "✓ Cluster check script contains all required ports"
+
+    - name: Verify registry check script has correct shebang
+      ansible.builtin.assert:
+        that:
+          - registry_check_content is search('#!/bin/bash')
+        fail_msg: "Registry check script missing shebang"
+        success_msg: "✓ Registry check script has correct shebang"
+
+    - name: Verify registry check script contains correct variables
+      ansible.builtin.assert:
+        that:
+          - registry_check_content is search('SOURCE_RANGE="10.6.214.20/32"')
+          - registry_check_content is search('HV_IP="10.19.138.54"')
+          - registry_check_content is search('BASTION_IP="10.6.204.37"')
+          - registry_check_content is search('TOTAL=1')
+        fail_msg: "Registry check script has incorrect variables"
+        success_msg: "✓ Registry check script variables are correct"
+
+    - name: Verify registry check script contains registry port
+      ansible.builtin.assert:
+        that:
+          - registry_check_content is search('--dport 5000')
+        fail_msg: "Registry check script missing port 5000"
+        success_msg: "✓ Registry check script contains registry port"
+
+    - name: Verify all scripts use iptables PREROUTING chain
+      ansible.builtin.assert:
+        that:
+          - bmc_check_content is search('iptables -t nat -C PREROUTING')
+          - cluster_check_content is search('iptables -t nat -C PREROUTING')
+          - registry_check_content is search('iptables -t nat -C PREROUTING')
+        fail_msg: "Scripts not using correct iptables chain"
+        success_msg: "✓ All scripts use PREROUTING chain correctly"
+
+    - name: Verify all scripts output found/total format
+      ansible.builtin.assert:
+        that:
+          - bmc_check_content is search('echo "\${FOUND}/\${TOTAL}"')
+          - cluster_check_content is search('echo "\${FOUND}/\${TOTAL}"')
+          - registry_check_content is search('echo "\${FOUND}/\${TOTAL}"')
+        fail_msg: "Scripts not outputting correct format"
+        success_msg: "✓ All scripts output found/total format"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Check Status Template Tests - PASSED"
+          - "=========================================="
+          - "✓ All 3 templates rendered correctly"
+          - "✓ All variables substituted properly"
+          - "✓ All ports included in scripts"
+          - "✓ Scripts follow correct syntax"
+          - "=========================================="

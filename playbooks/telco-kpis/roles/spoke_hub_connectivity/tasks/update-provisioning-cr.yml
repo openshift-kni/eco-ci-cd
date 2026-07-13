@@ -1,0 +1,44 @@
+---
+# Update hub Provisioning CR with externalIPs pointing to hypervisor corporate IP
+# This allows metal3-ironic to advertise services on HV corporate IP
+
+- name: Display Provisioning CR update configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Updating Provisioning CR on {{ spoke_hub_connectivity_hub_name }}"
+      - "=========================================="
+      - "External IP: {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "Hub Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
+      - "=========================================="
+
+- name: Update Provisioning CR with externalIPs
+  when: not spoke_hub_connectivity_dry_run | bool
+  kubernetes.core.k8s:
+    kubeconfig: "{{ spoke_hub_connectivity_hub_kubeconfig }}"
+    state: patched
+    kind: Provisioning
+    name: provisioning-configuration
+    definition:
+      spec:
+        virtualMediaViaExternalNetwork: true
+        externalIPs:
+          - "{{ spoke_hub_connectivity_hv_corporate_ip }}"
+  register: provisioning_update_result
+
+- name: Display Provisioning CR update result
+  when: not spoke_hub_connectivity_dry_run | bool
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Provisioning CR Update Complete"
+      - "=========================================="
+      - "✓ virtualMediaViaExternalNetwork: true"
+      - "✓ externalIPs: [{{ spoke_hub_connectivity_hv_corporate_ip }}]"
+      - "=========================================="
+      - "NOTE: metal3 pod must be restarted to apply externalIPs configuration"
+      - "      oc delete pod -n openshift-machine-api -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state"
+      - "=========================================="
+      - "NOTE: Verify metal3 services are accessible on {{ spoke_hub_connectivity_hv_corporate_ip }}"
+      - "Test: curl http://{{ spoke_hub_connectivity_hv_corporate_ip }}:6183/"
+      - "=========================================="

@@ -1,0 +1,75 @@
+---
+# Main entry point for spoke_hub_connectivity role
+# All parameters are passed from Jenkins Jenkinsfile (extracted from vaults)
+# This role does NOT load vaults - it receives pre-extracted values
+
+- name: Display spoke-hub connectivity configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke-Hub Connectivity"
+      - "=========================================="
+      - "Action: {{ spoke_hub_connectivity_action }}"
+      - "Spoke: {{ spoke_hub_connectivity_spoke_name | default('N/A') }}"
+      - "Hub: {{ spoke_hub_connectivity_hub_name | default('N/A') }}"
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor | default('N/A') }}"
+      - "Dry Run: {{ spoke_hub_connectivity_dry_run }}"
+      - "Debug: {{ spoke_hub_connectivity_debug }}"
+      - "=========================================="
+
+- name: Route to list-interconnections action
+  when: spoke_hub_connectivity_action == 'list-interconnections'
+  block:
+    - name: Execute list-interconnections
+      ansible.builtin.include_tasks: list-interconnections.yml
+
+- name: Route to setup/remove/check-only actions
+  when: spoke_hub_connectivity_action in ['setup', 'remove', 'check-only']
+  block:
+    - name: Validate required parameters for spoke-hub actions
+      ansible.builtin.assert:
+        that:
+          - spoke_hub_connectivity_spoke_name is defined and spoke_hub_connectivity_spoke_name | length > 0
+          - spoke_hub_connectivity_hub_name is defined and spoke_hub_connectivity_hub_name | length > 0
+          - spoke_hub_connectivity_spoke_bmc_ip is defined and spoke_hub_connectivity_spoke_bmc_ip | length > 0
+          - spoke_hub_connectivity_hub_cluster_ip is defined and spoke_hub_connectivity_hub_cluster_ip | length > 0
+          - spoke_hub_connectivity_hv_corporate_ip is defined and spoke_hub_connectivity_hv_corporate_ip | length > 0
+          - spoke_hub_connectivity_hypervisor is defined and spoke_hub_connectivity_hypervisor | length > 0
+        fail_msg: "Missing required parameters. Jenkins must extract and pass: spoke_bmc_ip, hub_cluster_ip, hv_corporate_ip, hypervisor"
+
+    - name: Execute setup action
+      when: spoke_hub_connectivity_action == 'setup'
+      block:
+        - name: Validate spoke BMC reachability
+          ansible.builtin.include_tasks: validate-bmc.yml
+
+        - name: Setup iptables rules on hypervisor
+          ansible.builtin.include_tasks: setup-iptables.yml
+
+        - name: Update DNS configuration
+          when: spoke_hub_connectivity_update_dns | bool
+          ansible.builtin.include_tasks: update-dns.yml
+
+        - name: Update Provisioning CR
+          when: spoke_hub_connectivity_update_provisioning_cr | bool
+          ansible.builtin.include_tasks: update-provisioning-cr.yml
+
+    - name: Execute remove action
+      when: spoke_hub_connectivity_action == 'remove'
+      block:
+        - name: Remove iptables rules from hypervisor
+          ansible.builtin.include_tasks: remove-iptables.yml
+
+        - name: Remove DNS configuration from hypervisor
+          ansible.builtin.include_tasks: remove-dns.yml
+
+    - name: Execute check-only action
+      when: spoke_hub_connectivity_action == 'check-only'
+      block:
+        - name: Check spoke-hub connectivity status
+          ansible.builtin.include_tasks: check-status.yml
+
+- name: Invalid action
+  when: spoke_hub_connectivity_action not in ['setup', 'remove', 'check-only', 'list-interconnections']
+  ansible.builtin.fail:
+    msg: "Invalid action: {{ spoke_hub_connectivity_action }}. Must be one of: setup, remove, check-only, list-interconnections"

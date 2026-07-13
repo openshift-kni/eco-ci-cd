@@ -1,0 +1,41 @@
+---
+# List all spoke-hub interconnections on hypervisor
+# Provides a view of iptables DNAT rules for spoke networks (10.6.x.x)
+
+- name: Display list-interconnections header
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Listing Spoke-Hub Interconnections"
+      - "=========================================="
+      - "Hypervisor: {{ spoke_hub_connectivity_hypervisor }}"
+      - "Querying iptables DNAT rules for spoke networks (10.6.x.x)..."
+      - "=========================================="
+
+- name: Query iptables DNAT rules for spoke networks
+  ansible.builtin.shell: |
+    set -o pipefail
+    sudo iptables -t nat -L PREROUTING -n -v | grep "10.6."
+  register: iptables_rules
+  delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  changed_when: false
+  failed_when: false
+
+- name: Display iptables rules
+  ansible.builtin.debug:
+    msg: |
+      ==========================================
+      Spoke-Hub DNAT Rules on {{ spoke_hub_connectivity_hypervisor }}
+      ==========================================
+      {% if iptables_rules.stdout_lines | length > 0 %}
+      {{ iptables_rules.stdout }}
+      {% else %}
+      (No DNAT rules found for spoke networks)
+      {% endif %}
+      ==========================================
+
+      NOTE: To identify spoke-hub mappings from rules:
+        - Source IP = Spoke BMC or Cluster IP range (10.6.x.x)
+        - Destination IP (after DNAT 'to:') = Hub Cluster or Bastion IP
+        - Match these IPs against vaults to identify spoke/hub names
+      ==========================================

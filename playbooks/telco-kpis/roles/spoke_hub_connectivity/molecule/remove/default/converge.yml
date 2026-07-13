@@ -1,0 +1,47 @@
+---
+# Molecule converge phase - generates remove-iptables templates
+#
+# Tests that removal templates render correctly with loop variable
+
+- name: Converge - Generate remove-iptables templates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Generate remove-bmc-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/remove-bmc-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/remove/remove-bmc-iptables-rules.sh
+        mode: '0755'
+
+    - name: Generate remove-cluster-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/remove-cluster-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/remove/remove-cluster-iptables-rules.sh
+        mode: '0755'
+
+    - name: Generate remove-registry-iptables-rules.sh from template
+      ansible.builtin.template:
+        src: /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity/templates/remove-registry-iptables-rules.sh.j2
+        dest: /tmp/molecule-tests/remove/remove-registry-iptables-rules.sh
+        mode: '0755'
+
+    - name: Read generated BMC removal script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/remove/remove-bmc-iptables-rules.sh
+      register: bmc_remove_script
+
+    - name: Read generated cluster removal script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/remove/remove-cluster-iptables-rules.sh
+      register: cluster_remove_script
+
+    - name: Read generated registry removal script
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/remove/remove-registry-iptables-rules.sh
+      register: registry_remove_script
+
+    - name: Store script contents as facts
+      ansible.builtin.set_fact:
+        bmc_remove_content: "{{ bmc_remove_script.content | b64decode }}"
+        cluster_remove_content: "{{ cluster_remove_script.content | b64decode }}"
+        registry_remove_content: "{{ registry_remove_script.content | b64decode }}"

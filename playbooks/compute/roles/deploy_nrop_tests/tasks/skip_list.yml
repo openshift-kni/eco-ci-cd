@@ -47,7 +47,7 @@
 
 - name: Features to skip
   ansible.builtin.set_fact:
-    feature_to_skip: "{{ (latest_features | difference(active_features)) | join(' ') }}"
+    feature_to_skip: "{{ (latest_features | difference(active_features)) | join(',') }}"
 
 - name: Build the skip list (In latest but not in active, plus known bugs)
   ansible.builtin.set_fact:

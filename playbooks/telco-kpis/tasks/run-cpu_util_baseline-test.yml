@@ -1,27 +1,27 @@
 ---
-# Run CPU Utilization test
-# Test: CPU_UTIL
+# Run CPU Utilization Baseline Test
+# Test: CPU_UTIL (Baseline Mode)
 # Purpose: Measure CPU usage under load on isolated CPUs with PerformanceProfile
 # Duration: Configurable via duration parameter (default: 10m)
-# Baseline: Optional baseline mode for trend comparison (default: false)
+# Baseline: Always true for this test variant
 
-- name: Set CPU utilization test variables
+- name: Set CPU utilization baseline test variables
   ansible.builtin.set_fact:
-    test_name: "cpu_util"
-    test_display_name: "CPU utilization"
+    test_name: "cpu_util_baseline"
+    test_display_name: "CPU utilization (baseline)"
     test_description: |
-      This script runs the CPU utilization test to measure CPU usage under load
+      This script runs the CPU utilization baseline test to measure CPU usage under load
       on isolated CPUs configured with PerformanceProfile. It clones required
       repositories, sets up the test environment, executes the test, and
       captures results.
     test_default_duration: "{{ telco_kpis_default_duration_cpu_util }}"
-    test_command: "bash scripts/test_cpu_util.sh cpu_util={{ duration | default(telco_kpis_default_duration_cpu_util) }}"
-    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_cpu_util) }})"
+    test_command: "bash scripts/test_cpu_util.sh cpu_util={{ duration | default(telco_kpis_default_duration_cpu_util) }}.baseline"
+    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_cpu_util) }}, baseline=true)"
     test_additional_repos:
       - name: cnf-gotests
         url: "{{ telco_kpis_cnf_gotests_repo | default('https://gitlab.cee.redhat.com/cnf/cnf-gotests.git') }}"
     test_junit_pattern: "*cpu*.xml,*report*.xml,*junit*.xml"
     ran_integration_repo: "{{ telco_kpis_ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
 
-- name: Execute CPU utilization test
+- name: Execute CPU utilization baseline test
   ansible.builtin.import_tasks: run-test.yml

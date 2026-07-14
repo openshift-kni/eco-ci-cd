@@ -400,6 +400,7 @@
           - make
           - pip
           - skopeo
+          - zip
         state: present
 
     - name: Download GO archive

@@ -22,6 +22,12 @@
     ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
     ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+- name: Save OCP version to artifacts
+  ansible.builtin.copy:
+    content: "{{ api_version.resources[0].status.desired.version }}"
+    dest: "{{ manifest_dir }}/ocp_version.txt"
+    mode: '0644'
+
 - name: Label masters as worker
   kubernetes.core.k8s_json_patch:
     api_version: config.openshift.io/v1

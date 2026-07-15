@@ -223,6 +223,14 @@
           register: skopeo_v2_result
           changed_when: skopeo_v2_result.rc == 0
 
+        - name: Set ptp-must-gather source image name
+          when: version.split('.')[1] | int < 21
+          ansible.builtin.set_fact:
+            ptp_must_gather_src: >-
+              registry.redhat.io/openshift4/{{
+              'ptp-must-gather-rhel9' if version.split('.')[1] | int >= 16
+              else 'ptp-must-gather-rhel8' }}:v{{ version }}
+
         - name: Mirror ptp-must-gather image (OCP < 4.21 only)
           when: version.split('.')[1] | int < 21
           ansible.builtin.command: >
@@ -230,17 +238,17 @@
             --dest-tls-verify=false
             --all
             --authfile {{ pull_secret_file | default('/tmp/auth.json') }}
-            docker://registry.redhat.io/openshift4/ptp-must-gather-rhel9:v{{ version }}
+            docker://{{ ptp_must_gather_src }}
             docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
           register: skopeo_must_gather_result
-          changed_when: skopeo_must_gather_result.rc == 0
+          changed_when: false
 
         - name: Set PTP event consumer mirror fact
           ansible.builtin.set_fact:
             ptp_event_consumer_image: "{{ mirror_registry }}/ran-test/cloud-event-consumer"
 
         - name: Set PTP must-gather mirror fact (OCP < 4.21 only)
-          when: version.split('.')[1] | int < 21
+          when: version.split('.')[1] | int < 21 and skopeo_must_gather_result is not failed
           ansible.builtin.set_fact:
             ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
 

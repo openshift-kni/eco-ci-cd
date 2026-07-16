@@ -11,6 +11,11 @@
       ansible.builtin.set_fact:
         cluster_disconnected: true
 
+- name: Force disconnected mode when local mirror registry is configured
+  when: use_local_mirror_registry | default(false) | bool
+  ansible.builtin.set_fact:
+    cluster_disconnected: true
+
 - name: Mirror test images to disconnected registry and configure cluster mirroring
   when: cluster_disconnected
   block:

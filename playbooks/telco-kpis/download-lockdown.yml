@@ -1,0 +1,45 @@
+---
+# playbooks/telco-kpis/download-lockdown.yml
+#
+# Downloads lockdown JSON files via the bastion host, which has access to
+# internal GitLab (gitlab.cee.redhat.com). Resolves GitLab symlink chains
+# using the lockdowns role, then fetches the file back to the controller.
+#
+# Usage:
+#   ansible-playbook playbooks/telco-kpis/download-lockdown.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     -e lockdown_uri=<gitlab-url> \
+#     -e lockdown_local_path=/tmp/hub-lockdown.json
+
+- name: Download lockdown JSON via bastion
+  hosts: bastion
+  gather_facts: false
+  vars:
+    lockdown_local_path: /tmp/lockdown.json
+
+  tasks:
+    - name: Create temporary download path
+      ansible.builtin.tempfile:
+        suffix: -lockdown.json
+      register: lockdown_tmpfile
+
+    - name: Download and fetch lockdown
+      block:
+        - name: Download lockdown from GitLab
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/download-lockdown.yml
+          vars:
+            lockdown_uri: "{{ lockdown_uri }}"
+            lockdown_download_path: "{{ lockdown_tmpfile.path }}"
+
+        - name: Fetch lockdown to controller
+          ansible.builtin.fetch:
+            src: "{{ lockdown_tmpfile.path }}"
+            dest: "{{ lockdown_local_path }}"
+            flat: true
+      always:
+        - name: Clean up temporary file
+          ansible.builtin.file:
+            path: "{{ lockdown_tmpfile.path }}"
+            state: absent

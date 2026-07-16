@@ -8,5 +8,5 @@ kubernetes
 ncclient
 netaddr
 requests
-jwt
+pyjwt
 cryptography

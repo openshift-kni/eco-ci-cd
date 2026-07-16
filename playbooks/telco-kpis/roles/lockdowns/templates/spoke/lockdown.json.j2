@@ -1,0 +1,31 @@
+{
+  "spoke": {
+    "ocp": {
+      "pull_spec": "{{ spoke_ocp_pull_spec }}",
+      "major_version": "{{ spoke_ocp_major_version }}",
+      "minor_version": "{{ spoke_ocp_minor_version }}",
+      "full_version": "{{ spoke_ocp_full_version }}",
+      "architecture": "{{ spoke_ocp_architecture }}"
+    },
+    "operators": [
+{% for op in spoke_lockdown_operators %}
+      {
+        "name": "{{ op.name }}",
+        "namespace": "{{ op.namespace }}",
+        "catalog": "{{ op.catalog }}",
+        "channel": "{{ op.channel }}",
+        "subscription_name": "{{ op.subscription_name }}",
+        "installed_csv": "{{ op.installed_csv }}",
+        "install_plan_approval": "{{ op.install_plan_approval }}",
+        "og_name": "{{ op.og_name }}",
+        "og_spec": {{ op.og_spec | to_json }}
+      }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ],
+    "metadata": {
+      "cluster_name": "{{ spoke_cluster }}",
+      "capture_timestamp": "{{ ansible_date_time.iso8601 }}"
+    }
+  }
+}

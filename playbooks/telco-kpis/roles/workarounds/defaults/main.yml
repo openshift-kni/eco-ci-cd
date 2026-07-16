@@ -1,0 +1,10 @@
+---
+# defaults file for workarounds role
+
+# TALM ManifestWork CRD Workaround
+# List of operators being deployed (used to detect TALM + MCE without CR)
+workarounds_talm_manifestwork_crd_operators: []
+
+# ManifestWork CRD URL (upstream OCM project)
+workarounds_manifestwork_crd_url: >-
+  https://raw.githubusercontent.com/open-cluster-management-io/api/main/work/v1/0000_00_work.open-cluster-management.io_manifestworks.crd.yaml

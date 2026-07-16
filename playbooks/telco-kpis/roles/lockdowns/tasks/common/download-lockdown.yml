@@ -1,0 +1,40 @@
+---
+# Common task: Download lockdown JSON from URI
+#
+# Required variables:
+#   - lockdown_uri: URL to lockdown JSON file
+#   - lockdown_download_path: Local path to save downloaded file (default: /tmp/lockdown.json)
+
+- name: Validate lockdown URI is provided
+  ansible.builtin.assert:
+    that:
+      - lockdown_uri is defined
+      - lockdown_uri | length > 0
+    fail_msg: "lockdown_uri must be provided for download operation"
+    success_msg: "Lockdown URI: {{ lockdown_uri }}"
+
+- name: Set download path default
+  ansible.builtin.set_fact:
+    lockdown_download_path: "{{ lockdown_download_path | default('/tmp/lockdown.json', true) }}"
+
+- name: Create GitLab symlink resolver script
+  ansible.builtin.template:
+    src: resolve-gitlab-symlinks.sh.j2
+    dest: /tmp/resolve-gitlab-symlinks.sh
+    mode: '0755'
+
+- name: Execute GitLab symlink resolver
+  ansible.builtin.command:
+    cmd: /tmp/resolve-gitlab-symlinks.sh
+  register: symlink_resolver_result
+  changed_when: false
+  failed_when: symlink_resolver_result.rc != 0
+
+- name: Display lockdown download result
+  ansible.builtin.debug:
+    msg: "{{ symlink_resolver_result.stdout_lines }}"
+
+- name: Cleanup resolver script
+  ansible.builtin.file:
+    path: /tmp/resolve-gitlab-symlinks.sh
+    state: absent

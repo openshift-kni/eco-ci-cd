@@ -1,0 +1,27 @@
+---
+# Molecule converge phase - tests hub lockdown parse action
+#
+# This tests the role's parse logic using the mock lockdown JSON from prepare phase
+
+- name: Converge
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Parse hub lockdown using lockdowns role
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: hub
+        lockdown_action: parse
+        hub_lockdown_uri: "file:///tmp/hub-lockdown.json"
+
+    - name: Display parsed hub lockdown operators
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Hub Lockdown Parse Test"
+          - "=========================================="
+          - "OCP Version: {{ hub_ocp_version }}"
+          - "OCP Pull Spec: {{ hub_ocp_pull_spec }}"
+          - "Operators Count: {{ hub_lockdown_operators | length }}"
+          - "=========================================="

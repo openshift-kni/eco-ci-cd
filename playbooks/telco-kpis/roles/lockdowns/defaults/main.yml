@@ -1,0 +1,8 @@
+---
+# Default variables for lockdowns role
+
+# Download paths (can be overridden)
+lockdown_download_path: /tmp/lockdown.json
+
+# Artifact directory for generated lockdowns (Jenkins/CI integration)
+lockdown_artifact_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"

@@ -1,0 +1,50 @@
+---
+# Spoke-specific: Parse spoke lockdown JSON
+#
+# Downloads spoke lockdown from URI, validates structure, and sets facts for operator deployment
+#
+# Required variables:
+#   - spoke_lockdown_uri: URL to spoke lockdown JSON
+#
+# Sets facts:
+#   - spoke_lockdown_operators: List of operators ready for deployment
+#   - spoke_ocp_pull_spec: OCP pull spec from lockdown
+#   - spoke_ocp_version: OCP version (major.minor format)
+
+- name: Download spoke lockdown JSON
+  ansible.builtin.include_tasks: ../common/download-lockdown.yml
+  vars:
+    lockdown_uri: "{{ spoke_lockdown_uri }}"
+    lockdown_download_path: /tmp/spoke-lockdown.json
+
+- name: Parse spoke lockdown JSON
+  ansible.builtin.set_fact:
+    spoke_lockdown_data: "{{ lookup('file', '/tmp/spoke-lockdown.json') | from_json }}"
+
+- name: Validate spoke lockdown structure
+  ansible.builtin.include_tasks: ../common/validate-structure.yml
+  vars:
+    lockdown_data: "{{ spoke_lockdown_data }}"
+    lockdown_mode: spoke
+
+- name: Extract spoke operators from lockdown
+  ansible.builtin.set_fact:
+    spoke_lockdown_operators: "{{ spoke_lockdown_data.spoke.operators }}"
+
+- name: Extract spoke OCP details from lockdown
+  ansible.builtin.set_fact:
+    spoke_ocp_pull_spec: "{{ spoke_lockdown_data.spoke.ocp.pull_spec }}"
+    spoke_ocp_version: "{{ spoke_lockdown_data.spoke.ocp.major_version }}.{{ spoke_lockdown_data.spoke.ocp.minor_version }}"
+
+- name: Display spoke lockdown parsing results
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke Lockdown Parsed Successfully"
+      - "=========================================="
+      - "OCP Version: {{ spoke_ocp_version }}"
+      - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
+      - "Operators Count: {{ spoke_lockdown_operators | length }}"
+      - "Cluster Name: {{ spoke_lockdown_data.spoke.metadata.cluster_name }}"
+      - "Capture Timestamp: {{ spoke_lockdown_data.spoke.metadata.capture_timestamp }}"
+      - "=========================================="

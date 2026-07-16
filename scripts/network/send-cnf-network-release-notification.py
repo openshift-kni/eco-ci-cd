@@ -31,6 +31,9 @@ def construct_message(release_info, prow_job_url, phase1_prow_url=None):
         f"Jira: {release_info['jira_card_link']}",
         f"Polarion: {release_info['polarion_url']}"
     ]
+
+    if release_info.get("reportportal_url"):
+        links.append(f"Report Portal: {release_info['reportportal_url']}")
     
     # Add job links in logical order (Phase 1 first if exists, then main job)
     if has_phase1:
@@ -125,7 +128,8 @@ def parse_arguments():
     parser.add_argument("--nic", default="", help="NIC name")
     parser.add_argument("--secondary-nic", default="", help="Secondary NIC name")
     parser.add_argument("--phase1-build-id", default="", help="Phase 1 build ID")
-    
+    parser.add_argument("--reportportal-url", default="", help="Report Portal URL")
+
     return parser.parse_args()
 
 def parse_version(version_string):
@@ -188,6 +192,7 @@ def create_release_info(args, rhel_version):
         "version": args.version,
         "jira_card_link": args.jira_link,
         "polarion_url": args.polarion_url,
+        "reportportal_url": args.reportportal_url,
         "test_env": {
             "cluster_name": args.cluster_name,
             "nic": args.nic,

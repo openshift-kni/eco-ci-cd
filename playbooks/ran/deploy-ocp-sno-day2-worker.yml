@@ -285,6 +285,26 @@
           retries: 90
           delay: 60
 
+        - name: Get all CertificateSigningRequests from the spoke cluster
+          kubernetes.core.k8s_info:
+            api_version: certificates.k8s.io/v1
+            kind: CertificateSigningRequest
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: all_csrs
+
+        - name: Approve pending kubelet-serving CSRs for the worker node
+          ansible.builtin.command:
+            cmd: >-
+              oc --kubeconfig {{ spoke_kubeconfig }}
+              adm certificate approve {{ item.metadata.name }}
+          loop: "{{ all_csrs.resources | default([]) }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when:
+            - item.spec.signerName == 'kubernetes.io/kubelet-serving'
+            - (item.status.conditions | default([])) | length == 0
+          changed_when: true
+
         - name: Wait for all ClusterServiceVersions to succeed on the spoke cluster
           kubernetes.core.k8s_info:
             api_version: operators.coreos.com/v1alpha1

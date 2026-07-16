@@ -17,6 +17,7 @@
   kubernetes.core.k8s:
     kubeconfig: "{{ spoke_hub_connectivity_hub_kubeconfig }}"
     state: patched
+    api_version: metal3.io/v1alpha1
     kind: Provisioning
     name: provisioning-configuration
     definition:

@@ -8,3 +8,5 @@ kubernetes
 ncclient
 netaddr
 requests
+jwt
+cryptography

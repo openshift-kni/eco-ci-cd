@@ -4,6 +4,10 @@
 # Output: cluster-compare.log with comparison results
 # Uses: kubectl-cluster_compare in podman container
 
+- name: Set test name for container naming and artifact management
+  ansible.builtin.set_fact:
+    test_name: "rds_compare"
+
 - name: Ensure test-runner container image exists on bastion
   ansible.builtin.import_tasks: setup-test-runner.yml
 
@@ -108,10 +112,6 @@
       - "Baseline Mode: {{ 'Yes (non-failing)' if (baseline | default(false)) else 'No' }}"
       - "Log: {{ artifacts_dir.path }}/cluster-compare.log"
       - "=========================================="
-
-- name: Set test name for artifact management
-  ansible.builtin.set_fact:
-    test_name: "rds_compare"
 
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:

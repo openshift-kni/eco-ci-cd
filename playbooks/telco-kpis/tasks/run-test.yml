@@ -32,10 +32,9 @@
 
 - name: Build disconnected registry pattern from vault data (ansible_group_bastions)
   ansible.builtin.set_fact:
-    test_disconnected_registry: "{{ [
-       disconnected_registry_url | default('disconnected.registry.local'),
-       disconnected_registry_port | default('5000')] | join(':')
-    }}"
+    test_disconnected_registry: >-
+      {{ [disconnected_registry_url | default('disconnected.registry.local'),
+      disconnected_registry_port | default('5000')] | join(':') }}
 
 - name: Gather facts for timestamp
   ansible.builtin.setup:

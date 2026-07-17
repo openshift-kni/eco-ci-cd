@@ -33,11 +33,8 @@
 
     - name: Extract test case names and status
       ansible.builtin.set_fact:
-        generic_testcase_basic: "{{
-          generic_junit_xml | regex_findall(
-            '<testcase name=\"([^\"]+)\"[^>]+status=\"([^\"]+)\" time=\"([^\"]+)\"',
-            multiline=True
-          ) }}"
+        generic_testcase_basic: >-
+          {{ generic_junit_xml | regex_findall('<testcase name="([^"]+)"[^>]+status="([^"]+)" time="([^"]+)"', multiline=True) }}
 
     - name: Extract skip messages
       ansible.builtin.set_fact:

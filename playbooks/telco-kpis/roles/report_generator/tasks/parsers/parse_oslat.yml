@@ -93,11 +93,10 @@
 
     - name: Extract from container info to end of Duration line using string slicing
       ansible.builtin.set_fact:
-        oslat_log_excerpt: "{{
-            oslat_log_text[container_info_start | int:excerpt_end | int]
-            if (container_info_start | int) >= 0 and (excerpt_end | int) > 0
-            else 'OSLAT output not found'
-          }}"
+        oslat_log_excerpt: >-
+          {{ oslat_log_text[container_info_start | int : excerpt_end | int]
+          if (container_info_start | int) >= 0 and (excerpt_end | int) > 0
+          else 'OSLAT output not found' }}
 
     - name: Store OSLAT result in report data
       ansible.builtin.set_fact:

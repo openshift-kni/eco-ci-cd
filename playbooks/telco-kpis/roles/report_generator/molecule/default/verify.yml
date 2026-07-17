@@ -165,14 +165,13 @@
         fail_msg: "BIOS Validation parser did not parse JUnit XML correctly"
         success_msg: "BIOS Validation parser working correctly"
 
-    - name: Extract ZTP section from report for debugging
+    - name: Extract ZTP section from report for debugging # noqa: jinja[spacing]
       ansible.builtin.set_fact:
-        ztp_section: "{{
-            (report_content.content | b64decode).split('BEGIN DEPLOYMENT TIMELINE')[1]
-            .split('END DEPLOYMENT TIMELINE')[0]
-            if 'BEGIN DEPLOYMENT TIMELINE' in (report_content.content | b64decode)
-            else 'ZTP section not found'
-          }}"
+        ztp_section: >-
+          {{ (report_content.content | b64decode).split('BEGIN DEPLOYMENT TIMELINE')[1]
+          .split('END DEPLOYMENT TIMELINE')[0]
+          if 'BEGIN DEPLOYMENT TIMELINE' in (report_content.content | b64decode)
+          else 'ZTP section not found' }}
 
     - name: Save full report for debugging
       ansible.builtin.copy:

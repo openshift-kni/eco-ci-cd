@@ -289,6 +289,7 @@
         state: directory
         mode: '0755'
 
+    # yamllint disable rule:line-length
     - name: Create mock RFC2544 log with successful test (RDS criteria met)
       ansible.builtin.copy:
         content: |
@@ -344,6 +345,7 @@
           ==========================================
         dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/podman-run.log"
         mode: '0644'
+    # yamllint enable rule:line-length
 
     - name: Create mock RFC2544 thresholds file
       ansible.builtin.copy:

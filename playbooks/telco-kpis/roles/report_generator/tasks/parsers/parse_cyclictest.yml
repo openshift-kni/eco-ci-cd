@@ -94,11 +94,10 @@
 
     - name: Extract cyclictest output from container info to SMIs line
       ansible.builtin.set_fact:
-        cyclictest_log_excerpt: "{{
-            cyclictest_log[(container_info_start | int):(excerpt_end | int)]
-            if (container_info_start | int) >= 0 and (excerpt_end | int) > (container_info_start | int)
-            else 'Cyclictest output not found'
-          }}"
+        cyclictest_log_excerpt: >-
+          {{ cyclictest_log[(container_info_start | int) : (excerpt_end | int)]
+          if (container_info_start | int) >= 0 and (excerpt_end | int) > (container_info_start | int)
+          else 'Cyclictest output not found' }}
 
     - name: Store Cyclictest result in report data
       ansible.builtin.set_fact:

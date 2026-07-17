@@ -20,17 +20,9 @@
 
     - name: Update test result with normalized duration
       ansible.builtin.set_fact:
-        normalized_test_results: "{{
-          normalized_test_results | combine({
-            test_key: test_value | combine({'duration': normalized_duration})
-          })
-        }}"
+        normalized_test_results: "{{ normalized_test_results | combine({test_key: test_value | combine({'duration': normalized_duration})}) }}"
 
 - name: Keep N/A durations as-is
   when: raw_duration == 'N/A'
   ansible.builtin.set_fact:
-    normalized_test_results: "{{
-      normalized_test_results | combine({
-        test_key: test_value
-      })
-    }}"
+    normalized_test_results: "{{ normalized_test_results | combine({test_key: test_value}) }}"

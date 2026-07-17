@@ -182,10 +182,9 @@
 
 - name: Build disconnected registry pattern from vault data (ansible_group_bastions)
   ansible.builtin.set_fact:
-    rfc2544_disconnected_registry: "{{ [
-       disconnected_registry_url | default('disconnected.registry.local'),
-       disconnected_registry_port | default('5000')] | join(':')
-    }}"
+    rfc2544_disconnected_registry: >-
+      {{ [disconnected_registry_url | default('disconnected.registry.local'),
+      disconnected_registry_port | default('5000')] | join(':') }}
 
 - name: Set RFC2544 pass/fail thresholds and ran-integration parameters with defaults
   ansible.builtin.set_fact:

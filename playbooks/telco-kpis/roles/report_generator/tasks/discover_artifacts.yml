@@ -27,12 +27,9 @@
     - name: Convert ISO timestamp to YYYYMMDD-HHMMSS format
       ansible.builtin.set_fact:
         # Format: 2026-07-06T11:00:00Z -> 20260706-110000
-        node_info_timestamp_value: "{{
-          node_info_collected_at
-          | regex_replace(
-              '^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2}).*',
-              '\\1\\2\\3-\\4\\5\\6'
-          ) }}"
+        node_info_timestamp_value: >-
+          {{ node_info_collected_at
+          | regex_replace('^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).*', '\1\2\3-\4\5\6') }}
 
     - name: Store timestamp for filtering
       ansible.builtin.set_fact:

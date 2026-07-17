@@ -55,7 +55,7 @@
            prometheus_pod.resources[0].status.containerStatuses | selectattr('name', 'equalto', 'prometheus') | map(attribute='ready') | first == false)) }}
     wa_already_applied: >-
       {{ alertmanager_cm.resources | length > 0 and
-         alertmanager_cm.resources[0].data['alertmanager.yaml.gz'] == 'H4sIAAAAAAAA/0yOQQrCMBBF95wiSxeVQhcu3HoCwY1gF0k6bQOdSTOTUsRzdmgXrt7j///x5gkf4C8LDmYSaIBzWSnpoGjYo3xVdWAXQmWXCNnSPBg0SBxhzm0p2xrPo1qQVvd+hN9uRs4x8S+VQW9kF+LrO3U51OBaT02BVTwBUZs+8lAyxV3k88SYOr72yC1bX1G6t7neMu08nVmz/QMAAP//jkUArgAAAA==' }}
+         alertmanager_cm.resources[0].data['alertmanager.yaml.gz'] == workarounds_prometheus_alertmanager_gz }}
     missing_acm_secrets: >-
       {{ acm_secrets.results | selectattr('resources', 'equalto', []) | map(attribute='item') | list }}
   when: prometheus_pod.resources | length > 0
@@ -160,7 +160,7 @@
             name: alertmanager-main-generated
             namespace: openshift-monitoring
           data:
-            alertmanager.yaml.gz: H4sIAAAAAAAA/0yOQQrCMBBF95wiSxeVQhcu3HoCwY1gF0k6bQOdSTOTUsRzdmgXrt7j///x5gkf4C8LDmYSaIBzWSnpoGjYo3xVdWAXQmWXCNnSPBg0SBxhzm0p2xrPo1qQVvd+hN9uRs4x8S+VQW9kF+LrO3U51OBaT02BVTwBUZs+8lAyxV3k88SYOr72yC1bX1G6t7neMu08nVmz/QMAAP//jkUArgAAAA==
+            alertmanager.yaml.gz: "{{ workarounds_prometheus_alertmanager_gz }}"
       when: not wa_already_applied
 
     - name: Delete stuck prometheus-k8s-0 pod

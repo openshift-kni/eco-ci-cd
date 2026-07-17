@@ -227,7 +227,7 @@
           else ('Throughput: ' + (throughput_percent | string) + '%, Max Latency: ' +
                 (max_latency | string) + 'μs (' + pass_criteria + ')') }}"
 
-    - name: Store RFC2544 result in report data
+    - name: Store RFC2544 result in report data # noqa: jinja[spacing]
       ansible.builtin.set_fact:
         report_data: "{{
           report_data | combine({

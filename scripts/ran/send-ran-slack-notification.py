@@ -52,6 +52,13 @@ def construct_message(args):
         section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
+    # PTP SNO section
+    if args.reportportal_url_ptp_sno:
+        section = "\n*PTP SNO*\n____________"
+        section += f"\nSent to Report Portal: {args.reportportal_url_ptp_sno}"
+        section += f"\nSent to Polarion: {args.polarion_url}"
+        sections.append(section)
+
     # Footer with Prow job URL
     if args.job_url:
         sections.append(f"\nProw Job: {args.job_url}")
@@ -98,6 +105,7 @@ def parse_arguments():
     parser.add_argument("--reportportal-url-3node", required=False, help="Report Portal URL for 3-node")
     parser.add_argument("--reportportal-url-standard", required=False, help="Report Portal URL for standard")
     parser.add_argument("--reportportal-url-two-sno", required=False, help="Report Portal URL for Two SNO")
+    parser.add_argument("--reportportal-url-ptp-sno", required=False, help="Report Portal URL for PTP SNO")
     return parser.parse_args()
 
 

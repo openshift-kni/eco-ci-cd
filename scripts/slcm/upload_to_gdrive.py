@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+This script is not officially supported and comes with no guarantees.
+Use it at your own risk. Test thoroughly in your environment before use.
+
 Upload XML files to Google Drive using service account key.
 
 Environment variables:

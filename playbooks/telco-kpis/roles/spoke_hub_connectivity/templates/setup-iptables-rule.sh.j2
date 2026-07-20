@@ -6,17 +6,18 @@ SOURCE_RANGE="{{ source_ip_range }}"
 HV_IP="{{ spoke_hub_connectivity_hv_corporate_ip }}"
 HUB_IP="{{ hub_ip | default(spoke_hub_connectivity_hub_cluster_ip) }}"
 PORT="{{ item }}"
+DEST_PORT="{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}"
 
 # DNAT rule: Redirect traffic from spoke BMC to hub cluster
-sudo iptables -t nat -C PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${PORT} 2>/dev/null || \
-sudo iptables -t nat -A PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${PORT}
+sudo iptables -t nat -C PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${DEST_PORT} 2>/dev/null || \
+sudo iptables -t nat -A PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${DEST_PORT}
 
 # MASQUERADE for return traffic
-sudo iptables -t nat -C POSTROUTING -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${PORT} -j MASQUERADE 2>/dev/null || \
-sudo iptables -t nat -A POSTROUTING -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${PORT} -j MASQUERADE
+sudo iptables -t nat -C POSTROUTING -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${DEST_PORT} -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${DEST_PORT} -j MASQUERADE
 
 # FORWARD rule to allow traffic
-sudo iptables -C FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${PORT} -j ACCEPT 2>/dev/null || \
-sudo iptables -A FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${PORT} -j ACCEPT
+sudo iptables -C FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${DEST_PORT} -j ACCEPT 2>/dev/null || \
+sudo iptables -A FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${DEST_PORT} -j ACCEPT
 
-echo "✓ Rule configured for port ${PORT}"
+echo "✓ Rule configured for port ${PORT} → ${DEST_PORT}"

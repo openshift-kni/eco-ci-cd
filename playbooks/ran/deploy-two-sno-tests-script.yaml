@@ -100,6 +100,7 @@
         enabled: true
 
     - name: Prepare pull secret
+      no_log: true
       ansible.builtin.set_fact:
         pull_secret_ocp: "{{ pull_secret_string | b64decode }}"
 
@@ -109,6 +110,7 @@
         state: absent
 
     - name: Add disconnected registry entry
+      no_log: true
       ansible.builtin.set_fact:
         pull_secret: >-
           {{

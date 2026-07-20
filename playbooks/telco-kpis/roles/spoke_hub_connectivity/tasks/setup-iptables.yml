@@ -119,7 +119,8 @@
       source address='{{ spoke_hub_connectivity_spoke_bmc_ip_range }}'
       destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
       forward-port port='{{ item }}' protocol='tcp'
-      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+      to-port='{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}'
+      to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
     permanent: true
     immediate: true
     state: enabled
@@ -137,7 +138,8 @@
       source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
       destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
       forward-port port='{{ item }}' protocol='tcp'
-      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
+      to-port='{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}'
+      to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
     permanent: true
     immediate: true
     state: enabled

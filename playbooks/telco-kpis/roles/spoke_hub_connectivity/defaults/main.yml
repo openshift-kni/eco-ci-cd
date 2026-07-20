@@ -18,9 +18,17 @@
 # Standard OpenShift/metal3 service ports
 spoke_hub_connectivity_metal3_ports:
   - "6183"  # metal3-ironic HTTP/ISO server
-  - "6385"  # Ironic API
+  - "6385"  # Ironic API (external port — DNAT maps to 6388 on hub)
   - "6180"  # metal3 inspector
   - "6388"  # Ironic conductor
+
+# Port destination mapping: external port → hub port (when they differ)
+# Port 6385 must forward to hub port 6388 (metal3-httpd reverse proxy) because
+# port 6385 on the hub runs a separate httpd proxy with a broken TLS chain.
+# The metal3-state k8s service maps 6385→6388 for cluster-internal traffic,
+# but external DNAT traffic bypasses services and hits the raw host port.
+spoke_hub_connectivity_port_dest_mapping:
+  "6385": "6388"
 
 spoke_hub_connectivity_http_ports:
   - "80"    # HTTP

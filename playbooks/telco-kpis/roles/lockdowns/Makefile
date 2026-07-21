@@ -1,10 +1,10 @@
-.PHONY: test test-hub test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri prepare-hub converge-hub verify-hub prepare-spoke converge-spoke verify-spoke clean help
+.PHONY: test test-hub test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri test-spoke-retag-catalog prepare-hub converge-hub verify-hub prepare-spoke converge-spoke verify-spoke clean help
 
 # Get absolute path to eco-ci-cd root (5 levels up from role dir)
 ECO_CI_CD_ROOT := $(shell cd ../../../.. && pwd)
 
 # Default target
-test: test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri
+test: test-hub-parse test-hub-capture test-spoke test-spoke-lockdown-uri test-spoke-retag-catalog
 
 # Run hub parse tests in container
 test-hub-parse:
@@ -71,6 +71,21 @@ test-spoke-lockdown-uri:
 	@echo ""
 	@echo "✓ Spoke lockdown URI with digests test passed!"
 
+# Run spoke retag catalog index tests
+test-spoke-retag-catalog:
+	@echo "=========================================="
+	@echo "  Running Spoke Retag Catalog Index Tests"
+	@echo "=========================================="
+	@podman run --rm --platform linux/amd64 \
+		-v $(ECO_CI_CD_ROOT):/eco-ci-cd:Z \
+		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
+		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
+		--entrypoint /bin/sh \
+		quay.io/ccardenosa/eco-ci-cd:latest \
+		-c "ansible-playbook -i localhost, -c local molecule/spoke-retag-catalog/default/test.yml"
+	@echo ""
+	@echo "✓ Spoke retag catalog index tests passed!"
+
 # Run individual hub test phases (for debugging - requires local ansible)
 prepare-hub:
 	@ansible-playbook -i localhost, -c local molecule/hub/default/prepare.yml
@@ -102,12 +117,13 @@ help:
 	@echo "Lockdowns Role Tests"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make test                      Run all tests (hub + spoke + spoke lockdown URI)"
+	@echo "  make test                      Run all tests (hub + spoke + spoke lockdown URI + retag)"
 	@echo "  make test-hub                  Run all hub tests (parse + capture)"
 	@echo "  make test-hub-parse            Run hub parse tests only"
 	@echo "  make test-hub-capture          Run hub capture tests only"
 	@echo "  make test-spoke                Run spoke tests (parse + generate)"
 	@echo "  make test-spoke-lockdown-uri   Run spoke lockdown URI with digests test"
+	@echo "  make test-spoke-retag-catalog  Run spoke retag catalog index tests"
 	@echo "  make prepare-hub               Run hub prepare phase only (requires ansible)"
 	@echo "  make converge-hub              Run hub converge phase only (requires ansible)"
 	@echo "  make verify-hub                Run hub verify phase only (requires ansible)"
@@ -135,3 +151,8 @@ help:
 	@echo "  1. prepare   - Creates mock lockdown JSON with bundle/fbc digests"
 	@echo "  2. converge  - Demonstrates empty lockdown_metadata_operators issue"
 	@echo "  3. verify    - Confirms issue and validates workaround (3 assertions)"
+	@echo ""
+	@echo "Spoke Retag Catalog Index Tests:"
+	@echo "  1. prepare   - Creates mock skopeo wrapper and authfile"
+	@echo "  2. converge  - Runs retag task with mock skopeo (3 retags + 1 validation failure)"
+	@echo "  3. verify    - Validates skopeo commands (10 assertions)"

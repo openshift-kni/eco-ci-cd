@@ -293,6 +293,45 @@
   notify:
     - Cleanup ocp_operator_mirror artifacts
 
+# Re-tag the digest-based catalog image with a static spoke tag so ZTP configs
+# can use a predictable image reference (e.g., :v4.22-spoke instead of :sha256-af78a…).
+- name: Re-tag catalog index for spoke ZTP (lockdown mode)
+  when: telco_kpis_lockdown_feature_enabled | default(false) | bool
+  block:
+    - name: Read CatalogSource manifests to extract digest-based image refs
+      ansible.builtin.slurp:
+        src: "{{ cs_file }}"
+      loop: "{{ manifest_paths | select('search', 'cs-.*\\.yaml$') | list }}"
+      loop_control:
+        loop_var: cs_file
+      register: _retag_cs_manifests
+
+    - name: Extract catalog images from CatalogSource manifests
+      ansible.builtin.set_fact:
+        _retag_catalog_images: >-
+          {{
+            _retag_cs_manifests.results
+            | map(attribute='content')
+            | map('b64decode')
+            | map('from_yaml')
+            | selectattr('spec.image', 'defined')
+            | map(attribute='spec.image')
+            | list
+          }}
+
+    - name: Re-tag each catalog index with static spoke tag
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/retag-catalog-index.yml
+      vars:
+        lockdown_retag_source_image: "{{ catalog_image }}"
+        lockdown_retag_target_image: >-
+          {{ catalog_image | regex_replace(':[^:]+$', '') }}:v{{ production_catalog_version | default(catalog_version) }}-spoke
+        lockdown_retag_authfile: "{{ ocp_operator_mirror_pull_secret_path }}"
+      loop: "{{ _retag_catalog_images }}"
+      loop_control:
+        loop_var: catalog_image
+
 - name: Mutate ocp_operator_mirror_operators_prod catalogs in place
   ansible.builtin.set_fact:
     ocp_operator_mirror_operators_prod: >-

@@ -70,6 +70,13 @@
             | first | default(''))
           }}
 
+    # Two parallel maps are needed in lockdown mode:
+    #   catalog_index_map    — uses FBC digest refs when available (e.g. @sha256:af78a…).
+    #                          Consumed by lockdown metadata so bundle pinning is preserved.
+    #   catalog_index_by_tag — always uses tag refs (e.g. :v4.22).
+    #                          Consumed by the ImageSetConfiguration so oc-mirror generates
+    #                          deterministic CatalogSource names (cs-redhat-operator-index-v4-22)
+    #                          instead of unpredictable digest-derived names.
     - name: Map production catalogs to index images (digest-based lockdown mode)
       changed_when: false
       ansible.builtin.set_fact:
@@ -92,6 +99,10 @@
               if (community_lockdown_fbc | default('') | length > 0)
               else ('registry.redhat.io/redhat/community-operator-index:v' ~ (community_catalog_version | default(catalog_version)))
             }}
+        catalog_index_by_tag:
+          redhat-operators: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
+          certified-operators: "registry.redhat.io/redhat/certified-operator-index:v{{ certified_catalog_version | default(catalog_version) }}"
+          community-operators: "registry.redhat.io/redhat/community-operator-index:v{{ community_catalog_version | default(catalog_version) }}"
 
 
 - name: Map production catalogs to index images (tag-based mode)
@@ -178,17 +189,19 @@
 
 - name: Assemble operators for ImageSetConfiguration
   changed_when: false
+  vars:
+    _catalog_refs: "{{ catalog_index_by_tag | default(catalog_index_map) }}"
   ansible.builtin.set_fact:
     mirror_ops: >-
       {{
         ([] if (pkgs_redhat | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_redhat_catalog_name], 'packages': pkgs_redhat} ])
+          [ {'catalog': _catalog_refs[ocp_operator_mirror_prod_redhat_catalog_name], 'packages': pkgs_redhat} ])
         +
         ([] if (pkgs_cert | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_certified_catalog_name], 'packages': pkgs_cert} ])
+          [ {'catalog': _catalog_refs[ocp_operator_mirror_prod_certified_catalog_name], 'packages': pkgs_cert} ])
         +
         ([] if (pkgs_comm | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_community_catalog_name], 'packages': pkgs_comm} ])
+          [ {'catalog': _catalog_refs[ocp_operator_mirror_prod_community_catalog_name], 'packages': pkgs_comm} ])
       }}
 
 - name: Build ImageSetConfiguration

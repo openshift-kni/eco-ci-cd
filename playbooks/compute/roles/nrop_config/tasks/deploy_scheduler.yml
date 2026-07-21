@@ -49,3 +49,7 @@
     template_name: "templates/scheduler.yaml.j2"
     manifest_name: "operator-scheduler.yaml"
   when: deploy_performance_profile_only | bool is false
+
+- name: Wait for MCP restart
+  ansible.builtin.include_tasks: wait_for_mcp.yml
+  when: (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.18', '<')

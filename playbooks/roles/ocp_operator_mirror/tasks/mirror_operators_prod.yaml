@@ -269,19 +269,6 @@
   ansible.builtin.debug:
     var: oc_mirror.stdout
 
-- name: Accumulate lockdown metadata from production catalogs (spoke lockdown generation mode)
-  when:
-    - ocp_operator_mirror_generate_lockdown | default(false) | bool
-    - oc_mirror is defined
-    - oc_mirror.stdout is defined
-  ansible.builtin.include_role:
-    name: lockdowns
-    tasks_from: spoke/accumulate-metadata-prod.yml
-  vars:
-    lockdown_oc_mirror_output: "{{ oc_mirror.stdout }}"
-    lockdown_operators_list: "{{ ocp_operator_mirror_operators_prod }}"
-    lockdown_catalog_version: "{{ catalog_version }}"
-
 - name: Find CatalogSource (cs*) and ImageDigestMirrorSet (idms*) manifests
   register: mirror_manifests
   ansible.builtin.find:
@@ -320,3 +307,16 @@
       {%- for op in ocp_operator_mirror_operators_prod -%}
       {{ op | combine({'catalog': map.get(op.catalog, op.catalog)}) }}{{ ',' if not loop.last else '' }}
       {%- endfor -%}]
+
+- name: Accumulate lockdown metadata from production catalogs (spoke lockdown generation mode)
+  when:
+    - ocp_operator_mirror_generate_lockdown | default(false) | bool
+    - oc_mirror is defined
+    - oc_mirror.stdout is defined
+  ansible.builtin.include_role:
+    name: lockdowns
+    tasks_from: spoke/accumulate-metadata-prod.yml
+  vars:
+    lockdown_oc_mirror_output: "{{ oc_mirror.stdout }}"
+    lockdown_operators_list: "{{ ocp_operator_mirror_operators_prod }}"
+    lockdown_catalog_version: "{{ catalog_version }}"

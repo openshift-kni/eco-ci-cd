@@ -99,18 +99,7 @@
       ansible.builtin.set_fact:
         spoke_node_name: "{{ spoke_node_name_result.stdout }}"
 
-    - name: Get boots within ZTP deployment window using journalctl time filters
-      ansible.builtin.shell: |
-        oc --kubeconfig {{ spoke_kubeconfig }} debug node/{{ spoke_node_name }} \
-          -- chroot /host journalctl --list-boots \
-             --since "{{ ztp_start_journalctl }}" \
-             --until "{{ ztp_end_journalctl }}" \
-             --no-pager
-      register: journalctl_filtered_boots
-      failed_when: false
-      changed_when: false
-
-    - name: Get all boots for reference
+    - name: Get all boots from spoke node
       ansible.builtin.shell: |
         oc --kubeconfig {{ spoke_kubeconfig }} debug node/{{ spoke_node_name }} \
           -- chroot /host journalctl --list-boots --no-pager
@@ -118,13 +107,28 @@
       failed_when: false
       changed_when: false
 
-    - name: Filter boots that started within ZTP window (exclude header and out-of-window boots)
+    - name: Save all boots to temp file for filtering
+      ansible.builtin.copy:
+        content: "{{ journalctl_all_boots.stdout }}"
+        dest: /tmp/ztp-all-boots.txt
+        mode: "0644"
+
+    - name: Filter boots whose start time falls within ZTP window
+      ansible.builtin.shell: |
+        awk -v start="{{ ztp_start_journalctl }}" -v end="{{ ztp_end_journalctl }}" '
+          /^[[:space:]]*-?[0-9]+[[:space:]]+[a-f0-9]{32}/ {
+            boot_ts = $4 " " $5
+            if (boot_ts >= start && boot_ts <= end) print
+          }' /tmp/ztp-all-boots.txt
+      register: journalctl_filtered_boots
+      changed_when: false
+
+    - name: Parse filtered boot lines
       ansible.builtin.set_fact:
-        # Filter: only boot entry lines, and only those starting with "Thu 2026-07-02"
-        # since ZTP window is 2026-07-02 15:09:01 to 2026-07-02 16:22:12
         ztp_window_boots: >-
           {{ journalctl_filtered_boots.stdout_lines |
-             select('match', '^\s*-?\d+\s+[a-f0-9]{32}.*Thu 2026-07-02') |
+             default([]) |
+             select('match', '^\s*-?\d+\s+[a-f0-9]{32}\s') |
              list }}
 
     - name: Count boots and prepare details

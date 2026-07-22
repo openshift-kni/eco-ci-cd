@@ -19,14 +19,13 @@
 
     - name: Extract CR summary metrics from log
       ansible.builtin.set_fact:
-        crs_with_diffs_match: "{{ rds_log | regex_search('(\\d+)\\s+CRs with diffs', '\\1') }}"
-        total_crs_match: "{{ rds_log | regex_search('out of (\\d+)', '\\1') }}"
+        crs_with_diffs_match: "{{ rds_log | regex_search('CRs with diffs:\\s*(\\d+)/(\\d+)', '\\1', '\\2') }}"
         missing_crs_match: "{{ rds_log | regex_search('(\\d+)\\s+missing CRs', '\\1') }}"
 
     - name: Parse CR metrics
       ansible.builtin.set_fact:
         crs_with_diffs: "{{ crs_with_diffs_match[0] | int if crs_with_diffs_match and crs_with_diffs_match | length > 0 else 0 }}"
-        total_crs: "{{ total_crs_match[0] | int if total_crs_match and total_crs_match | length > 0 else 0 }}"
+        total_crs: "{{ crs_with_diffs_match[1] | int if crs_with_diffs_match and crs_with_diffs_match | length > 1 else 0 }}"
         missing_crs: "{{ missing_crs_match[0] | int if missing_crs_match and missing_crs_match | length > 0 else 0 }}"
 
     - name: Determine test status (PASS if no diffs and no missing CRs)

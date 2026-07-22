@@ -45,6 +45,11 @@
         path: /tmp
       register: test_artifacts_dir
 
+    - name: Record test start time
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: start.yml
+
     - name: Get current timestamp (UTC)
       ansible.builtin.command: date -u +%Y%m%d-%H%M%S
       register: utc_timestamp
@@ -224,6 +229,13 @@
         src: ztp-junit-result.xml.j2
         dest: "{{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml"
         mode: '0644'
+
+    - name: Record test duration and save metadata
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: stop.yml
+      vars:
+        test_duration_artifacts_dir: "{{ test_artifacts_dir.path }}"
 
     - name: List test artifacts
       ansible.builtin.find:

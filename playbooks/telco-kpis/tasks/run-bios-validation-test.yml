@@ -11,6 +11,11 @@
     path: /tmp
   register: artifacts_dir
 
+- name: Record test start time
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: start.yml
+
 - name: Display BIOS validation configuration
   ansible.builtin.debug:
     msg:
@@ -266,6 +271,13 @@
   ansible.builtin.set_fact:
     test_name: "bios_validation"
 
+- name: Record test duration and save metadata
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: stop.yml
+  vars:
+    test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
@@ -274,7 +286,7 @@
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ bios_validation_rc }}"
-    artifact_management_test_duration: "600"  # BIOS validation doesn't have duration, use default
+    artifact_management_test_duration: "{{ test_duration_seconds }}"
 
 - name: Cleanup artifacts directory on bastion
   ansible.builtin.file:

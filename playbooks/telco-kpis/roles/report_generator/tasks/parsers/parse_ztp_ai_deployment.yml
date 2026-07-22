@@ -1,6 +1,9 @@
 ---
 # Parse ZTP Deployment results - extract timeline and deployment summary
 
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
 - name: Find ZTP deployment JUnit XML files
   ansible.builtin.find:
     paths: "{{ current_test.dir_path }}"
@@ -126,7 +129,7 @@
                   'test_type': 'ztp_ai_deployment_time',
                   'status': ztp_result.status,
                   'key_metric': ztp_result.key_metric,
-                  'duration': ztp_result.deployment_time,
+                  'duration': test_duration_human,
                   'passed': ztp_result.passed,
                   'failed': ztp_result.failed,
                   'skipped': ztp_result.skipped,

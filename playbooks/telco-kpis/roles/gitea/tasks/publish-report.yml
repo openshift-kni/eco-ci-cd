@@ -229,12 +229,6 @@
         rename_result.results[loop.index0].rc | default(0) != 0
       changed_when: true
 
-- name: Fix markdown links to point to extracted artifacts
-  ansible.builtin.replace:
-    path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
-    regexp: '{{ report_file }}\.artifacts/'
-    replace: ''
-
 - name: Find all report markdown files
   ansible.builtin.find:
     paths: "{{ git_work_dir }}/reports"

@@ -73,7 +73,7 @@
 
 {% if output_filename %}
 
-📂 [Browse all test artifacts]({{ output_filename }}.artifacts/)
+📂 [Browse all test artifacts](.)
 {% endif %}
 
 ---
@@ -112,6 +112,10 @@
 {% if output_filename %}
 {%   if result.test_type == 'ztp_ai_deployment_time' %}
 [Deployment Timeline Summary]({{ test_name }}/deployment-timeline-summary.txt) | [Timeline JSON]({{ test_name }}/deployment-timeline.json) | [All artifacts]({{ test_name }}/)
+{%   elif result.test_type == 'rds_compare' %}
+[Compare Log]({{ test_name }}/cluster-compare.log) | [All artifacts]({{ test_name }}/)
+{%   elif result.test_type == 'bios_validation' %}
+[BIOS Profile]({{ test_name }}/bios-profile.txt) | [Validation Report]({{ test_name }}/bios-validation-report.json) | [All artifacts]({{ test_name }}/)
 {%   else %}
 [Raw Log]({{ test_name }}/podman-run.log) | [All artifacts]({{ test_name }}/)
 {%   endif %}
@@ -328,6 +332,42 @@ including all deployment phases from GitOps sync to workload readiness.
 {% endif %}
 
 {{ non_passing_tests_detail(result.test_cases | default([]), 'rfc2544') }}
+
+{% elif result.test_type == 'bios_validation' and result.bios_settings is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - BIOS Validation Result
+{{ test_criteria_note("All BIOS settings match expected profile values") }}
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }}
+{% if result.bios_profile_url is defined and result.bios_profile_url %}
+**Profile**: [{{ result.bios_profile_url | basename }}]({{ result.bios_profile_url }})
+{% endif %}
+
+{% if result.bios_settings | length > 0 %}
+| Setting | Expected | Actual | Status |
+|---------|----------|--------|--------|
+{%   for setting in result.bios_settings %}
+| {{ setting.key }} | {{ setting.value }} | {{ setting.current_value }} | {{ '✅ PASS' if setting.status == 'PASS' else '❌ **FAIL**' }} |
+{%   endfor %}
+{% endif %}
+
+{% elif result.test_type == 'rds_compare' %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - RDS Compare Result
+{{ test_criteria_note("No CR diffs or missing CRs compared to Reference Design Specification") }}
+
+**CRs with diffs:** {{ result.crs_with_diffs | default(0) }}/{{ result.total_crs | default(0) }} | **Missing CRs:** {{ result.missing_crs | default(0) }}
+
+{% if result.detail is defined and result.detail | length > 0 and (result.crs_with_diffs | default(0) | int > 0 or result.missing_crs | default(0) | int > 0) %}
+<details>
+<summary><b>▶ Click to expand diff details ({{ result.crs_with_diffs | default(0) }} CRs with differences)</b></summary>
+
+```
+{{ result.detail }}
+```
+
+</details>
+{% endif %}
 
 {% endif %}
 

@@ -168,7 +168,7 @@
           changed_when: false
 
         - name: Set ptp-must-gather source image name
-          when: version.split('.')[1] | int < 21
+          when: version.split('.')[0] | int == 4 and version.split('.')[1] | int < 21
           ansible.builtin.set_fact:
             ptp_must_gather_src: >-
               registry.redhat.io/openshift4/{{
@@ -176,7 +176,7 @@
               else 'ptp-must-gather-rhel8' }}:v{{ version }}
 
         - name: Mirror ptp-must-gather image (OCP < 4.21 only)
-          when: version.split('.')[1] | int < 21
+          when: version.split('.')[0] | int == 4 and version.split('.')[1] | int < 21
           ansible.builtin.command: >
             skopeo copy
             --dest-tls-verify=false
@@ -192,7 +192,7 @@
             ptp_event_consumer_image: "{{ mirror_registry }}/ran-test/cloud-event-consumer"
 
         - name: Set PTP must-gather mirror fact (OCP < 4.21 only)
-          when: version.split('.')[1] | int < 21 and skopeo_must_gather_result is not failed
+          when: version.split('.')[0] | int == 4 and version.split('.')[1] | int < 21 and skopeo_must_gather_result is not failed
           ansible.builtin.set_fact:
             ptp_must_gather_image: "{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}"
 

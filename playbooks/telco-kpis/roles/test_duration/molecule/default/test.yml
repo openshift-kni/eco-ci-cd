@@ -1,0 +1,9 @@
+---
+- name: Prepare test environment
+  import_playbook: prepare.yml
+
+- name: Converge - Exercise test_duration role
+  import_playbook: converge.yml
+
+- name: Verify - Validate test-duration.yml output
+  import_playbook: verify.yml

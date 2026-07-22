@@ -1,0 +1,2 @@
+---
+test_duration_artifacts_dir: "{{ artifacts_dir.path | default('/tmp') }}"

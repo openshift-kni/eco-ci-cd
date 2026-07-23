@@ -1,0 +1,108 @@
+---
+# Wrapper playbook: Deploy SNO hub with OCP release resolution from lockdown
+#
+# Resolves the OCP release from a hub lockdown JSON before calling the original
+# deploy-ocp-sno.yml playbook. The hub lockdown contains the verified OCP pull
+# spec tag at hub.ocp.pull_spec.tag.
+#
+# Resolution precedence:
+#   1. lockdown_uri (hub lockdown JSON URL) — highest priority, extracts
+#      hub.ocp.pull_spec.tag. Supports GitLab symlinks.
+#   2. raw_ocp_release_image (explicit image) — direct pull spec or tag.
+#   3. raw_release (OCP version string) — fallback to version selector.
+#
+# Usage with lockdown URI:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/deploy-ocp-sno.yml \
+#     -e "cluster_name=dev-kpi-01 disconnected=true \
+#         lockdown_uri=https://gitlab.cee.redhat.com/ran/dev-kpi-pipeline/-/raw/prow-lockdowns/hub/defaults/lockdown-hub-4.22-x86_64.json"
+#
+# Usage with explicit image:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/deploy-ocp-sno.yml \
+#     -e "cluster_name=dev-kpi-01 disconnected=true \
+#         raw_ocp_release_image=quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64"
+#
+# Usage with version fallback:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/deploy-ocp-sno.yml \
+#     -e "cluster_name=dev-kpi-01 disconnected=true raw_release=4.22"
+
+- name: Resolve OCP release for hub deployment
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    # ── Path A: Lockdown URI (highest priority) ────────────────────────
+    - name: Resolve from lockdown URI
+      when:
+        - (lockdown_uri | default('')) | length > 0
+      block:
+        - name: Download lockdown JSON (follows GitLab symlinks)
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/download-lockdown.yml
+          vars:
+            lockdown_download_path: /tmp/deploy-sno-hub-lockdown.json
+
+        - name: Read downloaded lockdown JSON
+          ansible.builtin.slurp:
+            src: /tmp/deploy-sno-hub-lockdown.json
+          register: _wrapper_lockdown_file
+
+        - name: Parse lockdown and extract release tag
+          ansible.builtin.set_fact:
+            _wrapper_lockdown_data: "{{ _wrapper_lockdown_file.content | b64decode | from_json }}"
+
+        - name: Set release from lockdown
+          ansible.builtin.set_fact:
+            release: >-
+              {{
+                _wrapper_lockdown_data.hub.ocp.pull_spec.tag
+                if (_wrapper_lockdown_data.hub.ocp.pull_spec is mapping)
+                else _wrapper_lockdown_data.hub.ocp.pull_spec
+              }}
+
+        - name: Display release from lockdown
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "OCP Release Resolution (lockdown)"
+              - "=========================================="
+              - "Lockdown URI: {{ lockdown_uri }}"
+              - "Release:      {{ release }}"
+              - "=========================================="
+
+        - name: Clean up lockdown temp file
+          ansible.builtin.file:
+            path: /tmp/deploy-sno-hub-lockdown.json
+            state: absent
+
+    # ── Path B: Explicit release image ─────────────────────────────────
+    - name: Set release from explicit image
+      when:
+        - (lockdown_uri | default('')) | length == 0
+        - (raw_ocp_release_image | default('')) | length > 0
+      block:
+        - name: Use explicit release image
+          ansible.builtin.set_fact:
+            release: "{{ raw_ocp_release_image }}"
+
+        - name: Display release from explicit image
+          ansible.builtin.debug:
+            msg: "OCP release from explicit image: {{ release }}"
+
+    # ── Path C: Version fallback ───────────────────────────────────────
+    - name: Set release from version
+      when:
+        - (lockdown_uri | default('')) | length == 0
+        - (raw_ocp_release_image | default('')) | length == 0
+      block:
+        - name: Use version as release
+          ansible.builtin.set_fact:
+            release: "{{ raw_release }}"
+
+        - name: Display release from version
+          ansible.builtin.debug:
+            msg: "OCP release from version: {{ release }}"
+
+- import_playbook: ../deploy-ocp-sno.yml

@@ -42,7 +42,8 @@
             "cpu_model_number": "106",
             "architecture": "x86_64",
             "threads_per_core": "2",
-            "kernel_cmdline": "BOOT_IMAGE=(hd0,gpt3)/ostree/rhcos-... isolcpus=2-19,22-39"
+            "kernel_cmdline": "BOOT_IMAGE=(hd0,gpt3)/ostree/rhcos-... isolcpus=2-19,22-39",
+            "performance_profiles_yaml": "-   apiVersion: performance.openshift.io/v2\n    kind: PerformanceProfile\n    metadata:\n        name: openshift-node-performance-profile\n    spec:\n        cpu:\n            isolated: 2-19,22-39\n            reserved: 0-1,20-21\n        hugepages:\n            defaultHugepagesSize: 1G\n            pages:\n            -   count: 32\n                size: 1G\n        realTimeKernel:\n            enabled: false\n        workloadHints:\n            realTime: true\n"
           }
         dest: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
         mode: '0644'

@@ -38,7 +38,8 @@
                 'architecture': node_info.bios_settings.arch | default('N/A'),
                 'threads_per_core': node_info.threads_per_core | default('N/A')
               },
-              'proc_cmdline': node_info.kernel_cmdline | default('')
+              'proc_cmdline': node_info.kernel_cmdline | default(''),
+              'performance_profiles_yaml': node_info.performance_profiles_yaml | default('')
             })
           }}
 

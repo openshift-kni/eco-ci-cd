@@ -46,6 +46,23 @@
         fail_msg: "Report missing expected sections"
         success_msg: "Report contains all expected sections"
 
+    - name: Verify kernel cmdline is rendered in report
+      ansible.builtin.assert:
+        that:
+          - "'Kernel cmdline' in (report_content.content | b64decode)"
+          - "'isolcpus=2-19,22-39' in (report_content.content | b64decode)"
+        fail_msg: "Kernel cmdline section missing from report"
+        success_msg: "Kernel cmdline section rendered correctly"
+
+    - name: Verify performance profiles are rendered in report
+      ansible.builtin.assert:
+        that:
+          - "'PerformanceProfile' in (report_content.content | b64decode)"
+          - "'isolated: 2-19,22-39' in (report_content.content | b64decode)"
+          - "'reserved: 0-1,20-21' in (report_content.content | b64decode)"
+        fail_msg: "PerformanceProfile section missing from report"
+        success_msg: "PerformanceProfile section rendered correctly"
+
     - name: Verify test name normalization (underscore in anchor)
       ansible.builtin.assert:
         that:

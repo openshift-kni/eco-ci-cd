@@ -273,13 +273,13 @@
           failed_when: false
 
         - name: Normalize input lockdown (exclude metadata section)
-          ansible.builtin.shell: |
+          ansible.builtin.command: |
             jq -S 'del(.metadata)' /tmp/spoke-lockdown-input.json
           register: input_normalized
           changed_when: false
 
         - name: Normalize generated lockdown (exclude metadata section)
-          ansible.builtin.shell: |
+          ansible.builtin.command: |
             jq -S 'del(.metadata)' {{ lockdown_output_file }}
           register: generated_normalized
           changed_when: false
@@ -298,19 +298,19 @@
           changed_when: false
 
         - name: Extract generated operators (already normalized)
-          ansible.builtin.shell: |
+          ansible.builtin.command: |
             jq -S '.operators' {{ lockdown_output_file }}
           register: generated_operators
           changed_when: false
 
         - name: Extract bundle+fbc digests from input operators
-          ansible.builtin.shell: |
+          ansible.builtin.command: |
             jq -S '[.operators[] | {name, bundle, fbc}]' /tmp/spoke-lockdown-input.json
           register: input_critical_fields
           changed_when: false
 
         - name: Extract bundle+fbc digests from generated operators
-          ansible.builtin.shell: |
+          ansible.builtin.command: |
             jq -S '[.operators[] | {name, bundle, fbc}]' {{ lockdown_output_file }}
           register: generated_critical_fields
           changed_when: false

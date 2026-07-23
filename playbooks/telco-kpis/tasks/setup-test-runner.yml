@@ -9,7 +9,7 @@
   containers.podman.podman_container:
     name: "telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
     state: absent
-    force_kill: true
+    force_delete: true
   when: not (skip_rebuild_image | default(false) | bool)
   failed_when: false
 

@@ -27,6 +27,7 @@
         - "{{ shared_artifact_dir }}"
         - "{{ output_dir }}"
 
+    # yamllint disable rule:line-length
     - name: Create mock node-info.json with collected_at timestamp
       ansible.builtin.copy:
         content: |
@@ -48,6 +49,7 @@
         dest: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
         mode: '0644'
 
+    # yamllint enable rule:line-length
     - name: Create OLD mock OSLAT test directory (should be filtered out)
       ansible.builtin.file:
         path: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-100000"

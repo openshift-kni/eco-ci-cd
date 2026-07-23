@@ -181,4 +181,5 @@
       ansible.builtin.debug:
         msg: "No OCP release image override — ran playbook will use hub cluster's own release image"
 
-- import_playbook: ../ran/deploy-spoke-ztp.yml
+- name: Deploy spoke cluster via ZTP
+  import_playbook: ../ran/deploy-spoke-ztp.yml

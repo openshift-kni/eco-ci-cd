@@ -30,6 +30,7 @@
     - name: "Assert: call 1 source is digest-based redhat-operator-index"
       ansible.builtin.assert:
         that:
+          # yamllint disable-line rule:line-length
           - "'docker://disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-af78a2837be4aeba837c6c6c7aaff67a34c018eb095fd8a662f7ed9fdccfa2e3' in skopeo_calls[0]"
         fail_msg: "First call missing correct source image"
         success_msg: "✓ Call 1 source image correct"

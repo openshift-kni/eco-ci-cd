@@ -11,6 +11,7 @@
         name: lockdowns
         tasks_from: spoke/retag-catalog-index.yml
       vars:
+        # yamllint disable-line rule:line-length
         lockdown_retag_source_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-af78a2837be4aeba837c6c6c7aaff67a34c018eb095fd8a662f7ed9fdccfa2e3"
         lockdown_retag_target_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.22-spoke"
         lockdown_retag_authfile: "/tmp/molecule-retag/auth.json"

@@ -1,0 +1,17 @@
+---
+# Molecule test runner - executes all test phases
+#
+# Validates the spoke/retag-catalog-index.yml task by mocking skopeo
+# and verifying the correct commands are constructed.
+#
+# Usage:
+#   ansible-playbook -i localhost, -c local molecule/spoke-retag-catalog/default/test.yml
+
+- name: Prepare retag test environment
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Execute retag logic
+  ansible.builtin.import_playbook: converge.yml
+
+- name: Verify results
+  ansible.builtin.import_playbook: verify.yml

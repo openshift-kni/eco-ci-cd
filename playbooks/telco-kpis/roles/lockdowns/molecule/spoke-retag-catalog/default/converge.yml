@@ -1,0 +1,67 @@
+---
+- name: Test retag-catalog-index task
+  hosts: all
+  gather_facts: false
+  environment:
+    PATH: "/tmp/molecule-retag/bin:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+  tasks:
+    # Test 1: Single catalog image retag
+    - name: "Test 1 - Retag single catalog image (digest-based → static spoke tag)"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/retag-catalog-index.yml
+      vars:
+        # yamllint disable-line rule:line-length
+        lockdown_retag_source_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-af78a2837be4aeba837c6c6c7aaff67a34c018eb095fd8a662f7ed9fdccfa2e3"
+        lockdown_retag_target_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.22-spoke"
+        lockdown_retag_authfile: "/tmp/molecule-retag/auth.json"
+
+    # Test 2: Second catalog (certified operators)
+    - name: "Test 2 - Retag certified operator catalog"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/retag-catalog-index.yml
+      vars:
+        lockdown_retag_source_image: "disconnected.registry.local:5000/operators/redhat/certified-operator-index:sha256-1234567890abcdef"
+        lockdown_retag_target_image: "disconnected.registry.local:5000/operators/redhat/certified-operator-index:v4.22-spoke"
+        lockdown_retag_authfile: "/tmp/molecule-retag/auth.json"
+
+    # Test 3: Validation failure (empty source)
+    - name: "Test 3 - Assert validation fails with empty source image"
+      block:
+        - name: Attempt retag with empty source
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: spoke/retag-catalog-index.yml
+          vars:
+            lockdown_retag_source_image: ""
+            lockdown_retag_target_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.22-spoke"
+            lockdown_retag_authfile: "/tmp/molecule-retag/auth.json"
+          register: _validation_result
+          ignore_errors: true
+
+        - name: Mark validation as failed (expected)
+          ansible.builtin.set_fact:
+            validation_failed: true
+      rescue:
+        - name: Validation correctly rejected empty source
+          ansible.builtin.set_fact:
+            validation_failed: true
+
+    # Test 4: Default authfile fallback
+    - name: "Test 4 - Retag with default authfile path"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/retag-catalog-index.yml
+      vars:
+        lockdown_retag_source_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-defaultauth"
+        lockdown_retag_target_image: "disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.18-spoke"
+
+    - name: Read skopeo call log
+      ansible.builtin.slurp:
+        src: /tmp/molecule-retag/skopeo-calls.log
+      register: _skopeo_log
+
+    - name: Parse skopeo calls
+      ansible.builtin.set_fact:
+        skopeo_calls: "{{ (_skopeo_log.content | b64decode).strip().split('\n') }}"

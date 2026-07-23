@@ -1,0 +1,62 @@
+---
+# Verify: Confirm lockdown digest preservation and validation mode works
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Verify lockdown was parsed successfully
+      ansible.builtin.assert:
+        that:
+          - spoke_lockdown_operators is defined
+          - spoke_lockdown_operators | length > 0
+        fail_msg: "Lockdown parsing failed"
+        success_msg: "✓ Lockdown parsed successfully: {{ spoke_lockdown_operators | length }} operators"
+
+    - name: Verify operators PRESERVED bundle and fbc digests (fixed behavior)
+      ansible.builtin.assert:
+        that:
+          - spoke_lockdown_operators[0].bundle is defined
+          - spoke_lockdown_operators[0].fbc is defined
+          - "'@sha256:' in spoke_lockdown_operators[0].bundle"
+          - "'@sha256:' in spoke_lockdown_operators[0].fbc"
+        fail_msg: "FAIL: Digests were stripped (broken behavior)"
+        success_msg: "✓ PASS: Operators preserve bundle/fbc digests (fixed behavior)"
+
+    - name: Verify lockdown generation succeeded
+      ansible.builtin.stat:
+        path: /tmp/lockdown-generated.json
+      register: generated_file
+
+    - name: Assert generated lockdown file exists
+      ansible.builtin.assert:
+        that:
+          - generated_file.stat.exists
+        fail_msg: "Lockdown generation failed"
+        success_msg: "✓ Lockdown generated successfully"
+
+    - name: Verify input and generated lockdowns match (validation mode passes)
+      ansible.builtin.assert:
+        that:
+          - input_lockdown is defined
+          - generated_lockdown is defined
+          - input_lockdown.operators[0].bundle == generated_lockdown.operators[0].bundle
+          - input_lockdown.operators[0].fbc == generated_lockdown.operators[0].fbc
+        fail_msg: "FAIL: Lockdown validation failed (digests don't match)"
+        success_msg: "✓ PASS: Lockdown validation succeeded (identical digests)"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Test Summary: Spoke Lockdown Digest Preservation"
+          - "=========================================="
+          - "✓ Lockdown parsing: Operators extracted with digests"
+          - "✓ Digest preservation: bundle/fbc fields NOT stripped"
+          - "✓ Lockdown generation: Successfully created with metadata"
+          - "✓ Validation mode: Input and generated lockdowns match"
+          - ""
+          - "Result: Bit-identical mirroring confirmed via validation"
+          - ""
+          - "See docs/eco-ci-cd/spoke-lockdown-validation-digest-mismatch-analysis.md"
+          - "for implementation details and fix analysis"
+          - "=========================================="

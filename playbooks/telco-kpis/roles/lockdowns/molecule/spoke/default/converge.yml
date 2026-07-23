@@ -1,0 +1,72 @@
+---
+# Molecule converge phase - runs the role logic
+#
+# Tests spoke lockdown parse (legacy + new format) and generate actions
+
+- name: Converge - Test spoke lockdown parse and generate
+  hosts: all
+  gather_facts: true
+  tasks:
+    # ========================================
+    # TEST 1: Parse Legacy Format
+    # ========================================
+    - name: Parse spoke lockdown (legacy format)
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: spoke
+        lockdown_action: parse
+        spoke_lockdown_uri: "file:///tmp/molecule-tests/spoke-lockdown-legacy.json"
+
+    - name: Save legacy parse results
+      ansible.builtin.set_fact:
+        spoke_legacy_operators: "{{ spoke_lockdown_operators }}"
+        spoke_legacy_ocp_version: "{{ spoke_ocp_version }}"
+        spoke_legacy_ocp_pull_spec: "{{ spoke_ocp_pull_spec }}"
+        spoke_legacy_format: "{{ spoke_lockdown_format }}"
+
+    # ========================================
+    # TEST 2: Parse New Format (future)
+    # ========================================
+    - name: Parse spoke lockdown (new format)
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: spoke
+        lockdown_action: parse
+        spoke_lockdown_uri: "file:///tmp/molecule-tests/spoke-lockdown-new.json"
+
+    - name: Save new format parse results
+      ansible.builtin.set_fact:
+        spoke_new_operators: "{{ spoke_lockdown_operators }}"
+        spoke_new_ocp_version: "{{ spoke_ocp_version }}"
+        spoke_new_ocp_pull_spec: "{{ spoke_ocp_pull_spec }}"
+        spoke_new_format: "{{ spoke_lockdown_format }}"
+
+    # ========================================
+    # TEST 3: Generate Lockdown from Metadata
+    # ========================================
+    - name: Set generate test parameters
+      ansible.builtin.set_fact:
+        _test_lockdown_metadata: "{{ lockdown_metadata_operators }}"
+
+    - name: Generate spoke lockdown from metadata
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/generate.yml
+      vars:
+        lockdown_metadata_operators: "{{ _test_lockdown_metadata }}"
+        lockdown_ocp_version: "4.22"
+        lockdown_architecture: "x86_64"
+        lockdown_hub_name: "test-hub"
+        lockdown_build_number: "999"
+        lockdown_output_file: /tmp/molecule-tests/generated-lockdown.json
+
+    - name: Read generated lockdown file
+      ansible.builtin.slurp:
+        src: /tmp/molecule-tests/generated-lockdown.json
+      register: generated_lockdown_slurp
+
+    - name: Parse generated lockdown JSON
+      ansible.builtin.set_fact:
+        generated_lockdown_data: "{{ generated_lockdown_slurp.content | b64decode | from_json }}"

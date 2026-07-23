@@ -105,4 +105,5 @@
           ansible.builtin.debug:
             msg: "OCP release from version: {{ release }}"
 
-- import_playbook: ../deploy-ocp-sno.yml
+- name: Deploy OCP SNO cluster
+  import_playbook: ../deploy-ocp-sno.yml

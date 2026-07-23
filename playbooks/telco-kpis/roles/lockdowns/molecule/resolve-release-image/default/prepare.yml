@@ -1,0 +1,35 @@
+---
+- name: Prepare resolve-release-image test environment
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create test directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/molecule-resolve
+        - /tmp/molecule-resolve/bin
+
+    - name: Create mock skopeo that returns a fake digest
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "$@" >> /tmp/molecule-resolve/skopeo-calls.log
+          # Return a deterministic fake digest
+          echo "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+          exit 0
+        dest: /tmp/molecule-resolve/bin/skopeo
+        mode: '0755'
+
+    - name: Create mock pull secret
+      ansible.builtin.copy:
+        content: '{"auths":{"quay.io":{"auth":"dGVzdDp0ZXN0"}}}'
+        dest: /tmp/molecule-resolve/pull-secret.json
+        mode: '0644'
+
+    - name: Clear skopeo call log
+      ansible.builtin.file:
+        path: /tmp/molecule-resolve/skopeo-calls.log
+        state: absent

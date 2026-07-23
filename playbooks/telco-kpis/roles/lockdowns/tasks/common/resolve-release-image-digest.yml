@@ -1,0 +1,51 @@
+---
+# Resolve an OCP release image reference to digest format.
+#
+# Uses skopeo to inspect the image registry and retrieve the manifest digest.
+# If the image is already in digest format (@sha256:...), it passes through unchanged.
+#
+# Input variables:
+#   - resolve_release_image: Image reference (tag or digest format)
+#   - resolve_pull_secret_path: Path to pull secret JSON file for skopeo auth
+#
+# Output fact:
+#   - resolved_release_image: Image in digest format (<repo>@sha256:<hash>)
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: lockdowns
+#       tasks_from: common/resolve-release-image-digest.yml
+#     vars:
+#       resolve_release_image: "quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64"
+#       resolve_pull_secret_path: "/tmp/pull-secret.json"
+
+- name: Pass through if already in digest format
+  when: "'@sha256:' in resolve_release_image"
+  ansible.builtin.set_fact:
+    resolved_release_image: "{{ resolve_release_image }}"
+
+- name: Resolve tag to digest via skopeo
+  when: "'@sha256:' not in resolve_release_image"
+  block:
+    - name: Display image to resolve
+      ansible.builtin.debug:
+        msg: "Resolving tag-based image to digest: {{ resolve_release_image }}"
+
+    - name: Inspect image digest with skopeo
+      ansible.builtin.shell:
+        cmd: >-
+          skopeo inspect --no-tags
+          --authfile {{ resolve_pull_secret_path }}
+          docker://{{ resolve_release_image }}
+          --format '{{ '{{' }}.Digest{{ '}}' }}'
+      register: _resolve_digest_result
+      changed_when: false
+
+    - name: Set resolved image with digest
+      ansible.builtin.set_fact:
+        resolved_release_image: >-
+          {{ resolve_release_image | regex_replace(':[^/:]+$', '') }}@{{ _resolve_digest_result.stdout }}
+
+    - name: Display resolved image
+      ansible.builtin.debug:
+        msg: "Resolved to: {{ resolved_release_image }}"

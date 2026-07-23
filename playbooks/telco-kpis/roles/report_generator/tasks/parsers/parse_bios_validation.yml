@@ -58,6 +58,8 @@
               'status': 'N/A',
               'key_metric': 'No results',
               'duration': 'N/A',
+              'passed': 0,
+              'failed': 0,
               'bios_settings': []
             }
           })

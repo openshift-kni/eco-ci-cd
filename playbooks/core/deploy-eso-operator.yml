@@ -1,0 +1,1234 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook deploys the External Secrets Operator (ESO) on a Hub
+# cluster following the telco-reference RDS configuration. ESO integrates
+# external secret management systems (e.g. HashiCorp Vault) and synchronizes
+# secrets from external APIs to Kubernetes secrets.
+#
+# The playbook creates resources aligned to the telco-hub reference CRs:
+#   - Namespace with management workload annotation (sync-wave -45)
+#   - OperatorGroup with bundle install timeout (sync-wave -40)
+#   - Subscription to stable-v1 channel (sync-wave -40)
+#   - ExternalSecretsConfig operand CR (sync-wave -30)
+#   - ClusterSecretStore for Vault backend (sync-wave -30)
+#
+# It supports both connected and disconnected (mirrored) flows, operator
+# teardown, and mirror-only mode.
+
+## Prerequisites:
+# - Ansible 2.9+ installed on the control node
+# - SSH access to bastion hosts
+# - Installed OpenShift cluster (4.20+, 4.22+ recommended)
+# - KUBECONFIG file
+# - Internal registry URL/credentials for disconnected mode (if disconnected=true)
+# - skopeo installed on the control node (for disconnected mode)
+# - redhatci.ocp Ansible collection installed (ansible-galaxy collection install redhatci.ocp)
+
+## Roles Used:
+# - ocp_operator_mirror (disconnected mirroring)
+# - ocp_operator_deployment (installs operators)
+
+## Variables:
+# - teardown (bool): remove the operator and its CRs from the cluster, default false
+# - disconnected (bool): mirror & use internal registry, default false
+# - mirror_only (bool): only mirror operators without installing, default false
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - version (str): OCP major.minor for catalog index images (e.g. 4.22)
+# - catalog_source (str): catalog source name, default "redhat-operators-disconnected"
+# - create_cluster_secret_store (bool): create ClusterSecretStore CR, default true
+# - vault_server_url (str): Vault server URL, default "https://vault.example.com:8200"
+# - vault_path (str): Vault KV path, default "secret"
+# - vault_version (str): Vault KV version, default "v2"
+# - vault_token_secret_name (str): name of secret containing vault token, default "vault-token"
+# - vault_token_secret_key (str): key in secret containing vault token, default "token"
+# - vault_token (str): vault token value; when non-empty the playbook creates the token secret
+#     automatically (WARNING: prefer passing via --extra-vars or env, never store in git)
+# - vault_server_namespace (str): namespace where secret store runs, default "vault" (for Hub NetworkPolicy)
+# - hub_cluster (bool): true for Hub deployment (ACM namespace conditions, in-cluster Vault on port 8200,
+#     ClusterInstance template ConfigMaps). Set to false for spoke deployments where Vault is accessed
+#     externally via an OCP Route on port 443. Default true.
+# - skip_registry_cleanup (bool): skip cleaning internal registry before mirroring, default true
+# - mirror_registry_url (str): internal registry URL, required when disconnected=true
+# - mirror_registry_user (str): username for mirror registry, required when disconnected=true
+# - mirror_registry_password (str): password for mirror registry, required when disconnected=true
+# - pull_secret_file (str): path to pull secret JSON file, required when disconnected=true
+# - pull_secret_string (str): base64-encoded pull secret (alternative to pull_secret_file)
+
+## Usage:
+
+# Example 1: Install ESO operator (connected environment)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22"'
+
+# Example 2: Mirror AND install (disconnected environment)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 3: Custom Vault configuration
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22" \
+#   vault_server_url="https://vault.internal.example.com:8200" vault_path="kv-v2"'
+
+# Example 4: Mirror only (no installation)
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" disconnected=true mirror_only=true version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 5: Remove operator
+# ansible-playbook ./playbooks/cnf/deploy-eso.yaml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" teardown=true'
+---
+- name: Deploy External Secrets Operator (telco-reference aligned)
+  hosts: bastion
+  gather_facts: true
+  vars:
+    teardown: false
+    disconnected: false
+    mirror_only: false
+    create_cluster_secret_store: true
+    catalog_source: redhat-operators-disconnected
+    vault_server_url: "https://vault.example.com:8200"
+    vault_path: "secret"
+    vault_version: "v2"
+    vault_token_secret_name: "vault-token"
+    vault_token_secret_key: "token"
+    vault_token: ""
+    hub_cluster: true
+    _eso_ns: external-secrets-operator
+    _operand_ns: external-secrets
+    operators:
+      - name: openshift-external-secrets-operator
+        catalog: redhat-operators
+        nsname: "{{ _eso_ns }}"
+        channel: stable-v1
+        deploy_default_config: false
+        og_spec:
+          upgradeStrategy: Default
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes==33.1.0
+          - openshift
+        state: present
+
+    # ------------------------------------------------------------------
+    # Teardown
+    # ------------------------------------------------------------------
+    - name: Remove operator
+      when: teardown | bool
+      block:
+        - name: Get all ExternalSecret resources
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+          register: _external_secrets
+
+        - name: Delete ExternalSecret resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ item.metadata.namespace }}"
+            state: absent
+          loop: "{{ _external_secrets.resources }}"
+          loop_control:
+            label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+          when: _external_secrets.resources | length > 0
+
+        - name: Wait for ExternalSecrets to clear
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ExternalSecret
+          register: _remaining_es
+          until: _remaining_es.resources | length == 0
+          retries: 12
+          delay: 10
+          when: _external_secrets.resources | length > 0
+
+        - name: Delete ClusterSecretStore custom resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: ClusterSecretStore
+            name: ztp-secret-provider
+            state: absent
+
+        - name: Get SecretStore resources in ESO namespace
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: SecretStore
+            namespace: "{{ _eso_ns }}"
+          register: _secret_stores
+
+        - name: Delete SecretStore resources
+          kubernetes.core.k8s:
+            api_version: external-secrets.io/v1
+            kind: SecretStore
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          loop: "{{ _secret_stores.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: _secret_stores.resources | length > 0
+
+        - name: Delete ExternalSecretsConfig
+          kubernetes.core.k8s:
+            api_version: operator.openshift.io/v1alpha1
+            kind: ExternalSecretsConfig
+            name: cluster
+            state: absent
+
+        - name: Wait for ExternalSecretsConfig to be fully removed
+          kubernetes.core.k8s_info:
+            api_version: operator.openshift.io/v1alpha1
+            kind: ExternalSecretsConfig
+            name: cluster
+          register: _esc_remaining
+          until: _esc_remaining.resources | length == 0
+          retries: 12
+          delay: 10
+          ignore_errors: true
+
+        - name: Wait for operand pods to terminate
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ _operand_ns }}"
+            label_selectors:
+              - app.kubernetes.io/name=external-secrets
+          register: _operand_pods_remaining
+          until: _operand_pods_remaining.resources | length == 0
+          retries: 6
+          delay: 10
+          ignore_errors: true
+
+        - name: Delete operand namespace if pods did not terminate
+          when: _operand_pods_remaining.resources | default([]) | length > 0
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ _operand_ns }}"
+            state: absent
+
+        - name: Get ClusterServiceVersions in operator namespace
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _eso_ns }}"
+          register: _eso_csvs
+
+        - name: Delete operator ClusterServiceVersions
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          loop: >-
+            {{ _eso_csvs.resources
+               | selectattr('metadata.name', 'search', 'external-secrets-operator')
+               | list }}
+          loop_control:
+            label: "{{ item.metadata.name }}"
+
+        - name: Delete operator Subscription
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+
+        - name: Delete OperatorGroup
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+
+        - name: Delete operator Namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ _eso_ns }}"
+            state: absent
+
+    # ------------------------------------------------------------------
+    # Pull secret resolution (disconnected)
+    # ------------------------------------------------------------------
+    - name: Resolve pull secret
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Fail if no pull secret is provided
+          ansible.builtin.fail:
+            msg: >-
+              A pull secret is required for disconnected mirroring.
+              Provide either pull_secret_file (path to JSON file)
+              or pull_secret_string (base64-encoded JSON).
+          when:
+            - pull_secret_file is not defined
+            - pull_secret_string is not defined
+
+        - name: Read pull secret from file
+          when: pull_secret_file is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ lookup('file', pull_secret_file) | from_json }}"
+
+        - name: Decode pull secret from string
+          when: pull_secret_file is not defined and pull_secret_string is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+
+    # ------------------------------------------------------------------
+    # Tool availability (disconnected)
+    # ------------------------------------------------------------------
+    - name: Ensure skopeo is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if skopeo is installed
+          ansible.builtin.command: which skopeo
+          register: _skopeo_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if skopeo is not installed
+          when: _skopeo_check.rc != 0
+          ansible.builtin.fail:
+            msg: >-
+              skopeo is required for disconnected mirroring but was not found.
+              Install it with: sudo dnf install -y skopeo
+
+    - name: Ensure oc-mirror is available
+      when: not (teardown | bool) and (disconnected | bool)
+      block:
+        - name: Check if oc-mirror is installed
+          ansible.builtin.command: which oc-mirror
+          register: _oc_mirror_check
+          changed_when: false
+          failed_when: false
+
+        - name: Download oc-mirror archive
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.get_url:
+            url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/oc-mirror.tar.gz"
+            dest: "/tmp/oc-mirror.tar.gz"
+            mode: '0644'
+
+        - name: Extract oc-mirror archive
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.unarchive:
+            src: "/tmp/oc-mirror.tar.gz"
+            dest: /tmp
+            remote_src: true
+
+        - name: Install oc-mirror binary
+          when: _oc_mirror_check.rc != 0
+          ansible.builtin.copy:
+            remote_src: true
+            src: /tmp/oc-mirror
+            dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+            mode: '0755'
+
+    # ------------------------------------------------------------------
+    # Mirror operators (disconnected)
+    # ------------------------------------------------------------------
+    - name: Mirror operators to internal registry
+      when: not (teardown | bool) and (disconnected | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: "{{ mirror_registry_url }}"
+        ocp_operator_mirror_registry_user: "{{ mirror_registry_user }}"
+        ocp_operator_mirror_registry_password: "{{ mirror_registry_password }}"
+        ocp_operator_mirror_pull_secret: "{{ _pull_secret }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_skip_internal_registry_cleanup: "{{ skip_registry_cleanup | default(true) }}"
+        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default('operators') }}"
+        ocp_operator_mirror_fbc_image_base: "{{ art_fbc_image_base | default(omit) }}"
+        ocp_operator_mirror_art_images_share: "{{ art_share_image | default(omit) }}"
+
+    - name: Select operators source
+      when: not (teardown | bool)
+      ansible.builtin.set_fact:
+        operator_input: >-
+          {{
+            ocp_operators_mirror_disconnected_config
+            if (((ocp_operators_mirror_disconnected_config | default([])) | length) > 0)
+            else (operators | from_json if (operators is string) else operators)
+          }}
+
+    - name: Display mirror-only mode message
+      ansible.builtin.debug:
+        msg: "Mirror-only mode enabled. Skipping operator installation."
+      when: not (teardown | bool) and (mirror_only | bool)
+
+    # ------------------------------------------------------------------
+    # Clean up stale subscription
+    # ------------------------------------------------------------------
+    - name: Clean up failed ESO subscription if present
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Check for existing ESO subscription
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+          register: _existing_sub
+
+        - name: Remove stale subscription with failed bundle unpack
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+            state: absent
+          when:
+            - _existing_sub.resources | length > 0
+            - _existing_sub.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'BundleUnpackFailed')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0
+
+    # ------------------------------------------------------------------
+    # Create namespace (telco-reference: sync-wave -45)
+    # ------------------------------------------------------------------
+    - name: Create ESO namespace with management workload annotation
+      when: not (teardown | bool) and not (mirror_only | bool)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            annotations:
+              argocd.argoproj.io/sync-wave: "-45"
+              workload.openshift.io/allowed: management
+            name: "{{ _eso_ns }}"
+
+    # ------------------------------------------------------------------
+    # Install operator (telco-reference: sync-wave -40)
+    # ------------------------------------------------------------------
+    - name: Install operators
+      when: not (teardown | bool) and not (mirror_only | bool)
+      ansible.builtin.include_role:
+        name: ocp_operator_deployment
+      vars:
+        ocp_operator_deployment_version: "{{ version }}"
+        ocp_operator_deployment_operators: "{{ operator_input }}"
+        ocp_operator_deployment_stage_repo_image: "{{ stage_catalog_index_image | default(omit) }}"
+        ocp_operator_deployment_stage_cs_secret: "{{ registry_credentials | default(omit) }}"
+
+    - name: Annotate OperatorGroup with bundle-install-timeout
+      when: not (teardown | bool) and not (mirror_only | bool)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            annotations:
+              olm.operatorframework.io/bundle-install-timeout: "10m"
+              operatorframework.io/bundle-unpack-min-retry-interval: 10m
+            name: openshift-external-secrets-operator
+            namespace: "{{ _eso_ns }}"
+
+    # ------------------------------------------------------------------
+    # Configure operator CRs (telco-reference: sync-wave -30)
+    # ------------------------------------------------------------------
+    - name: Configure operator custom resources
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: Wait for ESO operator CSV to succeed
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _eso_ns }}"
+          register: _csv_info
+          until:
+            - _csv_info.resources | length > 0
+            - _csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | length > 0
+            - (_csv_info.resources | selectattr('metadata.name', 'search', 'external-secrets-operator') | list | first).status.phase == 'Succeeded'
+          retries: 30
+          delay: 10
+
+        - name: Create ExternalSecretsConfig operand
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operator.openshift.io/v1alpha1
+              kind: ExternalSecretsConfig
+              metadata:
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+                name: cluster
+              spec: {}
+
+        - name: Wait for external-secrets operand pods to be ready
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ _operand_ns }}"
+            label_selectors:
+              - app.kubernetes.io/name=external-secrets
+          register: _operand_pods
+          until:
+            - _operand_pods.resources | length > 0
+            - _operand_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length == _operand_pods.resources | length
+          retries: 30
+          delay: 10
+
+        - name: Wait for external-secrets webhook endpoints to be available
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Endpoints
+            name: external-secrets-webhook
+            namespace: "{{ _operand_ns }}"
+          register: _webhook_endpoints
+          until:
+            - _webhook_endpoints.resources | length > 0
+            - _webhook_endpoints.resources[0].subsets | default([]) | length > 0
+            - _webhook_endpoints.resources[0].subsets[0].addresses | default([]) | length > 0
+          retries: 30
+          delay: 10
+
+        - name: Create Vault token secret
+          when:
+            - create_cluster_secret_store | bool
+            - vault_token | length > 0
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: "{{ vault_token_secret_name }}"
+                namespace: "{{ _eso_ns }}"
+              type: Opaque
+              stringData: "{{ {vault_token_secret_key: vault_token} }}"
+
+        - name: Create NetworkPolicy allowing ESO to reach in-cluster Vault (Hub)
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: networking.k8s.io/v1
+              kind: NetworkPolicy
+              metadata:
+                name: allow-secret-store-egress
+                namespace: "{{ _operand_ns }}"
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-25"
+              spec:
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: external-secrets
+                policyTypes:
+                  - Egress
+                egress:
+                  - to:
+                      - namespaceSelector:
+                          matchLabels:
+                            kubernetes.io/metadata.name: "{{ vault_server_namespace | default('vault') }}"
+                    ports:
+                      - port: 8200
+                        protocol: TCP
+                  - to:
+                      - namespaceSelector:
+                          matchLabels:
+                            kubernetes.io/metadata.name: openshift-dns
+                    ports:
+                      - port: 53
+                        protocol: UDP
+                      - port: 53
+                        protocol: TCP
+
+        - name: Create NetworkPolicy allowing ESO to reach external Vault Route (spoke)
+          when:
+            - create_cluster_secret_store | bool
+            - not (hub_cluster | bool)
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: networking.k8s.io/v1
+              kind: NetworkPolicy
+              metadata:
+                name: allow-secret-store-egress
+                namespace: "{{ _operand_ns }}"
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-25"
+              spec:
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: external-secrets
+                policyTypes:
+                  - Egress
+                egress:
+                  - ports:
+                      - port: 443
+                        protocol: TCP
+                  - to:
+                      - namespaceSelector:
+                          matchLabels:
+                            kubernetes.io/metadata.name: openshift-dns
+                    ports:
+                      - port: 53
+                        protocol: UDP
+                      - port: 53
+                        protocol: TCP
+
+        - name: Create ClusterSecretStore for ZTP secret provider (Hub — with ACM namespace conditions)
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: external-secrets.io/v1
+              kind: ClusterSecretStore
+              metadata:
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+                name: ztp-secret-provider
+              spec:
+                conditions:
+                  - namespaceSelector:
+                      matchExpressions:
+                        - key: cluster.open-cluster-management.io/managedCluster
+                          operator: Exists
+                provider:
+                  vault:
+                    server: "{{ vault_server_url }}"
+                    path: "{{ vault_path }}"
+                    version: "{{ vault_version }}"
+                    auth:
+                      tokenSecretRef:
+                        name: "{{ vault_token_secret_name }}"
+                        key: "{{ vault_token_secret_key }}"
+                        namespace: "{{ _eso_ns }}"
+
+        - name: Create ClusterSecretStore for ZTP secret provider (spoke — no namespace conditions)
+          when:
+            - create_cluster_secret_store | bool
+            - not (hub_cluster | bool)
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: external-secrets.io/v1
+              kind: ClusterSecretStore
+              metadata:
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+                name: ztp-secret-provider
+              spec:
+                provider:
+                  vault:
+                    server: "{{ vault_server_url }}"
+                    path: "{{ vault_path }}"
+                    version: "{{ vault_version }}"
+                    auth:
+                      tokenSecretRef:
+                        name: "{{ vault_token_secret_name }}"
+                        key: "{{ vault_token_secret_key }}"
+                        namespace: "{{ _eso_ns }}"
+
+        - name: Wait for ClusterSecretStore to become ready
+          when:
+            - create_cluster_secret_store | bool
+            - vault_token | length > 0
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ClusterSecretStore
+            name: ztp-secret-provider
+          register: _css_status
+          until:
+            - _css_status.resources | length > 0
+            - (_css_status.resources[0].status.conditions | default([])
+               | selectattr('type', 'equalto', 'Ready')
+               | selectattr('status', 'equalto', 'True')
+               | list | length) > 0
+          retries: 12
+          delay: 10
+
+        - name: Create ClusterInstance pull secret template ConfigMap
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: eso-cluster-templates-v1
+                namespace: open-cluster-management
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+              data:
+                PullSecretExternalSecret: |
+                  {% raw %}
+                  apiVersion: external-secrets.io/v1
+                  kind: ExternalSecret
+                  metadata:
+                    name: "{{ .Spec.PullSecretRef.Name }}"
+                    namespace: "{{ .Spec.ClusterName }}"
+                    annotations:
+                      siteconfig.open-cluster-management.io/sync-wave: "1"
+                  spec:
+                    refreshPolicy: CreatedOnce
+                    secretStoreRef:
+                      name: ztp-secret-provider
+                      kind: ClusterSecretStore
+                    target:
+                      name: "{{ .Spec.PullSecretRef.Name }}"
+                      creationPolicy: Owner
+                      template:
+                        type: kubernetes.io/dockerconfigjson
+                    data:
+                      - secretKey: .dockerconfigjson
+                        remoteRef:
+                          key: clusters/{{ .Spec.ClusterName }}/pull-secret
+                          property: .dockerconfigjson
+                  {% endraw %}
+
+        - name: Create ClusterInstance BMC credentials template ConfigMap
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: eso-node-templates-v1
+                namespace: open-cluster-management
+                annotations:
+                  argocd.argoproj.io/sync-wave: "-30"
+              data:
+                BmcSecretExternalSecret: |
+                  {% raw %}
+                  apiVersion: external-secrets.io/v1
+                  kind: ExternalSecret
+                  metadata:
+                    name: "{{ .SpecialVars.CurrentNode.BmcCredentialsName.Name }}"
+                    namespace: "{{ .Spec.ClusterName }}"
+                    annotations:
+                      siteconfig.open-cluster-management.io/sync-wave: "1"
+                  spec:
+                    refreshPolicy: CreatedOnce
+                    secretStoreRef:
+                      name: ztp-secret-provider
+                      kind: ClusterSecretStore
+                    target:
+                      name: "{{ .SpecialVars.CurrentNode.BmcCredentialsName.Name }}"
+                      creationPolicy: Owner
+                    data:
+                      - secretKey: username
+                        remoteRef:
+                          key: clusters/{{ .Spec.ClusterName }}/bmc/{{ .SpecialVars.CurrentNode.HostName }}
+                          property: username
+                      - secretKey: password
+                        remoteRef:
+                          key: clusters/{{ .Spec.ClusterName }}/bmc/{{ .SpecialVars.CurrentNode.HostName }}
+                          property: password
+                  {% endraw %}
+
+        - name: Display ESO configuration summary
+          ansible.builtin.debug:
+            msg: >-
+              External Secrets Operator configured:
+              namespace={{ _eso_ns }},
+              ClusterSecretStore={{ 'ztp-secret-provider' if (create_cluster_secret_store | bool) else 'not created' }},
+              vault_server={{ vault_server_url }}
+
+        - name: Display Vault token secret reminder
+          when:
+            - create_cluster_secret_store | bool
+            - vault_token | length == 0
+          ansible.builtin.debug:
+            msg: >-
+              IMPORTANT: You must manually create the Vault token secret in the
+              {{ _eso_ns }} namespace. The secret must NOT be stored in git. Example:
+              oc create secret generic {{ vault_token_secret_name }}
+              --from-literal={{ vault_token_secret_key }}=<your-vault-token>
+              -n {{ _eso_ns }}
+
+    # ------------------------------------------------------------------
+    # Smoke tests
+    # ------------------------------------------------------------------
+    - name: Verify ESO deployment
+      when: not (teardown | bool) and not (mirror_only | bool)
+      block:
+        - name: "Check: ESO operator CSV is Succeeded"
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            namespace: "{{ _eso_ns }}"
+          register: _check_csv
+          failed_when: >-
+            _check_csv.resources
+            | selectattr('metadata.name', 'search', 'external-secrets-operator')
+            | selectattr('status.phase', 'equalto', 'Succeeded')
+            | list | length == 0
+
+        - name: "Check: operand pods are running"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ _operand_ns }}"
+            label_selectors:
+              - app.kubernetes.io/name=external-secrets
+          register: _check_pods
+          failed_when:
+            - _check_pods.resources | length == 0 or
+              (_check_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) != (_check_pods.resources | length)
+
+        - name: "Check: vault-token secret exists"
+          when: create_cluster_secret_store | bool
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ vault_token_secret_name }}"
+            namespace: "{{ _eso_ns }}"
+          register: _check_token
+          failed_when: _check_token.resources | length == 0
+
+        - name: "Check: ClusterSecretStore is Ready"
+          when: create_cluster_secret_store | bool
+          kubernetes.core.k8s_info:
+            api_version: external-secrets.io/v1
+            kind: ClusterSecretStore
+            name: ztp-secret-provider
+          register: _check_css
+          failed_when: >-
+            _check_css.resources | length == 0 or
+            (_check_css.resources[0].status.conditions | default([])
+             | selectattr('type', 'equalto', 'Ready')
+             | selectattr('status', 'equalto', 'True')
+             | list | length) == 0
+
+        - name: "Check: NetworkPolicy allows ESO to reach secret store"
+          when: create_cluster_secret_store | bool
+          kubernetes.core.k8s_info:
+            api_version: networking.k8s.io/v1
+            kind: NetworkPolicy
+            name: allow-secret-store-egress
+            namespace: "{{ _operand_ns }}"
+          register: _check_netpol
+          failed_when:
+            - _check_netpol.resources | length == 0
+
+        - name: "Check: NetworkPolicy allows Vault egress on expected port"
+          when: create_cluster_secret_store | bool
+          vars:
+            _expected_vault_port: "{{ 8200 if (hub_cluster | bool) else 443 }}"
+            _egress_ports: >-
+              {{ _check_netpol.resources[0].spec.egress
+                 | selectattr('ports', 'defined')
+                 | map(attribute='ports')
+                 | flatten
+                 | map(attribute='port')
+                 | map('int')
+                 | list }}
+          ansible.builtin.assert:
+            that:
+              - (_expected_vault_port | int) in _egress_ports
+              - 53 in _egress_ports
+            fail_msg: >-
+              NetworkPolicy allow-secret-store-egress is missing expected egress rules.
+              Expected Vault port {{ _expected_vault_port }} and DNS port 53.
+              Found ports: {{ _egress_ports }}
+            success_msg: "NetworkPolicy includes Vault (port {{ _expected_vault_port }}) and DNS (port 53) egress rules"
+
+        - name: "Check: namespace condition rejects unlabeled namespaces"
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+            - vault_token | length > 0
+          block:
+            - name: Create unlabeled test namespace for condition check
+              kubernetes.core.k8s:
+                state: present
+                definition:
+                  apiVersion: v1
+                  kind: Namespace
+                  metadata:
+                    name: "{{ _eso_ns }}-condition-test"
+
+            - name: Create ExternalSecret in unlabeled namespace
+              kubernetes.core.k8s:
+                state: present
+                definition:
+                  apiVersion: external-secrets.io/v1
+                  kind: ExternalSecret
+                  metadata:
+                    name: eso-condition-test
+                    namespace: "{{ _eso_ns }}-condition-test"
+                  spec:
+                    refreshInterval: 1h
+                    secretStoreRef:
+                      name: ztp-secret-provider
+                      kind: ClusterSecretStore
+                    target:
+                      name: eso-condition-test
+                    dataFrom:
+                      - extract:
+                          key: "secret/eso-smoke-test"
+
+            - name: Verify ExternalSecret is not synced (condition blocks it)
+              kubernetes.core.k8s_info:
+                api_version: external-secrets.io/v1
+                kind: ExternalSecret
+                name: eso-condition-test
+                namespace: "{{ _eso_ns }}-condition-test"
+              register: _check_condition
+              retries: 6
+              delay: 5
+              until: _check_condition.resources | length > 0
+              failed_when: >-
+                _check_condition.resources | length > 0 and
+                (_check_condition.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length) > 0
+
+            - name: "Namespace condition test PASSED"
+              ansible.builtin.debug:
+                msg: "ExternalSecret in unlabeled namespace was correctly rejected by ClusterSecretStore conditions"
+
+          always:
+            - name: Clean up condition-test ExternalSecret
+              kubernetes.core.k8s:
+                api_version: external-secrets.io/v1
+                kind: ExternalSecret
+                name: eso-condition-test
+                namespace: "{{ _eso_ns }}-condition-test"
+                state: absent
+              failed_when: false
+
+            - name: Clean up condition-test namespace
+              kubernetes.core.k8s:
+                api_version: v1
+                kind: Namespace
+                name: "{{ _eso_ns }}-condition-test"
+                state: absent
+              failed_when: false
+
+        - name: "Check: end-to-end secret sync from Vault (Hub)"
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+            - vault_token | length > 0
+          block:
+            - name: Find an existing managed cluster namespace
+              kubernetes.core.k8s_info:
+                api_version: v1
+                kind: Namespace
+                label_selectors:
+                  - cluster.open-cluster-management.io/managedCluster
+              register: _managed_ns_list
+
+            - name: Select managed cluster namespace for smoke test
+              ansible.builtin.set_fact:
+                _smoke_test_ns: "{{ _managed_ns_list.resources | selectattr('status.phase', 'equalto', 'Active') | map(attribute='metadata.name') | first }}"
+              when: _managed_ns_list.resources | selectattr('status.phase', 'equalto', 'Active') | list | length > 0
+
+            - name: Skip E2E smoke test if no managed cluster namespace exists
+              ansible.builtin.debug:
+                msg: "No active managed cluster namespace found — skipping end-to-end smoke test"
+              when: _smoke_test_ns is not defined
+
+            - name: Run E2E smoke test (Hub)
+              when: _smoke_test_ns is defined
+              block:
+                - name: Look up Vault pod
+                  kubernetes.core.k8s_info:
+                    api_version: v1
+                    kind: Pod
+                    namespace: vault
+                    label_selectors:
+                      - app=vault
+                  register: _vault_pod_lookup
+                  failed_when: _vault_pod_lookup.resources | length == 0
+
+                - name: Write smoke-test secret to Vault
+                  kubernetes.core.k8s_exec:
+                    namespace: vault
+                    pod: "{{ _vault_pod_lookup.resources[0].metadata.name }}"
+                    command: >-
+                      env VAULT_TOKEN={{ vault_token }} VAULT_ADDR=http://127.0.0.1:8200
+                      vault kv put secret/eso-smoke-test marker=eso-ok
+                  changed_when: true
+
+                - name: Create test ExternalSecret in {{ _smoke_test_ns }}
+                  kubernetes.core.k8s:
+                    state: present
+                    definition:
+                      apiVersion: external-secrets.io/v1
+                      kind: ExternalSecret
+                      metadata:
+                        name: eso-smoke-test
+                        namespace: "{{ _smoke_test_ns }}"
+                      spec:
+                        refreshInterval: 1h
+                        secretStoreRef:
+                          name: ztp-secret-provider
+                          kind: ClusterSecretStore
+                        target:
+                          name: eso-smoke-test
+                        dataFrom:
+                          - extract:
+                              key: "secret/eso-smoke-test"
+
+                - name: Wait for ExternalSecret to sync
+                  kubernetes.core.k8s_info:
+                    api_version: external-secrets.io/v1
+                    kind: ExternalSecret
+                    name: eso-smoke-test
+                    namespace: "{{ _smoke_test_ns }}"
+                  register: _check_es
+                  until:
+                    - _check_es.resources | length > 0
+                    - (_check_es.resources[0].status.conditions | default([])
+                       | selectattr('type', 'equalto', 'Ready')
+                       | selectattr('status', 'equalto', 'True')
+                       | list | length) > 0
+                  retries: 12
+                  delay: 10
+
+                - name: Verify synced secret contains expected data
+                  kubernetes.core.k8s_info:
+                    api_version: v1
+                    kind: Secret
+                    name: eso-smoke-test
+                    namespace: "{{ _smoke_test_ns }}"
+                  register: _check_synced
+                  failed_when:
+                    - _check_synced.resources | length == 0 or
+                      (_check_synced.resources[0].data.marker | default('') | b64decode) != 'eso-ok'
+
+                - name: "Smoke test PASSED (Hub)"
+                  ansible.builtin.debug:
+                    msg: "End-to-end secret sync verified in namespace {{ _smoke_test_ns }}: Vault -> ClusterSecretStore -> ExternalSecret -> Secret"
+
+              always:
+                - name: Clean up smoke-test ExternalSecret
+                  kubernetes.core.k8s:
+                    api_version: external-secrets.io/v1
+                    kind: ExternalSecret
+                    name: eso-smoke-test
+                    namespace: "{{ _smoke_test_ns }}"
+                    state: absent
+                  failed_when: false
+
+                - name: Clean up smoke-test secret from Vault
+                  when: _vault_pod_lookup is defined and (_vault_pod_lookup.resources | length > 0)
+                  kubernetes.core.k8s_exec:
+                    namespace: vault
+                    pod: "{{ _vault_pod_lookup.resources[0].metadata.name }}"
+                    command: >-
+                      env VAULT_TOKEN={{ vault_token }} VAULT_ADDR=http://127.0.0.1:8200
+                      vault kv delete secret/eso-smoke-test
+                  failed_when: false
+
+        - name: "Check: end-to-end secret sync from Hub Vault (spoke)"
+          when:
+            - create_cluster_secret_store | bool
+            - not (hub_cluster | bool)
+            - vault_token | length > 0
+          vars:
+            _spoke_smoke_ns: "{{ _eso_ns }}-smoke-test"
+          block:
+            - name: Create temporary namespace for spoke smoke test
+              kubernetes.core.k8s:
+                state: present
+                definition:
+                  apiVersion: v1
+                  kind: Namespace
+                  metadata:
+                    name: "{{ _spoke_smoke_ns }}"
+
+            - name: Create test ExternalSecret in {{ _spoke_smoke_ns }}
+              kubernetes.core.k8s:
+                state: present
+                definition:
+                  apiVersion: external-secrets.io/v1
+                  kind: ExternalSecret
+                  metadata:
+                    name: eso-smoke-test
+                    namespace: "{{ _spoke_smoke_ns }}"
+                  spec:
+                    refreshInterval: 1h
+                    secretStoreRef:
+                      name: ztp-secret-provider
+                      kind: ClusterSecretStore
+                    target:
+                      name: eso-smoke-test
+                    dataFrom:
+                      - extract:
+                          key: "secret/eso-smoke-test"
+
+            - name: Wait for ExternalSecret to sync
+              kubernetes.core.k8s_info:
+                api_version: external-secrets.io/v1
+                kind: ExternalSecret
+                name: eso-smoke-test
+                namespace: "{{ _spoke_smoke_ns }}"
+              register: _check_es_spoke
+              until:
+                - _check_es_spoke.resources | length > 0
+                - (_check_es_spoke.resources[0].status.conditions | default([])
+                   | selectattr('type', 'equalto', 'Ready')
+                   | selectattr('status', 'equalto', 'True')
+                   | list | length) > 0
+              retries: 12
+              delay: 10
+
+            - name: Verify synced secret contains expected data
+              kubernetes.core.k8s_info:
+                api_version: v1
+                kind: Secret
+                name: eso-smoke-test
+                namespace: "{{ _spoke_smoke_ns }}"
+              register: _check_synced_spoke
+              failed_when:
+                - _check_synced_spoke.resources | length == 0 or
+                  (_check_synced_spoke.resources[0].data.hello | default('') | b64decode) != 'world'
+
+            - name: "Smoke test PASSED (spoke)"
+              ansible.builtin.debug:
+                msg: "End-to-end secret sync verified: Hub Vault -> ClusterSecretStore -> ExternalSecret -> Secret in {{ _spoke_smoke_ns }}"
+
+          always:
+            - name: Clean up spoke smoke-test ExternalSecret
+              kubernetes.core.k8s:
+                api_version: external-secrets.io/v1
+                kind: ExternalSecret
+                name: eso-smoke-test
+                namespace: "{{ _spoke_smoke_ns }}"
+                state: absent
+              failed_when: false
+
+            - name: Clean up spoke smoke-test namespace
+              kubernetes.core.k8s:
+                api_version: v1
+                kind: Namespace
+                name: "{{ _spoke_smoke_ns }}"
+                state: absent
+              failed_when: false
+
+        - name: "Check: operator controller-manager deployment is Ready"
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            name: external-secrets-operator-controller-manager
+            namespace: "{{ _eso_ns }}"
+          register: _check_operator_deploy
+          failed_when: >-
+            _check_operator_deploy.resources | length == 0 or
+            (_check_operator_deploy.resources[0].status.readyReplicas | default(0) | int) <
+            (_check_operator_deploy.resources[0].spec.replicas | default(1) | int)
+
+        - name: "Check: namespace has management workload annotation"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Namespace
+            name: "{{ _eso_ns }}"
+          register: _check_ns
+          failed_when: >-
+            _check_ns.resources | length == 0 or
+            (_check_ns.resources[0].metadata.annotations['workload.openshift.io/allowed'] | default('')) != 'management'
+
+        - name: "Check: ExternalSecretsConfig operand is Ready"
+          kubernetes.core.k8s_info:
+            api_version: operator.openshift.io/v1alpha1
+            kind: ExternalSecretsConfig
+            name: cluster
+          register: _check_esc
+          failed_when: >-
+            _check_esc.resources | length == 0 or
+            (_check_esc.resources[0].status.conditions | default([])
+             | selectattr('type', 'equalto', 'Ready')
+             | selectattr('status', 'equalto', 'True')
+             | list | length) == 0
+
+        - name: "Check: ClusterInstance pull secret template ConfigMap exists"
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            name: eso-cluster-templates-v1
+            namespace: open-cluster-management
+          register: _check_cluster_cm
+          failed_when: _check_cluster_cm.resources | length == 0
+
+        - name: "Check: ClusterInstance BMC credentials template ConfigMap exists"
+          when:
+            - create_cluster_secret_store | bool
+            - hub_cluster | bool
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            name: eso-node-templates-v1
+            namespace: open-cluster-management
+          register: _check_node_cm
+          failed_when: _check_node_cm.resources | length == 0
+
+        - name: Measure steady-state ESO resource usage
+          ansible.builtin.command:
+            cmd: oc adm top pods -n {{ _operand_ns }} --no-headers
+          register: _resource_usage
+          changed_when: false
+          failed_when: false
+
+        - name: Display verification summary
+          ansible.builtin.debug:
+            msg:
+              - "ESO deployment verification passed ({{ 'Hub' if (hub_cluster | bool) else 'spoke' }} mode):"
+              - "  - Operator CSV: Succeeded"
+              - >-
+                Controller-manager: Ready
+                ({{ _check_operator_deploy.resources[0].status.readyReplicas | default(0) }}/{{
+                _check_operator_deploy.resources[0].spec.replicas | default(1) }})
+              - "  - Operand pods: Running ({{ _check_pods.resources | length }} pods)"
+              - "  - Namespace annotation: workload.openshift.io/allowed=management"
+              - "  - ExternalSecretsConfig: Ready"
+              - "  - NetworkPolicy: {{ 'Present (port ' ~ (8200 if (hub_cluster | bool) else 443) ~ ' + DNS)' if (create_cluster_secret_store | bool) else 'skipped' }}"
+              - "  - ClusterInstance templates: {{ 'eso-cluster-templates-v1, eso-node-templates-v1' if (create_cluster_secret_store | bool and hub_cluster | bool) else 'skipped (spoke mode)' if not (hub_cluster | bool) else 'skipped' }}"
+              - "  - ClusterSecretStore: {{ 'Ready' if (create_cluster_secret_store | bool) else 'skipped' }}"
+              - "  - Namespace condition: {{ 'Enforced' if (create_cluster_secret_store | bool and hub_cluster | bool and vault_token | length > 0) else 'skipped' }}"
+              - >-
+                End-to-end sync:
+                {{ 'Verified' if (create_cluster_secret_store | bool and vault_token | length > 0)
+                else 'skipped (no vault_token provided)' }}
+
+        - name: Display steady-state resource usage
+          when: _resource_usage.rc == 0
+          ansible.builtin.debug:
+            msg:
+              - "Steady-state ESO resource usage ({{ _operand_ns }}):"
+              - "{{ _resource_usage.stdout }}"

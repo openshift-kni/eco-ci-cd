@@ -1,0 +1,98 @@
+---
+- name: Rollback openshift cluster
+  when: kcli_wrp.clusters is defined and
+        'rollback' in ansible_run_tags
+  tags:
+    - rollback
+  block:
+
+    - name: Deleting cluster
+      ansible.builtin.command: |-
+        kcli delete cluster {{ cluster.parameters.cluster }} --yes
+      register: _del_cluster_ret
+      changed_when: _del_cluster_ret.stdout != ''
+      loop: "{{ kcli_wrp.clusters }}"
+      loop_control:
+        loop_var: cluster
+
+- name: Deploy cluster
+  when: kcli_wrp.clusters is defined
+  block:
+
+    - name: Create temporary kcli cluster parameter file
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: kcli_
+      register: _kcli_tempdir
+
+    - name: Dump base64 pull_secret to a local temporary file
+      when: cluster.parameters.base64_pull_secret is defined
+      ansible.builtin.shell: |-
+        echo "{{ cluster.parameters.base64_pull_secret }}" | base64 -d \
+          > {{ _kcli_tempdir.path }}/{{ cluster.parameters.cluster }}_pull_secret.yml
+      loop: "{{ kcli_wrp.clusters }}"
+      loop_control:
+        loop_var: cluster
+
+    - name: Create a k8s cluster
+      ansible.builtin.shell: |-
+        pf={{ _kcli_tempdir.path }}/{{ cluster.parameters.cluster }}_{{ cluster.type }}_cluster_parameters.yml
+        cat << EOF > ${pf}
+        {% if cluster.parameters.base64_pull_secret is defined %}
+        {% set ps = _kcli_tempdir.path + "/" + cluster.parameters.cluster + "_pull_secret.yml" %}
+        {% set _ = cluster.parameters.update({'base64_pull_secret': None, 'pull_secret': ps}) %}
+        {% endif %}
+        {{ cluster.parameters | to_nice_yaml }}
+        EOF
+        kcli create cluster {{ cluster.type }} \
+          {% if cluster.force_installation is defined and cluster.force_installation %} --force \ {% endif %}
+          --paramfile=${pf}
+      async: 14400
+      poll: 0
+      register: _kcli_clusters
+      changed_when: false
+      loop: "{{ kcli_wrp.clusters }}"
+      loop_control:
+        loop_var: cluster
+
+    - name: Check cluster installation progess
+      async_status:
+        jid: "{{ kcli_cluster.ansible_job_id }}"
+      register: _kcli_job_result
+      until: _kcli_job_result.finished
+      retries: 120
+      delay: 120
+      loop: "{{ _kcli_clusters.results }}"
+      loop_control:
+        loop_var: kcli_cluster
+    # changed_when: _kcli_job_result.rc is defined and _kcli_job_result.rc == 0
+    # failed_when: |-
+    #   _kcli_job_result.stderr != '' and _kcli_job_result.rc != 0
+
+    # - name: Force all notified handlers to run at this point, not waiting for normal sync points
+    #   ansible.builtin.meta: flush_handlers
+
+    - name: Show installed cluster
+      changed_when: false
+      ansible.builtin.shell: |-
+        kcli list cluster
+        kcli list plan
+        kcli list vms
+        which oc
+        if [ $? -eq 0 ];then
+          oc \
+            --kubeconfig ~/.kcli/clusters/{{ cluster.parameters.cluster }}/auth/kubeconfig \
+            get node -owide
+        fi
+      loop: "{{ kcli_wrp.clusters }}"
+      loop_control:
+        loop_var: cluster
+
+  always:
+
+    - name: Remove temporaty kcli cluster parameter file
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ _kcli_tempdir.path }}"

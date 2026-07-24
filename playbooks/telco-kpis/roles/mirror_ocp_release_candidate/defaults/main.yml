@@ -1,0 +1,19 @@
+---
+# OCP release image reference in digest format.
+# Example: quay.io/openshift-release-dev/ocp-release@sha256:abc123...
+mirror_rc_release_image: ""
+
+# Path to hub cluster kubeconfig (used to read IDMS)
+mirror_rc_kubeconfig: "{{ kubeconfig }}"
+
+# Disconnected registry connection details
+mirror_rc_registry_url: "{{ disconnected_registry_url }}"
+mirror_rc_registry_port: "{{ disconnected_registry_port }}"
+
+# Registry path prefix where release images are mirrored.
+# Matches the mor_registry_path pattern used by deploy-ocp-sno.yml.
+mirror_rc_registry_path: "ocp4/openshift"
+
+# Path to pull secret JSON file (must include both quay.io and
+# disconnected registry credentials for oc adm release mirror).
+mirror_rc_pull_secret_path: ""

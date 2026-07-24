@@ -319,6 +319,44 @@
               list | length == 0
           retries: 30
           delay: 30
+
+        # ── Debug: capture SR-IOV state for policy drift investigation ──
+        - name: Get SriovNetwork objects from the spoke cluster
+          kubernetes.core.k8s_info:
+            api_version: sriovnetwork.openshift.io/v1
+            kind: SriovNetwork
+            namespace: openshift-sriov-network-operator
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_sriov_networks
+          ignore_errors: true
+
+        - name: Show SriovNetwork specs on the spoke
+          ansible.builtin.debug:
+            msg: >-
+              {{
+                spoke_sriov_networks.resources | default([]) | map('dict2items')
+                | map('selectattr', 'key', 'in', ['metadata', 'spec'])
+                | map('items2dict') | list
+              }}
+          when: spoke_sriov_networks is success
+
+        - name: Get the site-config policy status from the hub
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: Policy
+            name: ztp-group.group-du-standard-site-config-policy
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: hub_site_config_policy
+          ignore_errors: true
+
+        - name: Show site-config policy compliance status
+          ansible.builtin.debug:
+            msg:
+              compliant: "{{ hub_site_config_policy.resources[0].status.compliant | default('unknown') }}"
+              details: "{{ hub_site_config_policy.resources[0].status.details | default([]) }}"
+          when: hub_site_config_policy is success and hub_site_config_policy.resources | length > 0
+
       always:
         - name: Delete the day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:

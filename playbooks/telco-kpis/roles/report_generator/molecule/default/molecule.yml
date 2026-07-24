@@ -1,0 +1,20 @@
+---
+# Molecule configuration for report_generator role
+# Run via Makefile: make test (uses eco-ci-cd container)
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: delegated
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  env:
+    ANSIBLE_ROLES_PATH: /eco-ci-cd/playbooks/telco-kpis/roles
+verifier:
+  name: ansible

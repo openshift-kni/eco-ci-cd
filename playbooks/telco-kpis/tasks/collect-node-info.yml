@@ -119,6 +119,21 @@
     cpu_type: "unknown"
   when: lscpu_result.stdout is not defined
 
+- name: Get kernel cmdline
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs cat /proc/cmdline
+  register: cmdline_result
+  failed_when: false
+  changed_when: false
+
+- name: Set kernel cmdline fact
+  ansible.builtin.set_fact:
+    kernel_cmdline: "{{ cmdline_result.stdout | default('') | trim }}"
+
 - name: Get PerformanceProfiles
   kubernetes.core.k8s_info:
     api_version: performance.openshift.io/v2
@@ -158,10 +173,10 @@
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
-    bmc_ip: >-
-      {{ (bmc_address | regex_search('https?://([^/]+)', '\\1'))[0]
-         if bmc_address and (bmc_address | regex_search('https?://([^/]+)', '\\1'))
-         else '' }}
+    bmc_ip: "{{
+      ((bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] | trim)
+      if (bmc_address and bmc_address | regex_search('https?://([^/]+)', '\\1'))
+      else '' }}"
   no_log: true
 
 - name: Query BIOS settings via Redfish (if BMC configured)
@@ -280,6 +295,7 @@
       bios_version: "{{ bios_version | default('') }}"
       microcode_version: "{{ microcode_version | default('') }}"
       cpu_type: "{{ cpu_type | default('') }}"
+      kernel_cmdline: "{{ kernel_cmdline | default('') }}"
       collected_at: "{{ ansible_date_time.iso8601 }}"
       performance_profiles_yaml: >-
         {{ performance_profiles.resources | to_nice_yaml

@@ -1,0 +1,184 @@
+---
+# Discover test artifact directories in shared_artifact_dir
+# Builds list of test runs with normalized test names
+# Filters out tests older than node-info timestamp (environment change marker)
+
+- name: Check for node-info file
+  ansible.builtin.stat:
+    path: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+  register: node_info_file_check
+
+- name: Get node-info collection timestamp
+  when: node_info_file_check.stat.exists
+  block:
+    - name: Read node-info JSON file
+      ansible.builtin.slurp:
+        src: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+      register: node_info_content
+
+    - name: Parse node-info JSON
+      ansible.builtin.set_fact:
+        node_info_json: "{{ node_info_content.content | b64decode | from_json }}"
+
+    - name: Extract collected_at timestamp
+      ansible.builtin.set_fact:
+        node_info_collected_at: "{{ node_info_json.collected_at }}"
+
+    - name: Convert ISO timestamp to YYYYMMDD-HHMMSS format
+      ansible.builtin.set_fact:
+        # Format: 2026-07-06T11:00:00Z -> 20260706-110000
+        node_info_timestamp_value: >-
+          {{ node_info_collected_at
+          | regex_replace('^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).*', '\1\2\3-\4\5\6') }}
+
+    - name: Store timestamp for filtering
+      ansible.builtin.set_fact:
+        node_info_timestamp:
+          stdout: "{{ node_info_timestamp_value }}"
+
+    - name: Display node-info reference timestamp
+      ansible.builtin.debug:
+        msg:
+          - "Node-info collected at: {{ node_info_collected_at }}"
+          - "Reference timestamp: {{ node_info_timestamp_value }}"
+          - "Tests older than this will be excluded"
+
+- name: Find all test artifact directories
+  ansible.builtin.find:
+    paths: "{{ shared_artifact_dir }}"
+    file_type: directory
+    patterns: "*-{{ spoke_cluster }}-*"
+  register: artifact_directories
+
+- name: Parse artifact directory names and normalize test types
+  ansible.builtin.set_fact:
+    discovered_test_runs: >-
+      {{
+        discovered_test_runs | default([]) +
+        [{
+          'dir_name': item.path | basename,
+          'dir_path': item.path,
+          'test_name_raw': (item.path | basename | regex_replace('^(.+)-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$', '\1')),
+          'timestamp_date': (item.path | basename | regex_replace('^.+-' + spoke_cluster + '-([0-9]{8})-[0-9]{6}$', '\1')),
+          'timestamp_time': (item.path | basename | regex_replace('^.+-' + spoke_cluster + '-[0-9]{8}-([0-9]{6})$', '\1')),
+          'timestamp_full': (item.path | basename | regex_replace('^.+-' + spoke_cluster + '-([0-9]{8}-[0-9]{6})$', '\1'))
+        }]
+      }}
+  loop: "{{ artifact_directories.files }}"
+  when: artifact_directories.files | length > 0
+
+- name: Filter and delete old tests based on node-info timestamp
+  when: node_info_file_check.stat.exists and node_info_timestamp_value is defined
+  block:
+    - name: Identify tests to exclude (older than node-info)
+      ansible.builtin.set_fact:
+        excluded_test_runs: >-
+          {{
+            discovered_test_runs | default([])
+            | rejectattr('timestamp_full', 'ge', node_info_timestamp_value)
+            | list
+          }}
+
+    - name: Delete excluded test directories to save disk space
+      ansible.builtin.file:
+        path: "{{ item.dir_path }}"
+        state: absent
+      loop: "{{ excluded_test_runs }}"
+      when: excluded_test_runs | length > 0
+
+    - name: Filter discovered tests (keep only newer than node-info)
+      ansible.builtin.set_fact:
+        discovered_test_runs: >-
+          {{
+            discovered_test_runs | default([])
+            | selectattr('timestamp_full', 'ge', node_info_timestamp_value)
+            | list
+          }}
+
+    - name: Determine report action based on exclusions
+      ansible.builtin.set_fact:
+        report_action: "{{ 'new' if (excluded_test_runs | length > 0) else 'update' }}"
+
+- name: Set default report action when no filtering
+  when: not (node_info_file_check.stat.exists and node_info_timestamp_value is defined)
+  ansible.builtin.set_fact:
+    report_action: "update"
+    excluded_test_runs: []
+
+- name: Display filtering results
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Test Artifact Discovery & Filtering"
+      - "=========================================="
+      - "Total artifacts found: {{ artifact_directories.files | length }}"
+      - "Tests included: {{ discovered_test_runs | default([]) | length }}"
+      - "Tests excluded: {{ excluded_test_runs | default([]) | length }}"
+      - >-
+        {{
+          'Reason: Tests ran before node-info update (' + node_info_timestamp_value + ')'
+          if (excluded_test_runs | default([]) | length > 0)
+          else 'No exclusions'
+        }}
+      - "Report action: {{ report_action | upper }}"
+      - "=========================================="
+
+- name: Normalize test names using mapping
+  ansible.builtin.set_fact:
+    normalized_test_runs: >-
+      {{
+        normalized_test_runs | default([]) +
+        [item | combine({
+          'test_name': report_generator_test_type_mapping[item.test_name_raw] | default(item.test_name_raw)
+        })]
+      }}
+  loop: "{{ discovered_test_runs | default([]) }}"
+
+- name: Filter for latest run per test type (when using --latest flag)
+  when: use_latest | default(true) | bool
+  block:
+    - name: Group test runs by test name
+      ansible.builtin.set_fact:
+        grouped_by_test: >-
+          {{
+            grouped_by_test | default({}) | combine({
+              item.test_name: (grouped_by_test | default({}))[item.test_name] | default([]) + [item]
+            })
+          }}
+      loop: "{{ normalized_test_runs | default([]) }}"
+
+    - name: Select latest run for each test type
+      ansible.builtin.set_fact:
+        latest_test_runs: >-
+          {{
+            latest_test_runs | default([]) +
+            [(item.value | sort(attribute='timestamp_date,timestamp_time') | last)]
+          }}
+      loop: "{{ grouped_by_test | dict2items }}"
+      when: grouped_by_test is defined
+
+    - name: Set final test runs list
+      ansible.builtin.set_fact:
+        report_data: "{{ report_data | combine({'test_runs': latest_test_runs | default([])}) }}"
+
+- name: Use all test runs (when not using --latest)
+  when: not (use_latest | default(true) | bool)
+  ansible.builtin.set_fact:
+    report_data: "{{ report_data | combine({'test_runs': normalized_test_runs | default([])}) }}"
+
+- name: Apply test filter if specified
+  when: test_filter is defined and test_filter | length > 0
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_runs': report_data.test_runs | selectattr('test_name', 'in', test_filter.split(','))
+        })
+      }}
+
+- name: Display discovered test runs
+  ansible.builtin.debug:
+    msg:
+      - "Discovered {{ artifact_directories.files | length }} artifact directories"
+      - "Selected {{ report_data.test_runs | length }} test runs for report"
+      - "Tests: {{ report_data.test_runs | map(attribute='test_name') | list | unique | join(', ') }}"

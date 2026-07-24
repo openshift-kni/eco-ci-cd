@@ -1,0 +1,235 @@
+---
+# Wrapper playbook: Deploy spoke via ZTP with OCP release image digest resolution
+#
+# Resolves the OCP release image to digest format before calling the original
+# ran/deploy-spoke-ztp.yml playbook. The ClusterImageSet (hive.openshift.io/v1)
+# requires releaseImage in digest format — this wrapper ensures that constraint.
+#
+# Resolution precedence:
+#   1. raw_ocp_release_image (explicit image) — highest priority, allows manual
+#      override before lockdown JSON exists for a new version. Resolved to digest
+#      via skopeo if tag-based.
+#   2. lockdown_uri (hub or spoke lockdown JSON URL) — auto-detects format:
+#      - Hub lockdown: uses hub.ocp.pull_spec.digest directly (already digest)
+#      - Spoke lockdown: uses deployment.ocp_pull_spec, resolves via skopeo if needed
+#   3. Neither — ran playbook falls back to hub cluster's own release image
+#      from `oc get clusterversion` (already in digest format).
+#
+# Usage with explicit image:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/deploy-spoke-ztp.yml \
+#     -e "kubeconfig=/path/to/kubeconfig spoke_cluster=spree-02 \
+#         raw_ocp_release_image=quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64"
+#
+# Usage with lockdown URI:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/deploy-spoke-ztp.yml \
+#     -e "kubeconfig=/path/to/kubeconfig spoke_cluster=spree-02 \
+#         lockdown_uri=https://gitlab.cee.redhat.com/ran/dev-kpi-pipeline/-/raw/prow-lockdowns/hub/defaults/lockdown-hub-4.22-x86_64.json"
+
+- name: Resolve OCP release image to digest format
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    # ── Path A: Explicit release image (highest priority) ──────────────
+    - name: Resolve from explicit release image
+      when:
+        - (raw_ocp_release_image | default('')) | length > 0
+      block:
+        - name: Fetch hub cluster pull secret for skopeo auth
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: pull-secret
+            namespace: openshift-config
+            kubeconfig: "{{ kubeconfig }}"
+          register: _wrapper_hub_pull_secret
+
+        - name: Write pull secret to temp file
+          ansible.builtin.copy:
+            content: "{{ _wrapper_hub_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode }}"
+            dest: /tmp/resolve-digest-pull-secret.json
+            mode: '0600'
+
+        - name: Resolve release image to digest
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/resolve-release-image-digest.yml
+          vars:
+            resolve_release_image: "{{ raw_ocp_release_image }}"
+            resolve_pull_secret_path: /tmp/resolve-digest-pull-secret.json
+
+        - name: Set ocp_release_image fact for downstream ran playbook
+          ansible.builtin.set_fact:
+            ocp_release_image: "{{ resolved_release_image }}"
+
+        - name: Display resolved release image
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "OCP Release Image Resolution (explicit)"
+              - "=========================================="
+              - "Input:    {{ raw_ocp_release_image }}"
+              - "Resolved: {{ ocp_release_image }}"
+              - "=========================================="
+
+        - name: Remove temp pull secret file
+          ansible.builtin.file:
+            path: /tmp/resolve-digest-pull-secret.json
+            state: absent
+
+    # ── Path B: Lockdown URI (when no explicit image) ──────────────────
+    - name: Resolve from lockdown URI
+      when:
+        - (raw_ocp_release_image | default('')) | length == 0
+        - (lockdown_uri | default('')) | length > 0
+      block:
+        - name: Download lockdown JSON (follows GitLab symlinks)
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/download-lockdown.yml
+          vars:
+            lockdown_download_path: /tmp/deploy-spoke-ztp-lockdown.json
+
+        - name: Read downloaded lockdown JSON
+          ansible.builtin.slurp:
+            src: /tmp/deploy-spoke-ztp-lockdown.json
+          register: _wrapper_lockdown_file
+
+        - name: Parse lockdown JSON
+          ansible.builtin.set_fact:
+            _wrapper_lockdown_data: "{{ _wrapper_lockdown_file.content | b64decode | from_json }}"
+
+        - name: Detect lockdown format and extract OCP pull spec
+          ansible.builtin.set_fact:
+            _wrapper_lockdown_format: "{{ 'hub' if 'hub' in _wrapper_lockdown_data else 'spoke' }}"
+            _wrapper_extracted_image: >-
+              {{
+                _wrapper_lockdown_data.hub.ocp.pull_spec.digest
+                if ('hub' in _wrapper_lockdown_data and
+                    _wrapper_lockdown_data.hub.ocp.pull_spec is mapping)
+                else (
+                  _wrapper_lockdown_data.hub.ocp.pull_spec
+                  if 'hub' in _wrapper_lockdown_data
+                  else _wrapper_lockdown_data.deployment.ocp_pull_spec
+                )
+              }}
+
+        - name: Display extracted image from lockdown
+          ansible.builtin.debug:
+            msg:
+              - "Lockdown format: {{ _wrapper_lockdown_format }}"
+              - "Extracted image: {{ _wrapper_extracted_image }}"
+
+        - name: Resolve lockdown image to digest (if tag-based)
+          when: "'@sha256:' not in _wrapper_extracted_image"
+          block:
+            - name: Fetch hub cluster pull secret for skopeo auth
+              kubernetes.core.k8s_info:
+                api_version: v1
+                kind: Secret
+                name: pull-secret
+                namespace: openshift-config
+                kubeconfig: "{{ kubeconfig }}"
+              register: _wrapper_hub_pull_secret
+
+            - name: Write pull secret to temp file
+              ansible.builtin.copy:
+                content: "{{ _wrapper_hub_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode }}"
+                dest: /tmp/resolve-digest-pull-secret.json
+                mode: '0600'
+
+            - name: Resolve extracted image to digest
+              ansible.builtin.include_role:
+                name: lockdowns
+                tasks_from: common/resolve-release-image-digest.yml
+              vars:
+                resolve_release_image: "{{ _wrapper_extracted_image }}"
+                resolve_pull_secret_path: /tmp/resolve-digest-pull-secret.json
+
+            - name: Remove temp pull secret file
+              ansible.builtin.file:
+                path: /tmp/resolve-digest-pull-secret.json
+                state: absent
+
+        - name: Set ocp_release_image fact from lockdown
+          ansible.builtin.set_fact:
+            ocp_release_image: "{{ resolved_release_image | default(_wrapper_extracted_image) }}"
+
+        - name: Display resolved release image from lockdown
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "OCP Release Image Resolution (lockdown)"
+              - "=========================================="
+              - "Lockdown URI:    {{ lockdown_uri }}"
+              - "Lockdown format: {{ _wrapper_lockdown_format }}"
+              - "Extracted:       {{ _wrapper_extracted_image }}"
+              - "Resolved:        {{ ocp_release_image }}"
+              - "=========================================="
+
+        - name: Clean up lockdown temp file
+          ansible.builtin.file:
+            path: /tmp/deploy-spoke-ztp-lockdown.json
+            state: absent
+
+    # ── Path C: No image source ────────────────────────────────────────
+    - name: No explicit image or lockdown URI provided
+      when:
+        - (raw_ocp_release_image | default('')) | length == 0
+        - (lockdown_uri | default('')) | length == 0
+      ansible.builtin.debug:
+        msg: "No OCP release image override — ran playbook will use hub cluster's own release image"
+
+- name: Ensure OCP release image is mirrored to disconnected registry
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Resolve final release image for mirror check
+      when: (ocp_release_image | default('')) | length == 0
+      block:
+        - name: Get hub cluster release image (Path C fallback)
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: ClusterVersion
+            name: version
+            kubeconfig: "{{ kubeconfig }}"
+          register: _mirror_hub_cv
+
+        - name: Set release image from hub clusterversion
+          ansible.builtin.set_fact:
+            ocp_release_image: >-
+              {{ _mirror_hub_cv.resources[0].status.desired.image }}
+
+    - name: Fetch hub cluster pull secret for mirror auth
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+        kubeconfig: "{{ kubeconfig }}"
+      register: _mirror_hub_pull_secret
+
+    - name: Write pull secret to temp file
+      ansible.builtin.copy:
+        content: >-
+          {{ _mirror_hub_pull_secret.resources[0].data['.dockerconfigjson']
+             | b64decode }}
+        dest: /tmp/mirror-rc-pull-secret.json
+        mode: '0600'
+
+    - name: Check and mirror release image if needed
+      ansible.builtin.include_role:
+        name: mirror_ocp_release_candidate
+      vars:
+        mirror_rc_release_image: "{{ ocp_release_image }}"
+        mirror_rc_kubeconfig: "{{ kubeconfig }}"
+        mirror_rc_pull_secret_path: /tmp/mirror-rc-pull-secret.json
+
+    - name: Clean up temp pull secret
+      ansible.builtin.file:
+        path: /tmp/mirror-rc-pull-secret.json
+        state: absent
+
+- name: Deploy spoke cluster via ZTP
+  import_playbook: ../ran/deploy-spoke-ztp.yml

@@ -1,0 +1,122 @@
+---
+# Converge: Test lockdown digest preservation and validation mode
+#
+# This test validates the FIXED behavior:
+# 1. Parse lockdown to extract operators (they have bundle+fbc digests)
+# 2. Verify digests are PRESERVED (not stripped)
+# 3. Mock ocp_operator_mirror using lockdown digests + accumulating metadata
+# 4. Generate lockdown from accumulated metadata
+# 5. Verify generated lockdown matches input (validation passes)
+
+- name: Converge
+  hosts: all
+  gather_facts: true
+  vars:
+    spoke_lockdown_uri: "file:///tmp/mock-spoke-lockdown-with-digests.json"
+
+  tasks:
+    - name: "STEP 1: Parse lockdown to extract operators"
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: spoke
+        lockdown_action: parse
+
+    - name: Display operators extracted from lockdown
+      ansible.builtin.debug:
+        msg:
+          - "Operators extracted from lockdown:"
+          - "{{ spoke_lockdown_operators | to_nice_json }}"
+          - ""
+          - "✓ Operators contain 'bundle' and 'fbc' fields with @sha256 digests"
+
+    - name: "STEP 2: Verify digests are PRESERVED (not stripped)"
+      ansible.builtin.assert:
+        that:
+          - spoke_lockdown_operators[0].bundle is defined
+          - spoke_lockdown_operators[0].fbc is defined
+          - "'@sha256:' in spoke_lockdown_operators[0].bundle"
+          - "'@sha256:' in spoke_lockdown_operators[0].fbc"
+        fail_msg: "FAIL: Digests were stripped (old broken behavior)"
+        success_msg: "✓ Digests preserved (fixed behavior)"
+
+    - name: Display preserved digest validation
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Lockdown Digest Preservation Test"
+          - "=========================================="
+          - "✓ Bundle digest preserved: {{ spoke_lockdown_operators[0].bundle }}"
+          - "✓ FBC digest preserved: {{ spoke_lockdown_operators[0].fbc }}"
+          - "Operators ready for bit-identical mirroring"
+          - "=========================================="
+
+    - name: "STEP 3: Mock ocp_operator_mirror using lockdown digests"
+      ansible.builtin.debug:
+        msg:
+          - "Simulating ocp_operator_mirror with lockdown mode:"
+          - "1. Detects bundle/fbc digests present"
+          - "2. Uses frozen digests for mirroring (not querying production)"
+          - "3. Mirrors bit-identical operator versions"
+          - "4. Accumulate hooks fire and capture frozen digests"
+
+    - name: "STEP 4: Mock metadata accumulation (simulates mirroring with frozen digests)"
+      ansible.builtin.set_fact:
+        lockdown_metadata_operators:
+          sriov-network-operator:
+            name: sriov-network-operator
+            nsname: openshift-sriov-network-operator
+            channel: stable
+            catalog: cs-redhat-operator-index-v4-22
+            default_channel: stable
+            catalog_image: registry.redhat.io/redhat/redhat-operator-index@sha256:d02f5661332d2b24c7b5bbe2cecb5450093b41d739b2e7ce8f32a726cd024075
+            bundle: registry.redhat.io/openshift4/ose-sriov-network-operator-bundle@sha256:b16b9be8efaef673a31d0ae2fc5b7ebb548b6b90a39c36b82e0f171303067404
+            fbc: registry.redhat.io/redhat/redhat-operator-index@sha256:d02f5661332d2b24c7b5bbe2cecb5450093b41d739b2e7ce8f32a726cd024075
+            related_images: []
+
+    - name: "STEP 5: Generate lockdown from accumulated metadata"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/generate.yml
+      vars:
+        lockdown_ocp_version: "{{ spoke_ocp_version }}"
+        lockdown_architecture: x86_64
+        lockdown_hub_name: test-hub
+        lockdown_build_number: "999"
+        lockdown_output_file: /tmp/lockdown-generated.json
+
+    - name: Read input lockdown for comparison
+      ansible.builtin.slurp:
+        src: /tmp/mock-spoke-lockdown-with-digests.json
+      register: input_lockdown_file
+
+    - name: Read generated lockdown for comparison
+      ansible.builtin.slurp:
+        src: /tmp/lockdown-generated.json
+      register: generated_lockdown_file
+
+    - name: Parse lockdown JSONs
+      ansible.builtin.set_fact:
+        input_lockdown: "{{ input_lockdown_file.content | b64decode | from_json }}"
+        generated_lockdown: "{{ generated_lockdown_file.content | b64decode | from_json }}"
+
+    - name: "STEP 6: Validate generated lockdown matches input (validation mode passes)"
+      ansible.builtin.assert:
+        that:
+          - input_lockdown.operators[0].bundle == generated_lockdown.operators[0].bundle
+          - input_lockdown.operators[0].fbc == generated_lockdown.operators[0].fbc
+        fail_msg: "FAIL: Generated lockdown has different digests (validation would fail)"
+        success_msg: "✓ PASS: Generated lockdown matches input (validation succeeds)"
+
+    - name: Display validation result
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Lockdown Validation Mode Test Result"
+          - "=========================================="
+          - "✓ Input lockdown bundle: {{ input_lockdown.operators[0].bundle }}"
+          - "✓ Generated lockdown bundle: {{ generated_lockdown.operators[0].bundle }}"
+          - "✓ Digests match: Validation PASSED"
+          - ""
+          - "This confirms bit-identical mirroring with lockdown mode"
+          - "=========================================="

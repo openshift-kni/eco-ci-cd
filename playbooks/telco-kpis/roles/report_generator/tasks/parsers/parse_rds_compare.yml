@@ -1,0 +1,75 @@
+---
+# Parse RDS Compare results from cluster-compare.log
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
+- name: Read cluster-compare.log for RDS Compare test
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/cluster-compare.log"
+  register: rds_log_content
+  failed_when: false
+
+- name: Parse RDS Compare results when log exists
+  when: rds_log_content.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        rds_log: "{{ rds_log_content.content | b64decode }}"
+
+    - name: Extract CR summary metrics from log
+      ansible.builtin.set_fact:
+        crs_with_diffs_match: "{{ rds_log | regex_search('CRs with diffs:\\s*(\\d+)/(\\d+)', '\\1', '\\2') }}"
+        missing_crs_match: "{{ rds_log | regex_search('(\\d+)\\s+missing CRs', '\\1') }}"
+
+    - name: Parse CR metrics
+      ansible.builtin.set_fact:
+        crs_with_diffs: "{{ crs_with_diffs_match[0] | int if crs_with_diffs_match and crs_with_diffs_match | length > 0 else 0 }}"
+        total_crs: "{{ crs_with_diffs_match[1] | int if crs_with_diffs_match and crs_with_diffs_match | length > 1 else 0 }}"
+        missing_crs: "{{ missing_crs_match[0] | int if missing_crs_match and missing_crs_match | length > 0 else 0 }}"
+
+    - name: Determine test status (PASS if no diffs and no missing CRs)
+      ansible.builtin.set_fact:
+        rds_passed: "{{ (crs_with_diffs | int == 0) and (missing_crs | int == 0) }}"
+
+    - name: Build key metric
+      ansible.builtin.set_fact:
+        rds_key_metric: "Diffs:{{ crs_with_diffs }}/{{ total_crs }} Missing:{{ missing_crs }}"
+
+    - name: Store RDS Compare result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'rds_compare',
+                  'status': ('PASS' if rds_passed else 'FAIL'),
+                  'key_metric': rds_key_metric,
+                  'duration': test_duration_human,
+                  'detail': rds_log,
+                  'crs_with_diffs': crs_with_diffs,
+                  'total_crs': total_crs,
+                  'missing_crs': missing_crs
+                }
+              })
+            })
+          }}
+
+- name: Handle missing RDS Compare log
+  when: rds_log_content.content is not defined
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'rds_compare',
+              'status': 'N/A',
+              'key_metric': 'No log found',
+              'duration': 'N/A',
+              'detail': 'RDS Compare log file not found'
+            }
+          })
+        })
+      }}

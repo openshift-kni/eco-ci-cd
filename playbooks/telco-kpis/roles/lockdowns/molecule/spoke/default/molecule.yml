@@ -1,0 +1,39 @@
+---
+# Molecule configuration for lockdowns role (spoke scenario)
+#
+# This test suite validates spoke lockdown parse and generate logic without requiring real mirroring.
+# Tests run in Podman containers for isolation.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: lockdowns-spoke-test
+    image: quay.io/ccardenosa/eco-ci-cd:latest
+    pre_build_image: true
+    override_command: false
+    command: ""
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "/eco-ci-cd/playbooks/telco-kpis/roles"
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+      callback_whitelist: profile_tasks, timer, yaml
+  inventory:
+    host_vars:
+      lockdowns-spoke-test:
+        ansible_connection: local
+
+verifier:
+  name: ansible

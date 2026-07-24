@@ -1,0 +1,101 @@
+---
+- name: Verify - Validate test_duration role output
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    duration_file: /tmp/molecule-test-duration/test-duration.yml
+
+  tasks:
+    - name: Check test-duration.yml exists
+      ansible.builtin.stat:
+        path: "{{ duration_file }}"
+      register: duration_stat
+
+    - name: Assert file was created
+      ansible.builtin.assert:
+        that:
+          - duration_stat.stat.exists
+        fail_msg: "test-duration.yml was not created at {{ duration_file }}"
+        success_msg: "test-duration.yml exists"
+
+    - name: Read test-duration.yml content
+      ansible.builtin.slurp:
+        src: "{{ duration_file }}"
+      register: duration_content
+
+    - name: Parse YAML content
+      ansible.builtin.set_fact:
+        duration_data: "{{ duration_content.content | b64decode | from_yaml }}"
+
+    - name: Assert all required keys are present
+      ansible.builtin.assert:
+        that:
+          - "'start_epoch' in duration_data"
+          - "'end_epoch' in duration_data"
+          - "'start_time' in duration_data"
+          - "'end_time' in duration_data"
+          - "'duration_seconds' in duration_data"
+          - "'duration_human' in duration_data"
+        fail_msg: "Missing required keys in test-duration.yml: {{ duration_data.keys() | list }}"
+        success_msg: "All required keys present"
+
+    - name: Assert epoch values are numeric and end > start
+      ansible.builtin.assert:
+        that:
+          - duration_data.start_epoch | int > 0
+          - duration_data.end_epoch | int > 0
+          - duration_data.end_epoch | int > duration_data.start_epoch | int
+        fail_msg: "Invalid epoch values: start={{ duration_data.start_epoch }}, end={{ duration_data.end_epoch }}"
+        success_msg: "Epoch values valid (end > start)"
+
+    - name: Assert duration is at least 2 seconds (the pause duration)
+      ansible.builtin.assert:
+        that:
+          - duration_data.duration_seconds | int >= 2
+        fail_msg: "Duration too short: {{ duration_data.duration_seconds }}s (expected >= 2s from pause)"
+        success_msg: "Duration {{ duration_data.duration_seconds }}s >= 2s"
+
+    - name: Assert human-readable duration contains 's'
+      ansible.builtin.assert:
+        that:
+          - "'s' in (duration_data.duration_human | string)"
+        fail_msg: "Human-readable duration format invalid: {{ duration_data.duration_human }}"
+        success_msg: "Human-readable duration format valid: {{ duration_data.duration_human }}"
+
+    - name: Assert ISO 8601 timestamps are valid
+      ansible.builtin.assert:
+        that:
+          - duration_data.start_time | regex_search('\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}')
+          - duration_data.end_time | regex_search('\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}')
+        fail_msg: "Invalid ISO 8601 timestamps: start={{ duration_data.start_time }}, end={{ duration_data.end_time }}"
+        success_msg: "ISO 8601 timestamps valid"
+
+    - name: Assert Ansible facts were set by the role
+      ansible.builtin.assert:
+        that:
+          - test_start_epoch is defined
+          - test_end_epoch is defined
+          - test_duration_seconds is defined
+          - test_duration_human is defined
+          - test_start_epoch | int > 0
+          - test_end_epoch | int > 0
+          - test_duration_seconds | int >= 2
+        fail_msg: "Role did not set expected Ansible facts"
+        success_msg: "All Ansible facts set correctly"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "test_duration Role - All Tests PASSED"
+          - "=========================================="
+          - "Start: {{ duration_data.start_time }}"
+          - "End:   {{ duration_data.end_time }}"
+          - "Duration: {{ duration_data.duration_human }} ({{ duration_data.duration_seconds }}s)"
+          - "=========================================="
+
+    - name: Cleanup test artifacts
+      ansible.builtin.file:
+        path: /tmp/molecule-test-duration
+        state: absent

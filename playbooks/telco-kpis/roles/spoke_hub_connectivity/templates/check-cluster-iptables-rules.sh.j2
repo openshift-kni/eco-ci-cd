@@ -10,7 +10,7 @@ HUB_IP="{{ spoke_hub_connectivity_hub_cluster_ip }}"
 
 {% for port in spoke_hub_connectivity_cluster_ports %}
 sudo iptables -t nat -C PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp \
-  --dport {{ port }} -j DNAT --to-destination ${HUB_IP}:{{ port }} 2>/dev/null \
+  --dport {{ port }} -j DNAT --to-destination ${HUB_IP}:{{ spoke_hub_connectivity_port_dest_mapping[port] | default(port) }} 2>/dev/null \
   && FOUND=$((FOUND + 1))
 {% endfor %}
 

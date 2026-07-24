@@ -1,0 +1,58 @@
+---
+# Report Generator Role - Main Entry Point
+# Purpose: Generate Markdown report from test artifacts without external Python dependencies
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - spoke_cluster is defined
+      - shared_artifact_dir is defined
+      - output_filename is defined
+    fail_msg: |
+      Missing required parameters for report_generator role.
+      Required: spoke_cluster, shared_artifact_dir, output_filename
+
+- name: Initialize report generation variables
+  ansible.builtin.set_fact:
+    report_timestamp: "{{ ansible_date_time.iso8601 }}"
+    report_data:
+      cluster_info: {}
+      hardware_info: {}
+      test_results: {}
+      test_runs: []
+
+- name: Discover test artifact directories
+  ansible.builtin.include_tasks: discover_artifacts.yml
+
+- name: Parse node-info for cluster and hardware metadata
+  ansible.builtin.include_tasks: parse_node_info.yml
+
+- name: Parse test results for each discovered test
+  ansible.builtin.include_tasks: parse_test.yml
+  loop: "{{ report_data.test_runs }}"
+  loop_control:
+    loop_var: test_run
+
+- name: Enrich cluster info with data from test logs
+  ansible.builtin.include_tasks: enrich_cluster_info_from_logs.yml
+
+- name: Normalize duration values to XhYYmZZs format
+  ansible.builtin.include_tasks: normalize_durations.yml
+
+- name: Generate Markdown report from templates
+  ansible.builtin.include_tasks: generate_markdown.yml
+
+- name: Create artifacts tarball
+  ansible.builtin.include_tasks: create_tarball.yml
+  when: create_tarball | default(true) | bool
+
+- name: Display report generation summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Report Generation Complete"
+      - "=========================================="
+      - "Report: {{ output_filename }}"
+      - "Tests included: {{ report_data.test_runs | length }}"
+      - "Output directory: {{ output_dir }}"
+      - "=========================================="

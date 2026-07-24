@@ -1,0 +1,491 @@
+---
+# Molecule prepare - creates mock test artifacts
+- name: Prepare
+  hosts: localhost
+  gather_facts: true
+
+  vars:
+    spoke_cluster: test-spoke-01
+    test_artifact_base: /tmp/molecule-report-generator
+    shared_artifact_dir: "{{ test_artifact_base }}/artifacts"
+    output_dir: "{{ test_artifact_base }}/output"
+    # Test names (canonical form with underscores)
+    test_name_ztp: ztp_ai_deployment_time
+
+  tasks:
+    - name: Clean previous test artifacts
+      ansible.builtin.file:
+        path: "{{ test_artifact_base }}"
+        state: absent
+
+    - name: Create test artifact directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ shared_artifact_dir }}"
+        - "{{ output_dir }}"
+
+    # yamllint disable rule:line-length
+    - name: Create mock node-info.json with collected_at timestamp
+      ansible.builtin.copy:
+        content: |
+          {
+            "collected_at": "2026-07-06T11:00:00Z",
+            "openshift_version": "4.14.0",
+            "kernel_version": "5.14.0-284.el9.x86_64",
+            "tuned_profile": "performance",
+            "bios_version": "2.8.0",
+            "microcode": "0x2b0004b1",
+            "cpu_model": "Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz",
+            "cpu_family": "6",
+            "cpu_model_number": "106",
+            "architecture": "x86_64",
+            "threads_per_core": "2",
+            "kernel_cmdline": "BOOT_IMAGE=(hd0,gpt3)/ostree/rhcos-... isolcpus=2-19,22-39",
+            "performance_profiles_yaml": "-   apiVersion: performance.openshift.io/v2\n    kind: PerformanceProfile\n    metadata:\n        name: openshift-node-performance-profile\n    spec:\n        cpu:\n            isolated: 2-19,22-39\n            reserved: 0-1,20-21\n        hugepages:\n            defaultHugepagesSize: 1G\n            pages:\n            -   count: 32\n                size: 1G\n        realTimeKernel:\n            enabled: false\n        workloadHints:\n            realTime: true\n"
+          }
+        dest: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+        mode: '0644'
+
+    # yamllint enable rule:line-length
+    - name: Create OLD mock OSLAT test directory (should be filtered out)
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-100000"
+        state: directory
+        mode: '0755'
+      # This test is at 10:00, before node-info collected_at (11:00)
+
+    - name: Create mock OSLAT XML result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="13" failures="0" skipped="0" time="600">
+            <testcase name="oslat_test_core_2" time="60"></testcase>
+            <testcase name="oslat_test_core_3" time="60"></testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-100000/oslat_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock OSLAT log
+      ansible.builtin.copy:
+        content: |
+          OSLAT test completed successfully
+          Max latency: 15us
+          All cores passed criteria
+        dest: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-100000/podman-run.log"
+        mode: '0644'
+
+    - name: Create NEW mock OSLAT test directory (should be included)
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-120000"
+        state: directory
+        mode: '0755'
+      # This test is at 12:00, after node-info collected_at (11:00)
+
+    - name: Create NEW mock OSLAT XML (for included test)
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="13" failures="0" skipped="0" time="600">
+            <testcase name="oslat_test_core_2" time="60"></testcase>
+            <testcase name="oslat_test_core_3" time="60"></testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-120000/oslat_suite_test.xml"
+        mode: '0644'
+
+    - name: Create NEW mock OSLAT log (for included test)
+      ansible.builtin.copy:
+        content: |
+          ########## container info ###########
+          /proc/cmdline:
+          BOOT_IMAGE=(hd0,gpt3)/boot/ostree/rhcos-test ignition.platform.id=metal
+          ostree=/ostree/boot.0/rhcos/test root=UUID=test rw rootflags=prjquota
+          boot=UUID=test intel_iommu=on iommu=pt skew_tick=1 tsc=reliable
+          isolcpus=managed_irq,2-9,34-41 nohz_full=2-9,34-41
+          #####################################
+          oslat0 5.14.0-570.124.1.el9_6.x86_64+rt
+          realtime-tests-2.8-1.fc42.x86_64
+          allowed cpu list: 2-9,34-41
+          removing cpu34 from the cpu list because it is a sibling of cpu2 which will be the cpu-main-thread
+          new cpu list: 3,4,5,6
+          cmd to run: oslat -D 1m --rtprio 1 --cpu-list 3,4,5,6 --cpu-main-thread 2
+          sleep 120 before test
+          oslat V 2.80
+          Total runtime:         60 seconds
+          Thread priority:     SCHED_FIFO:1
+          CPU list:         3,4,5,6
+          CPU for main thread:     2
+          Workload:         no
+          Workload mem:         0 (KiB)
+          Preheat cores:         4
+
+          Pre-heat for 1 seconds...
+          Test starts...
+          Test completed.
+
+                  Core:  3 4 5 6
+          Counter Freq:  1400 1400 1400 1400 (MHz)
+              001 (us):  1546051825 1546084756 1545764106 1545693936
+              002 (us):  0 0 0 0
+              003 (us):  0 0 1 0
+              004 (us):  0 0 0 0
+              005 (us):  0 0 0 0
+              006 (us):  0 0 0 0
+              007 (us):  0 0 0 0
+              008 (us):  0 0 0 0
+              009 (us):  0 1 0 0
+              010 (us):  0 0 0 2
+              011 (us):  0 0 0 0
+              012 (us):  0 0 0 0 (including overflows)
+               Minimum:  0 0 0 0 (us)
+               Average:  1.000 1.000 1.001 1.002 (us)
+               Maximum:  0 8 2 9 (us)
+               Max-Min:  0 8 2 9 (us)
+              Duration:  59.994 59.994 59.994 59.994 (sec)
+
+          export RAN_METRICS_SW_VERSION="4.21.22"
+          export RAN_METRICS_POWER_MODE="performance"
+          [INFO] Pushing ranmetrics_oslat_test_availability{...} 100.0 to url ...
+        dest: "{{ shared_artifact_dir }}/oslat-{{ spoke_cluster }}-20260706-120000/podman-run.log"
+        mode: '0644'
+
+    - name: Create mock CPU_UTIL test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/cpu_util-{{ spoke_cluster }}-20260706-130000"
+        state: directory
+        mode: '0755'
+      # This test is at 13:00, after node-info collected_at (11:00)
+
+    - name: Create mock CPU_UTIL XML result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="5" failures="0" skipped="3" time="18.5">
+            <testcase name="[BeforeSuite]" classname="RAN CPU management tests" status="skipped" time="12.2">
+              <skipped message="skipped - Kube burner binary unavailable in PATH"></skipped>
+            </testcase>
+            <testcase name="[It] SNO core reduction Reserved CPUs configured should be limited to 2 cores"
+                      classname="RAN CPU management tests" status="skipped" time="0">
+              <skipped message="skipped"></skipped>
+            </testcase>
+            <testcase name="[It] SNO core reduction Pre-test Pod counts should not deviate from baseline"
+                      classname="RAN CPU management tests" status="skipped" time="0">
+              <skipped message="skipped"></skipped>
+            </testcase>
+            <testcase name="[It] SNO core reduction Management CPU in idle state should use less than 2 cores"
+                      classname="RAN CPU management tests" status="passed" time="3.5">
+            </testcase>
+            <testcase name="[It] SNO core reduction Kube API Server utilization grouped by resource"
+                      classname="RAN CPU management tests" status="passed" time="2.8">
+            </testcase>
+            <testcase name="[AfterSuite]" classname="RAN CPU management tests" status="passed" time="6.0">
+            </testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/cpu_util-{{ spoke_cluster }}-20260706-130000/cpu_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock CPU_UTIL log
+      ansible.builtin.copy:
+        content: |
+          CPU utilization test completed
+          Baseline CPU usage: 2.5%
+          Load CPU usage: 85.3%
+        dest: "{{ shared_artifact_dir }}/cpu_util-{{ spoke_cluster }}-20260706-130000/podman-run.log"
+        mode: '0644'
+
+    - name: Create mock PTP test directory (stub - will return N/A)
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/ptp-{{ spoke_cluster }}-20260706-130000"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock PTP log with metrics
+      ansible.builtin.copy:
+        content: |
+          [INFO] Starting PTP test
+          [INFO] PTP4L MAX Value 12
+          [INFO] PTP4L MIN Value 3
+          [INFO] PTP4L AVG VALUE 6.5
+          [INFO] PHC2SYS MAX Value 8
+          [INFO] PHC2SYS MIN Value 2
+          [INFO] PHC2SYS AVG VALUE 4.2
+          [INFO] Number of ptp4l process restart: 0
+          [INFO] Test status passed
+        dest: "{{ shared_artifact_dir }}/ptp-{{ spoke_cluster }}-20260706-130000/podman-run.log"
+        mode: '0644'
+
+    - name: Create mock Cyclictest test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/cyclictest-{{ spoke_cluster }}-20260706-130100"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock Cyclictest log
+      ansible.builtin.copy:
+        content: |
+          #####################################
+          **** uid: 0 ****
+          cyclictest0 5.14.0-570.124.1.el9_6.x86_64+rt
+          realtime-tests-2.8-1.fc42.x86_64
+          allowed cpu list: 2-9,34-41
+          removing cpu34 from the cpu list because it is a sibling of cpu2 which will be the mainaffinity
+          new cpu list: 3,4,5,6
+          running cmd: cyclictest -q -D 5m -p 95 -t 4 -a 3,4,5,6 -h 30 -i 1000 --mainaffinity 2 -m  --smi
+          sleep 60 before test
+          # /dev/cpu_dma_latency set to 0us
+          # Histogram
+          000002 297899    227081    159279    213123
+          000003 002095    072917    140720    086870
+          000004 000005    000001    000001    000007
+          # Min Latencies: 00002 00002 00002 00002
+          # Avg Latencies: 00002 00003 00002 00003
+          # Max Latencies: 00004 00004 00004 00006
+          # Histogram Overflows: 00000 00000 00000 00000
+          # Histogram Overflow at cycle number:
+          # Thread 0:
+          # Thread 1:
+          # Thread 2:
+          # Thread 3:
+          # SMIs: 00000 00000 00000 00000
+          [INFO] Test status passed
+        dest: "{{ shared_artifact_dir }}/cyclictest-{{ spoke_cluster }}-20260706-130100/podman-run.log"
+        mode: '0644'
+
+    - name: Create mock Reboot test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/reboot-{{ spoke_cluster }}-20260706-130200"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock Reboot XML result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="5" failures="0" skipped="0" time="300">
+            <testcase name="reboot_test_1" time="60"></testcase>
+            <testcase name="reboot_test_2" time="60"></testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/reboot-{{ spoke_cluster }}-20260706-130200/reboot_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock RDS Compare test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/rds_compare-{{ spoke_cluster }}-20260706-130300"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock RDS Compare log
+      ansible.builtin.copy:
+        content: |
+          Comparing clusters...
+          Found 22 CRs with diffs out of 76
+          Found 1 missing CRs
+          Comparison complete
+        dest: "{{ shared_artifact_dir }}/rds_compare-{{ spoke_cluster }}-20260706-130300/cluster-compare.log"
+        mode: '0644'
+
+    - name: Create mock RFC2544 test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400"
+        state: directory
+        mode: '0755'
+
+    # yamllint disable rule:line-length
+    - name: Create mock RFC2544 log with successful test (RDS criteria met)
+      ansible.builtin.copy:
+        content: |
+          Cloning ran-integration repository...
+          Patching ran-integration's set_ran_test_image() function for correct registry detection...
+          Creating artifacts symlink...
+          Starting RFC2544 test via ran-integration script...
+          Cluster: test-spoke-01
+          Duration: 10m
+          Frame Size: 512
+          LAT Rate: 0.8
+          [INFO] Test status passed
+          [INFO] RFC2544_PARAMS: PORT1=//spirent-n4u-01/1/13;PORT2=//spirent-n4u-01/1/14;STCWEB=spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888;CHASSIS=spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com;LAT_DURATION=600;TESTCFG=spirent_testcfg.xml;CLUSTER=test-spoke-01;FRAME_SIZE=512;LAT_RATE=0.8
+          2026-07-06 09:50:51.328227: Setting up spirent configuration...
+          2026-07-06 09:51:17.345902: Connecting to 'spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com'
+          2026-07-06 09:51:17.960867: Preparing ports: //spirent-n4u-01/1/13 //spirent-n4u-01/1/14
+          2026-07-06 09:54:11.417380: Measuring throughput...
+          2026-07-06 10:28:01.462162: Running latency test for 600s...
+          2026-07-06 10:38:38.959103: Latency test finished
+          RFC2544 test completed with exit code: 0
+          RANMETRICS_RFC2544_FRAMESIZE=512.0
+          RANMETRICS_RFC2544_MAX_THROUGHPUT=99.999
+          RANMETRICS_RFC2544_TEST_THROUGHPUT=79.999
+          RANMETRICS_RFC2544_MIN=4.5
+          RANMETRICS_RFC2544_AVG=5.678
+          RANMETRICS_RFC2544_MAX=26.527
+          RANMETRICS_RFC2544_DURATION=600
+          RANMETRICS_RFC2544_HISTOGRAM='{x<-2.92},0,0;{-2.92<=x<-0.36},0,0;{-0.36<=x<2.20},0,0;{2.20<=x<4.76},0,0;{4.76<=x<7.32},1323242801,1316971678;{7.32<=x<9.88},86389244,92659443;{9.88<=x<12.44},95767,96388;{12.44<=x<15.00},26756,27134;{15.00<=x<17.56},4157,4049;{17.56<=x<20.12},939,922;{20.12<=x<22.68},502,550;{22.68<=x<25.24},142,175;{25.24<=x<27.80},31,0;{27.80<=x<30.36},0,0;{30.36<=x<32.92},0,0;{x>=32.92},0,0;'
+          Breakdown:
+           {x<-2.92} [IGNORED]
+           {-2.92<=x<-0.36} [IGNORED]
+           {-0.36<=x<2.20}: 0
+           {2.20<=x<4.76}: 0
+           {4.76<=x<7.32}: 2640214479
+           {7.32<=x<9.88}: 179048687
+           {9.88<=x<12.44}: 192155
+           {12.44<=x<15.00}: 53890
+           {15.00<=x<17.56}: 8206
+           {17.56<=x<20.12}: 1861
+           {20.12<=x<22.68}: 1052
+           {22.68<=x<25.24}: 317
+           {25.24<=x<27.80}: 31
+           {27.80<=x<30.36}: 0
+           {30.36<=x<32.92}: 0
+           {x>=32.92}: 0
+
+          Total: 2820520678
+           Over: 1052 (0.9999626553%) [Success]
+          ==========================================
+          RFC2544 test completed with exit code: 0
+          End time: 2026-07-06T10:44:18Z
+          Test execution time: 2418s (00h40m18s)
+          ==========================================
+        dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/podman-run.log"
+        mode: '0644'
+    # yamllint enable rule:line-length
+
+    - name: Create mock RFC2544 thresholds file
+      ansible.builtin.copy:
+        content: |
+          ---
+          throughput_threshold: 99.9
+          max_latency_threshold: 30
+          tolerance_nines: 6
+          absolute_max_latency: 50
+        dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/rfc2544-thresholds.yml"
+        mode: '0644'
+
+    - name: Create mock RFC2544 test duration file
+      ansible.builtin.copy:
+        content: |
+          ---
+          # Test duration metadata
+          # Generated by: playbooks/telco-kpis/tasks/run-rfc2544-test.yml
+          start_epoch: 1720270440
+          end_epoch: 1720273078
+          start_time: "2026-07-06T09:50:40Z"
+          end_time: "2026-07-06T10:44:38Z"
+          duration_seconds: 2638
+          duration_human: "43m58s"
+        dest: "{{ shared_artifact_dir }}/rfc2544-{{ spoke_cluster }}-20260706-130400/test-duration.yml"
+        mode: '0644'
+
+    - name: Create mock BIOS Validation test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/bios_validation-{{ spoke_cluster }}-20260706-130500"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock BIOS Validation XML result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="8" failures="1" skipped="0" time="120">
+            <testcase name="bios_hyper_threading" time="10"></testcase>
+            <testcase name="bios_turbo_mode" time="10">
+              <failure message="Turbo mode should be disabled">Expected: disabled, Got: enabled</failure>
+            </testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/bios_validation-{{ spoke_cluster }}-20260706-130500/bios_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock ZTP Deployment test directory
+      ansible.builtin.file:
+        path: "{{ shared_artifact_dir }}/{{ test_name_ztp }}-{{ spoke_cluster }}-20260706-130600"
+        state: directory
+        mode: '0755'
+
+    - name: Create mock ZTP Deployment XML result
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuite tests="4" failures="0" skipped="0" time="4391">
+            <testcase name="ztp_spoke_deployment" time="4391"></testcase>
+          </testsuite>
+        dest: "{{ shared_artifact_dir }}/{{ test_name_ztp }}-{{ spoke_cluster }}-20260706-130600/ztp_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock ZTP Deployment timeline summary
+      ansible.builtin.copy:
+        content: |
+          ======================================================================
+          ZTP AI DEPLOYMENT TIME TEST SUMMARY
+          ======================================================================
+          Spoke Cluster: test-spoke-01
+          Hub Cluster: kni-qe-70
+          Deployment Method: AI
+
+          DEPLOYMENT TIMELINE:
+            Start Time: 2026-07-06T12:00:00Z
+            End Time: 2026-07-06T13:13:11Z
+            Duration: 1h13m11s (4391 seconds)
+
+          TEST VALIDATION:
+            Threshold: 2h0m (7200 seconds)
+            Result: PASS
+
+          ======================================================================
+          KEY MILESTONES
+          ======================================================================
+          1. ClusterInstance Created | 2026-07-06T12:00:00Z | 0h0m0s | START
+          2. GitOps Sync (ManagedCluster Created) | 2026-07-06T12:00:01Z | 0h0m1s
+          3. AgentClusterInstall Created | 2026-07-06T12:00:01Z | 0h0m1s
+          4. Installation Completed | 2026-07-06T12:34:21Z | 0h34m21s
+          5. TALM CGU Completed (Ready for Workloads) | 2026-07-06T13:13:11Z | 1h13m11s
+
+          ======================================================================
+          DEPLOYMENT SUMMARY
+          ======================================================================
+          🚀 The deployment took 1h13m11s from ClusterInstance CR creation to TALM CGU Completed (Ready for Workloads)
+        dest: "{{ shared_artifact_dir }}/{{ test_name_ztp }}-{{ spoke_cluster }}-20260706-130600/deployment-timeline-summary.txt"
+        mode: '0644'
+
+    - name: Create mock ZTP spoke reboot count file
+      ansible.builtin.copy:
+        content: |
+          ZTP Deployment Reboot Analysis
+          ==============================
+          Spoke Cluster: test-spoke-01
+          ZTP Start Time: 2026-07-06T12:00:00Z
+          ZTP End Time: 2026-07-06T13:13:11Z
+          ZTP Duration: 1h13m11s
+
+          REBOOT COUNT VALIDATION
+          -----------------------
+          Reboots During ZTP: 2
+          Threshold: <= 2
+          Result: PASS
+
+
+          Boots Within ZTP Deployment Window:
+          -----------------------------------
+          IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+           -1 abc123def456789abc123def456789abc Mon 2026-07-06 12:15:00 UTC Mon 2026-07-06 12:30:00 UTC
+            0 def789abc123def789abc123def789abc Mon 2026-07-06 12:31:00 UTC Mon 2026-07-06 13:13:11 UTC
+
+
+          All Boot Entries (journalctl --list-boots):
+          -------------------------------------------
+          IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+           -1 abc123def456789abc123def456789abc Mon 2026-07-06 12:15:00 UTC Mon 2026-07-06 12:30:00 UTC
+            0 def789abc123def789abc123def789abc Mon 2026-07-06 12:31:00 UTC Mon 2026-07-06 13:13:11 UTC
+        dest: "{{ shared_artifact_dir }}/{{ test_name_ztp }}-{{ spoke_cluster }}-20260706-130600/spoke-reboot-count.txt"
+        mode: '0644'
+
+    - name: Display preparation summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Test Environment Prepared"
+          - "=========================================="
+          - "Artifact directory: {{ shared_artifact_dir }}"
+          - "Output directory: {{ output_dir }}"
+          - "Mock tests created: OSLAT, CPU_UTIL, PTP, Cyclictest, Reboot, RDS Compare, RFC2544, BIOS Validation, ZTP Deployment"
+          - "Total: 9 test types"
+          - "=========================================="

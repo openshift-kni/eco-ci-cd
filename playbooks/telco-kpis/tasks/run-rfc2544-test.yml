@@ -14,6 +14,11 @@
     path: /tmp
   register: artifacts_dir
 
+- name: Record test start time
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: start.yml
+
 - name: Convert duration to seconds
   ansible.builtin.set_fact:
     duration_seconds: >-
@@ -100,17 +105,55 @@
         port2_from_inventory: "{{ port_params | regex_search('PORT2=([^;]+)', '\\1') | first | default('') }}"
       when: port_params | length > 0
 
-- name: Set RFC2544 Spirent configuration from inventory (with fallbacks)
+- name: Set RFC2544 Spirent configuration from inventory or parameters
   ansible.builtin.set_fact:
-    chassis: >-
-      {{ chassis | default(chassis_from_inventory | default('', true)) | default(telco_kpis_default_spirent_chassis, true) }}
-    stcweb: >-
-      {{ stcweb | default(stcweb_from_inventory | default('', true)) | default(telco_kpis_default_spirent_stcweb, true) }}
-    port1: >-
-      {{ port1 | default(port1_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port1, true) }}
-    port2: >-
-      {{ port2 | default(port2_from_inventory | default('', true)) | default(telco_kpis_default_spirent_port2, true) }}
-    spirent_config: "{{ telco_kpis_default_spirent_config | default('spirent_testcfg.xml') }}"
+    chassis: "{{ chassis | default(chassis_from_inventory | default('')) }}"
+    stcweb: "{{ stcweb | default(stcweb_from_inventory | default('')) }}"
+    port1: "{{ port1 | default(port1_from_inventory | default('')) }}"
+    port2: "{{ port2 | default(port2_from_inventory | default('')) }}"
+    spirent_config: "{{ spirent_config_file | default('spirent_testcfg.xml') }}"
+
+- name: Validate required RFC2544 Spirent configuration parameters
+  ansible.builtin.assert:
+    that:
+      - chassis is defined and chassis | length > 0
+      - stcweb is defined and stcweb | length > 0
+      - port1 is defined and port1 | length > 0
+      - port2 is defined and port2 | length > 0
+    fail_msg: |
+      ❌ Missing required Spirent configuration for RFC2544 test
+
+      REQUIRED PARAMETERS:
+        • chassis  - Spirent chassis hostname/IP
+        • stcweb   - Spirent Test Center Web API (hostname:port)
+        • port1    - First test port (format: //chassis/slot/port)
+        • port2    - Second test port (format: //chassis/slot/port)
+
+      CONFIGURATION SOURCES (in priority order):
+        1. Jenkins job parameters (chassis, stcweb, port1, port2)
+        2. ran-integration inventory file:
+           {{ ran_inventory_file }}
+
+      CURRENT VALUES:
+        chassis: {{ chassis if (chassis is defined and chassis | length > 0) else '❌ NOT SET' }}
+        stcweb:  {{ stcweb if (stcweb is defined and stcweb | length > 0) else '❌ NOT SET' }}
+        port1:   {{ port1 if (port1 is defined and port1 | length > 0) else '❌ NOT SET' }}
+        port2:   {{ port2 if (port2 is defined and port2 | length > 0) else '❌ NOT SET' }}
+
+      RAN-INTEGRATION INVENTORY:
+        File exists: {{ ran_inventory_stat.stat.exists }}
+        Path: {{ ran_inventory_file }}
+
+      EXAMPLE INVENTORY CONTENT:
+        CHASSIS=spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com
+        STCWEB=spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888
+        PORT_PARAMS=PORT1=//spirent-n4u-01/1/16;PORT2=//spirent-n4u-01/1/15
+
+      RESOLUTION:
+        • Provide parameters via Jenkins job, OR
+        • Ensure ran-integration inventory exists with Spirent configuration, OR
+        • Verify cluster FQDN matches inventory filename: hosts.{{ cluster_fqdn }}
+    success_msg: "✓ All required Spirent configuration parameters validated"
 
 - name: Display Spirent configuration source
   ansible.builtin.debug:
@@ -119,11 +162,32 @@
 
 - name: Build RFC2544_PARAMS string
   ansible.builtin.set_fact:
-    rfc2544_params: >-
-      PORT1={{ port1 }};PORT2={{ port2 }};STCWEB={{ stcweb }};CHASSIS={{ chassis }};
-      LAT_DURATION={{ duration_seconds }};TESTCFG={{ spirent_config }};CLUSTER={{ spoke_cluster }};
-      FRAME_SIZE={{ frame_size | default(telco_kpis_default_frame_size) }};
-      LAT_RATE={{ lat_rate | default(telco_kpis_default_lat_rate) }}
+    rfc2544_params: "{{ rfc2544_params_list | join(';') }}"
+  vars:
+    rfc2544_params_list:
+      - "PORT1={{ port1 }}"
+      - "PORT2={{ port2 }}"
+      - "STCWEB={{ stcweb }}"
+      - "CHASSIS={{ chassis }}"
+      - "LAT_DURATION={{ duration_seconds }}"
+      - "TESTCFG={{ spirent_config }}"
+      - "CLUSTER={{ spoke_cluster }}"
+      - "FRAME_SIZE={{ frame_size | default(telco_kpis_default_frame_size) }}"
+      - "LAT_RATE={{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+
+- name: Build disconnected registry pattern from vault data (ansible_group_bastions)
+  ansible.builtin.set_fact:
+    rfc2544_disconnected_registry: >-
+      {{ [disconnected_registry_url | default('disconnected.registry.local'),
+      disconnected_registry_port | default('5000')] | join(':') }}
+
+- name: Set RFC2544 pass/fail thresholds and ran-integration parameters with defaults
+  ansible.builtin.set_fact:
+    rfc2544_throughput_threshold: "{{ throughput_threshold | default('99.9') }}"
+    rfc2544_max_latency_threshold: "{{ max_latency_threshold | default('30') }}"
+    rfc2544_tolerance_nines: "{{ tolerance_nines | default('6') }}"
+    rfc2544_absolute_max_latency: "{{ absolute_max_latency | default('50') }}"
+    rfc2544_ran_metrics_url: "{{ ran_metrics_url | default('https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/') }}"
 
 - name: Display test configuration
   ansible.builtin.debug:
@@ -136,6 +200,7 @@
       - "Duration: {{ duration | default(telco_kpis_default_duration_rfc2544) }} ({{ duration_seconds }}s)"
       - "Frame Size: {{ frame_size | default(telco_kpis_default_frame_size) }}"
       - "LAT Rate: {{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+      - "Disconnected Registry: {{ rfc2544_disconnected_registry }}"
       - "RAN Integration Repo: {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
       - "Artifacts: {{ artifacts_dir.path }}"
       - "=========================================="
@@ -147,11 +212,12 @@
       - "  PORT2: {{ port2 }}"
       - "  TESTCFG: {{ spirent_config }}"
       - "=========================================="
+      - "Pass/Fail Criteria (KPI Standard):"
+      - "  RDS Primary: Throughput ≥ {{ rfc2544_throughput_threshold }}% AND Max Latency < {{ rfc2544_max_latency_threshold }}μs"
+      - "  Tolerance Fallback: {{ rfc2544_tolerance_nines }} nines AND Max Latency < {{ rfc2544_absolute_max_latency }}μs"
+      - "=========================================="
       - "RFC2544_PARAMS: {{ rfc2544_params }}"
       - "=========================================="
-
-- name: Deploy dpdk-testpmd pod
-  ansible.builtin.import_tasks: deploy-dpdk-testpmd-pod.yml
 
 - name: Ensure kubeconfig is readable by podman container
   ansible.builtin.file:
@@ -174,35 +240,22 @@
       - "Podman logs:    podman logs -f telco-kpis-rfc2544-{{ spoke_cluster }}"
       - "=========================================="
 
-- name: Set RFC2544 test variables
-  ansible.builtin.set_fact:
-    test_name: "rfc2544"
-    test_display_name: "RFC2544"
-    test_description: |
-      This script runs the RFC2544 test to measure network throughput and latency
-      using Spirent traffic generator. It clones required repositories, sets up
-      the test environment, executes the test, and captures results.
-    test_use_ran_metrics: false
-    test_use_scripts_dir: false
-    test_working_subdir: "scripts/test_rfc2544"
-    test_pre_command: |
-      echo "Installing stcrestclient Python package..."
-      pip3 install --user stcrestclient || true
-    test_command_prefix: |
-      echo "RFC2544_PARAMS: {{ rfc2544_params }}"
-      # WORKAROUND: Spirent XML has ErrorHandler=PAUSE_ON_ERROR which stalls automated runs
-      # Patch to STOP_ON_ERROR for automated execution
-      sed -i "s/    subscribe_results(stc)/    subscribe_results(stc)\\n    \
-        stc.config(\"sequencer1\", ErrorHandler=\"STOP_ON_ERROR\"); \
-        stc.apply(); \
-        print(\"WARNING: patched ErrorHandler to STOP_ON_ERROR (workaround)\", file=sys.stderr)/" main.py
-    test_command: 'python3 main.py "{{ rfc2544_params }}" 2>&1 | tee /workspace/artifacts/rfc2544-output.log'
-    ran_integration_repo: "{{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
+
+- name: Save RFC2544 thresholds for parser
+  ansible.builtin.copy:
+    content: |
+      ---
+      throughput_threshold: {{ rfc2544_throughput_threshold }}
+      max_latency_threshold: {{ rfc2544_max_latency_threshold }}
+      tolerance_nines: {{ rfc2544_tolerance_nines }}
+      absolute_max_latency: {{ rfc2544_absolute_max_latency }}
+    dest: "{{ artifacts_dir.path }}/rfc2544-thresholds.yml"
+    mode: '0644'
 
 - name: Template RFC2544 test script to bastion
   ansible.builtin.template:
-    src: templates/run-test.sh.j2
-    dest: "{{ artifacts_dir.path }}/run-rfc2544-test.sh"
+    src: templates/run_rfc2544_test.sh.j2
+    dest: "{{ artifacts_dir.path }}/run_rfc2544_test.sh"
     mode: '0755'
 
 - name: Run RFC2544 test in podman container
@@ -212,10 +265,12 @@
     state: started
     detach: false
     rm: true
-    command: /workspace/artifacts/run-rfc2544-test.sh
+    command: /workspace/artifacts/run_rfc2544_test.sh
     volume:
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+    etc_hosts:
+      disconnected.registry.local: "{{ ansible_host }}"
   register: rfc2544_result
   failed_when: false
   changed_when: false
@@ -230,68 +285,20 @@
   ansible.builtin.set_fact:
     rfc2544_exit_code: "{{ rfc2544_result.container.State.ExitCode | default(0) }}"
 
+- name: Record test duration and save metadata
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: stop.yml
+  vars:
+    test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
 - name: Display test execution result
   ansible.builtin.debug:
     msg:
       - "Test exit code: {{ rfc2544_exit_code }}"
       - "{{ 'Test PASSED' if rfc2544_exit_code | int == 0 else 'Test FAILED' }}"
-
-- name: Terminate dpdk-testpmd pod
-  kubernetes.core.k8s_exec:
-    namespace: "{{ pod_namespace }}"
-    pod: "{{ pod_name }}"
-    command: terminate
-    kubeconfig: "{{ spoke_kubeconfig }}"
-  register: terminate_result
-  failed_when: false
-
-- name: Wait for pod termination
-  ansible.builtin.pause:
-    seconds: 5
-
-- name: Collect dpdk-testpmd pod logs
-  kubernetes.core.k8s_log:
-    name: "{{ pod_name }}"
-    namespace: "{{ pod_namespace }}"
-    kubeconfig: "{{ spoke_kubeconfig }}"
-  register: pod_logs_result
-  failed_when: false
-
-- name: Save pod logs to file
-  ansible.builtin.copy:
-    content: "{{ pod_logs_result.log if pod_logs_result.log is defined else 'No logs available' }}"
-    dest: "{{ artifacts_dir.path }}/dpdk-testpmd.log"
-    mode: '0644'
-
-- name: Display pod logs (last 30 lines)
-  ansible.builtin.debug:
-    msg: "{{ (pod_logs_result.log | default('No logs available')).split('\n')[-30:] }}"
-
-- name: Delete dpdk-testpmd pod
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: Pod
-    name: "{{ pod_name }}"
-    namespace: "{{ pod_namespace }}"
-    kubeconfig: "{{ spoke_kubeconfig }}"
-
-- name: Wait for pod to be fully deleted
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Pod
-    name: "{{ pod_name }}"
-    namespace: "{{ pod_namespace }}"
-    kubeconfig: "{{ spoke_kubeconfig }}"
-  register: pod_check
-  until: pod_check.resources | length == 0
-  retries: 30
-  delay: 2
-  failed_when: false
-
-- name: Confirm pod deletion
-  ansible.builtin.debug:
-    msg: "dpdk-testpmd pod {{ pod_name }} deleted ({{ 'successfully' if pod_check.resources | length == 0 else 'cleanup may be incomplete' }})"
+      - "NOTE: dpdk-testpmd pod lifecycle managed by ran-integration script"
+      - "NOTE: JUnit XML generated by ran-integration script"
 
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
@@ -302,6 +309,7 @@
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ rfc2544_exit_code }}"
     artifact_management_test_duration: "{{ duration_seconds }}"
+    artifact_management_junit_source_pattern: "rfc2544_report.xml"
 
 - name: Cleanup artifacts directory on bastion
   ansible.builtin.file:

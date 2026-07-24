@@ -1,0 +1,117 @@
+---
+# Parse PTP test results from podman-run.log
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
+- name: Read podman-run.log for PTP test
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/podman-run.log"
+  register: ptp_log_content
+  failed_when: false
+
+- name: Parse PTP results when log exists
+  when: ptp_log_content.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        ptp_log: "{{ ptp_log_content.content | b64decode }}"
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ ptp_log }}"
+
+    - name: Extract PTP metrics from log
+      ansible.builtin.set_fact:
+        ptp4l_max_match: "{{ ptp_log | regex_search('\\[INFO\\] PTP4L MAX Value (\\d+)', '\\1') }}"
+        ptp4l_min_match: "{{ ptp_log | regex_search('\\[INFO\\] PTP4L MIN Value (\\d+)', '\\1') }}"
+        ptp4l_avg_match: "{{ ptp_log | regex_search('\\[INFO\\] PTP4L AVG VALUE ([\\d.]+)', '\\1') }}"
+        phc2sys_max_match: "{{ ptp_log | regex_search('\\[INFO\\] PHC2SYS MAX Value (\\d+)', '\\1') }}"
+        phc2sys_min_match: "{{ ptp_log | regex_search('\\[INFO\\] PHC2SYS MIN Value (\\d+)', '\\1') }}"
+        phc2sys_avg_match: "{{ ptp_log | regex_search('\\[INFO\\] PHC2SYS AVG VALUE ([\\d.]+)', '\\1') }}"
+        ptp4l_restarts_match: "{{ ptp_log | regex_search('\\[INFO\\] Number of ptp4l process restart: (\\d+)', '\\1') }}"
+
+    - name: Parse PTP metric values
+      ansible.builtin.set_fact:
+        ptp4l_max: "{{ ptp4l_max_match[0] if ptp4l_max_match else 'N/A' }}"
+        ptp4l_min: "{{ ptp4l_min_match[0] if ptp4l_min_match else 'N/A' }}"
+        ptp4l_avg: "{{ ptp4l_avg_match[0] if ptp4l_avg_match else 'N/A' }}"
+        phc2sys_max: "{{ phc2sys_max_match[0] if phc2sys_max_match else 'N/A' }}"
+        phc2sys_min: "{{ phc2sys_min_match[0] if phc2sys_min_match else 'N/A' }}"
+        phc2sys_avg: "{{ phc2sys_avg_match[0] if phc2sys_avg_match else 'N/A' }}"
+        ptp4l_restarts: "{{ ptp4l_restarts_match[0] if ptp4l_restarts_match else '0' }}"
+
+    - name: Determine PTP test status
+      ansible.builtin.set_fact:
+        ptp_passed: "{{ '[INFO] Test status passed' in ptp_log }}"
+
+    - name: Extract duration from log (e.g., "duration=10m")
+      ansible.builtin.set_fact:
+        ptp_duration_match: "{{ ptp_log | regex_search('duration=([^)]+)', '\\1') }}"
+
+    - name: Set duration value
+      ansible.builtin.set_fact:
+        ptp_duration: "{{ ptp_duration_match[0] if ptp_duration_match else 'N/A' }}"
+
+    - name: Build PTP key metric
+      ansible.builtin.set_fact:
+        ptp_key_metric: "PTP4L:{{ ptp4l_max }}ns PHC2SYS:{{ phc2sys_max }}ns Restarts:{{ ptp4l_restarts }}"
+
+    - name: Extract log excerpt
+      ansible.builtin.set_fact:
+        ptp_log_excerpt_lines: "{{ ptp_log | regex_findall('\\[INFO\\].*(?:PTP4L|PHC2SYS|restart).*', multiline=True) }}"
+
+    - name: Build log excerpt
+      ansible.builtin.set_fact:
+        ptp_log_excerpt: "{{ ptp_log_excerpt_lines | join('\n') }}"
+
+    - name: Store PTP result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'ptp',
+                  'status': ('PASS' if ptp_passed else 'FAIL'),
+                  'key_metric': ptp_key_metric,
+                  'duration': test_duration_human,
+                  'ptp4l_max': ptp4l_max,
+                  'ptp4l_min': ptp4l_min,
+                  'ptp4l_avg': ptp4l_avg,
+                  'phc2sys_max': phc2sys_max,
+                  'phc2sys_min': phc2sys_min,
+                  'phc2sys_avg': phc2sys_avg,
+                  'ptp4l_restarts': ptp4l_restarts,
+                  'raw_log_excerpt': ptp_log_excerpt,
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  }
+                }
+              })
+            })
+          }}
+
+- name: Handle missing PTP log
+  when: ptp_log_content.content is not defined
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'ptp',
+              'status': 'N/A',
+              'key_metric': 'No log found',
+              'duration': 'N/A',
+              'detail': 'PTP log file not found'
+            }
+          })
+        })
+      }}

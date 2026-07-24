@@ -1,0 +1,33 @@
+---
+# Reusable task to read test-duration.yml from test artifact directory
+# Sets facts: actual_test_duration_seconds, test_duration_human, test_start_time, test_end_time
+#
+# Required variable: current_test.dir_path
+
+- name: Check for test duration file
+  ansible.builtin.stat:
+    path: "{{ current_test.dir_path }}/test-duration.yml"
+  register: duration_file
+
+- name: Read test duration from file
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/test-duration.yml"
+  register: duration_content
+  when: duration_file.stat.exists
+  failed_when: false
+
+- name: Parse duration from file
+  ansible.builtin.set_fact:
+    actual_test_duration_seconds: "{{ (duration_content.content | b64decode | from_yaml).duration_seconds }}"
+    test_duration_human: "{{ (duration_content.content | b64decode | from_yaml).duration_human }}"
+    test_start_time: "{{ (duration_content.content | b64decode | from_yaml).start_time }}"
+    test_end_time: "{{ (duration_content.content | b64decode | from_yaml).end_time }}"
+  when: duration_file.stat.exists and duration_content.content is defined
+
+- name: Set default duration if file not found
+  ansible.builtin.set_fact:
+    actual_test_duration_seconds: "N/A"
+    test_duration_human: "N/A"
+    test_start_time: "N/A"
+    test_end_time: "N/A"
+  when: not duration_file.stat.exists

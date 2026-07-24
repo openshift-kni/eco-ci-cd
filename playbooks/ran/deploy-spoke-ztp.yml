@@ -2,8 +2,15 @@
 # This playbook:
 #   1. creates the spoke cluster namespace on the hub cluster.
 #   2. creates the BMC credentials secret on the spoke cluster.
-#   3. patches the extracted ZTP ArgoCD configuration with custom Git repository paths.
-#   4. apply the patched ArgoCD configuration to launch the spoke cluster ZTP deployment.
+#   3. creates a ClusterImageSet with the OCP release image (digest format).
+#   4. patches the extracted ZTP ArgoCD configuration with custom Git repository paths.
+#   5. applies the patched ArgoCD configuration to launch the spoke cluster ZTP deployment.
+#
+# Release image resolution:
+#   The ClusterImageSet (hive.openshift.io/v1) requires releaseImage in digest format.
+#   If ocp_release_image is provided, it is used directly (must already be digest format).
+#   If ocp_release_image is empty or undefined, the hub cluster's own release image is
+#   used as fallback (already in digest format from `oc get clusterversion`).
 #
 # Prerequisites:
 #   - hub-sno-configure-kustomize-plugin.yml must be run first to extract ZTP artifacts
@@ -23,6 +30,10 @@
 #                   masters_secret_username=A \
 #                   masters_secret_password=B \
 #                   ztp_git_repo_url=https://gitlab.example.com/user/ztp-site-configs.git"
+#
+# With explicit release image (must be digest format):
+#   ansible-playbook ... \
+#     --extra-vars "... ocp_release_image=quay.io/openshift-release-dev/ocp-release@sha256:abc123..."
 #
 # For re-deployments (delete existing resources on hub cluster first):
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
@@ -264,12 +275,16 @@
           data:
             .dockerconfigjson: "{{ hub_pull_secret.resources[0].data['.dockerconfigjson'] }}"
 
-    - name: Get hub cluster release image digest
+    - name: Get cluster release image digest
       ansible.builtin.shell: |
+        {% if (ocp_release_image | default('')) | length > 0 %}
+        echo "{{ ocp_release_image }}"
+        {% else %}
         oc get clusterversion version -o jsonpath='{.status.desired.image}'
+        {% endif %}
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
-      register: hub_release_image
+      register: _release_digest_image
       changed_when: false
 
     - name: Create ClusterImageSet for OCP version
@@ -282,7 +297,7 @@
           metadata:
             name: "{{ ocp_version }}"
           spec:
-            releaseImage: "{{ hub_release_image.stdout }}"
+            releaseImage: "{{ _release_digest_image.stdout }}"
 
     - name: Verify clusters-app.yaml exists in extracted ZTP workdir
       ansible.builtin.stat:

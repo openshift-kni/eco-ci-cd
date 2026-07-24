@@ -1,0 +1,13 @@
+---
+# Record test start time
+# Sets facts: test_start_epoch, test_start_time
+
+- name: Gather facts for start timestamp
+  ansible.builtin.setup:
+    gather_subset:
+      - date_time
+
+- name: Record test start time
+  ansible.builtin.set_fact:
+    test_start_epoch: "{{ ansible_date_time.epoch }}"
+    test_start_time: "{{ ansible_date_time.iso8601 }}"

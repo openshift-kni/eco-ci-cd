@@ -1,0 +1,17 @@
+---
+# Molecule test runner - executes all test phases
+#
+# This playbook can be run locally without molecule (using local ansible)
+# to validate spoke lockdown logic quickly.
+#
+# Usage:
+#   ansible-playbook -i localhost, -c local molecule/spoke/default/test.yml
+
+- name: Run spoke lockdown tests
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Execute spoke lockdown logic
+  ansible.builtin.import_playbook: converge.yml
+
+- name: Verify results
+  ansible.builtin.import_playbook: verify.yml

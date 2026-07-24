@@ -1,0 +1,377 @@
+---
+# Wrapper playbook: Mirror spoke operators and generate lockdown JSON
+#
+# This playbook orchestrates operator mirroring with lockdown generation
+# using minimal upstream hooks + lockdowns role pattern.
+#
+# Required variables:
+#   - version: OCP version (e.g., "4.22")
+#   - hub_name: Hub cluster name for metadata
+#   - build_number: Build number for lockdown metadata
+#   - lockdown_output_file: Path where to save generated lockdown JSON
+#   - kubeconfig: Path to kubeconfig file
+#
+# Optional variables:
+#   - architecture: CPU architecture (default: "x86_64")
+#   - operator_source: "production-catalog" (default) or "art-catalog"
+#   - operators: List of operators to mirror (ignored if spoke_lockdown_uri provided)
+#   - spoke_lockdown_uri: URI to lockdown JSON (takes precedence over operators)
+#
+# Vault variables (from ansible_group_bastions):
+#   - disconnected_registry_url: Internal registry URL (e.g., "disconnected.registry.local")
+#   - disconnected_registry_port: Internal registry port (e.g., "5000")
+#   - ansible_user: Registry username (from vault)
+#   - ansible_password: Registry password (from vault)
+#
+# Example usage:
+#   ansible-playbook mirror-spoke-operators.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars '{
+#       "kubeconfig": "/home/telcov10n/project/generated/kni-qe-70/auth/kubeconfig",
+#       "version": "4.22",
+#       "architecture": "x86_64",
+#       "hub_name": "kni-qe-70",
+#       "build_number": "67",
+#       "lockdown_output_file": "/tmp/lockdown-spoke-4.22-x86_64-build-67.json",
+#       "operators": [
+#         {
+#           "name": "sriov-network-operator",
+#           "catalog": "redhat-operators",
+#           "nsname": "openshift-sriov-network-operator",
+#           "channel": "stable"
+#         }
+#       ]
+#     }'
+
+- name: Mirror spoke operators and generate lockdown
+  hosts: bastion
+  gather_facts: true
+  vars:
+    telco_kpis_lockdown_feature_enabled: true
+    # Default values
+    architecture: "x86_64"
+    operator_source: "production-catalog"
+
+    # Lockdown feature flag (triggers hooks in ocp_operator_mirror)
+    # Only generate lockdown if output file is specified
+    ocp_operator_mirror_generate_lockdown: "{{ (lockdown_output_file | default('') | length > 0) }}"
+
+  tasks:
+    # Extract operators from lockdown URI (takes precedence over operators parameter)
+    - name: Parse spoke lockdown URI to extract operators (if provided)
+      when:
+        - spoke_lockdown_uri is defined
+        - spoke_lockdown_uri | length > 0
+      block:
+        - name: Display lockdown URI mode
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Spoke Lockdown URI Mode"
+              - "=========================================="
+              - "Lockdown URI: {{ spoke_lockdown_uri }}"
+              - "Parsing lockdown to extract operators..."
+              - "=========================================="
+
+        - name: Parse spoke lockdown JSON
+          ansible.builtin.include_role:
+            name: lockdowns
+          vars:
+            lockdown_mode: spoke
+            lockdown_action: parse
+            # This sets: spoke_lockdown_operators, spoke_ocp_version, spoke_ocp_pull_spec, spoke_architecture
+
+        - name: Build normalized operators list with catalog name fixes (preserve lockdown digests)
+          ansible.builtin.set_fact:
+            _normalized_ops: >-
+              {{
+                _normalized_ops | default([]) + [
+                  item | combine({
+                    'catalog': item.catalog
+                      | regex_replace('cs-redhat-operator-index-v.*', 'redhat-operators')
+                      | regex_replace('cs-certified-operator-index-v.*', 'certified-operators')
+                      | regex_replace('cs-community-operator-index-v.*', 'community-operators')
+                  })
+                ]
+              }}
+          loop: "{{ spoke_lockdown_operators }}"
+
+        - name: Set final operators variable with normalized catalog names and preserved digests
+          ansible.builtin.set_fact:
+            operators: "{{ _normalized_ops }}"
+            version: "{{ spoke_ocp_version }}"
+            architecture: "{{ spoke_architecture }}"
+
+        - name: Debug operators variable before display
+          ansible.builtin.debug:
+            var: operators
+
+        - name: Extract production catalog FBC digest from lockdown (for freeze)
+          ansible.builtin.set_fact:
+            _lockdown_production_catalog_digest: >-
+              {{
+                (operators
+                  | selectattr('catalog', 'search', 'redhat-operator')
+                  | selectattr('fbc', 'defined')
+                  | map(attribute='fbc')
+                  | first | default(''))
+              }}
+
+        - name: Display operators normalized for re-mirroring with lockdown digests
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Lockdown Operators Normalized for Re-Mirroring"
+              - "=========================================="
+              - "Extracted: {{ spoke_lockdown_operators | length }} operators"
+              - "Preserved: bundle/fbc digest fields (lockdown mode)"
+              - "Normalized: catalog names (cs-*-index → original names)"
+              - "Production catalog FBC: {{ _lockdown_production_catalog_digest | default('not frozen') }}"
+              - "OCP Version: {{ spoke_ocp_version }}"
+              - "Architecture: {{ spoke_architecture }}"
+              - "=========================================="
+              - "Normalized operators:"
+              - "{{ operators | to_nice_json }}"
+              - "=========================================="
+
+    - name: Validate required variables (mirror mode)
+      ansible.builtin.assert:
+        that:
+          - version is defined
+          - operators is defined
+          - operators | length > 0
+          - kubeconfig is defined
+        fail_msg: "Missing required variables (version, operators, kubeconfig)"
+        success_msg: "Starting spoke operator mirroring{{ ' with lockdown generation' if ocp_operator_mirror_generate_lockdown else ' (mirror-only mode)' }}"
+
+    - name: Validate lockdown generation variables
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.assert:
+        that:
+          - hub_name is defined
+          - build_number is defined
+          - lockdown_output_file is defined
+        fail_msg: "Missing required variables for lockdown generation (hub_name, build_number, lockdown_output_file)"
+        success_msg: "Lockdown generation enabled - all required variables present"
+
+    - name: Display mirroring configuration
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            [
+              '==========================================',
+              'Spoke Operator Mirroring' + (' with Lockdown Generation' if ocp_operator_mirror_generate_lockdown else ' (Mirror-Only Mode)'),
+              '==========================================',
+              'OCP Version: ' + version,
+              'Architecture: ' + architecture,
+              'Operators: ' + (operators | length | string),
+              'Mirror Registry: ' + disconnected_registry_url + ':' + disconnected_registry_port
+            ] + (
+              [
+                'Hub Name: ' + hub_name,
+                'Build Number: ' + (build_number | string),
+                'Lockdown Output: ' + lockdown_output_file
+              ] if ocp_operator_mirror_generate_lockdown else []
+            ) + [
+              '=========================================='
+            ]
+          }}
+
+    - name: Initialize lockdown metadata accumulator
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.set_fact:
+        lockdown_metadata_operators: {}
+
+    - name: Mirror operators to registry (with metadata accumulation)
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        ocp_operator_mirror_registry_user: "{{ ansible_user }}"
+        ocp_operator_mirror_registry_password: "{{ ansible_password }}"
+        ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_architecture: "{{ architecture }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_operator_source: "{{ operator_source }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        # Freeze production catalog FBC digest when using lockdown (validation mode)
+        ocp_operator_mirror_freeze_fbc_digest: "{{ _lockdown_production_catalog_digest | default('') }}"
+        # Lockdown flag triggers hooks that call lockdowns role accumulate tasks
+        # (already set at play level based on ocp_operator_mirror_generate_lockdown)
+
+    - name: Generate lockdown JSON from accumulated metadata
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: spoke/generate.yml
+      vars:
+        # lockdown_metadata_operators already set by accumulate hooks during mirror phase
+        lockdown_ocp_version: "{{ version }}"
+        lockdown_architecture: "{{ architecture }}"
+        lockdown_hub_name: "{{ hub_name }}"
+        lockdown_build_number: "{{ build_number }}"
+        # lockdown_output_file is already available from play scope
+
+    - name: Verify lockdown file exists
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.stat:
+        path: "{{ lockdown_output_file }}"
+      register: lockdown_file_stat
+
+    - name: Display final lockdown path
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Lockdown Generation Complete"
+          - "=========================================="
+          - "Lockdown file: {{ lockdown_output_file }}"
+          - "File exists: {{ lockdown_file_stat.stat.exists }}"
+          - "File size: {{ lockdown_file_stat.stat.size | default(0) }} bytes"
+          - "Format: Legacy (compatible with build #66)"
+          - "Operators captured: {{ lockdown_metadata_operators | length }}"
+          - "=========================================="
+
+    # Validation mode: Compare generated lockdown with input lockdown
+    - name: Compare generated lockdown with input lockdown (validation mode)
+      when:
+        - ocp_operator_mirror_generate_lockdown | bool
+        - spoke_lockdown_uri is defined
+        - spoke_lockdown_uri | length > 0
+      block:
+        - name: Download input lockdown JSON for comparison
+          ansible.builtin.include_role:
+            name: lockdowns
+            tasks_from: common/download-lockdown.yml
+          vars:
+            lockdown_uri: "{{ spoke_lockdown_uri }}"
+            lockdown_download_path: /tmp/spoke-lockdown-input.json
+
+        - name: Compare lockdown files using jd or jq
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            if command -v jd &> /dev/null; then
+              echo "Using jd for JSON comparison"
+              jd -set /tmp/spoke-lockdown-input.json {{ lockdown_output_file }}
+            elif command -v jq &> /dev/null; then
+              echo "Using jq for JSON comparison"
+              echo "=== Input Lockdown (from {{ spoke_lockdown_uri }}) ==="
+              jq -S . /tmp/spoke-lockdown-input.json > /tmp/input-sorted.json
+              echo "=== Generated Lockdown ==="
+              jq -S . {{ lockdown_output_file }} > /tmp/generated-sorted.json
+              diff -u /tmp/input-sorted.json /tmp/generated-sorted.json || true
+            else
+              echo "ERROR: Neither jd nor jq available for comparison"
+              exit 1
+            fi
+          args:
+            executable: /bin/bash
+          register: lockdown_diff
+          changed_when: false
+          failed_when: false
+
+        - name: Normalize input lockdown (exclude metadata section)
+          ansible.builtin.command: |
+            jq -S 'del(.metadata)' /tmp/spoke-lockdown-input.json
+          register: input_normalized
+          changed_when: false
+
+        - name: Normalize generated lockdown (exclude metadata section)
+          ansible.builtin.command: |
+            jq -S 'del(.metadata)' {{ lockdown_output_file }}
+          register: generated_normalized
+          changed_when: false
+
+        - name: Normalize catalog names in input operators (for comparison)
+          ansible.builtin.shell: |
+            set -o pipefail
+            jq -S '.operators | map(
+              .catalog |= (
+                gsub("cs-redhat-operator-index-v.*"; "redhat-operators") |
+                gsub("cs-certified-operator-index-v.*"; "certified-operators") |
+                gsub("cs-community-operator-index-v.*"; "community-operators")
+              )
+            )' /tmp/spoke-lockdown-input.json
+          register: input_operators_normalized
+          changed_when: false
+
+        - name: Extract generated operators (already normalized)
+          ansible.builtin.command: |
+            jq -S '.operators' {{ lockdown_output_file }}
+          register: generated_operators
+          changed_when: false
+
+        - name: Extract bundle+fbc digests from input operators
+          ansible.builtin.command: |
+            jq -S '[.operators[] | {name, bundle, fbc}]' /tmp/spoke-lockdown-input.json
+          register: input_critical_fields
+          changed_when: false
+
+        - name: Extract bundle+fbc digests from generated operators
+          ansible.builtin.command: |
+            jq -S '[.operators[] | {name, bundle, fbc}]' {{ lockdown_output_file }}
+          register: generated_critical_fields
+          changed_when: false
+
+        - name: Set comparison results
+          ansible.builtin.set_fact:
+            operators_match: "{{ input_operators_normalized.stdout == generated_operators.stdout }}"
+            critical_fields_match: "{{ input_critical_fields.stdout == generated_critical_fields.stdout }}"
+
+        - name: Display comparison results
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Spoke Lockdown Validation (Comparison)"
+              - "=========================================="
+              - "Input Lockdown: {{ spoke_lockdown_uri }}"
+              - "Generated Lockdown: {{ lockdown_output_file }}"
+              - "Bundle/FBC Digests: {{ '✓ IDENTICAL' if critical_fields_match else '✗ DIFFERENT' }}"
+              - "Full Operators: {{ '✓ IDENTICAL' if operators_match else '⚠ DIFFERENT (non-critical)' }}"
+              - "=========================================="
+
+        - name: Display diff output if different
+          ansible.builtin.debug:
+            msg: "{{ lockdown_diff.stdout_lines }}"
+          when: not operators_match
+
+        - name: Save diff to artifacts
+          ansible.builtin.copy:
+            content: "{{ lockdown_diff.stdout }}"
+            dest: "{{ lockdown_output_file | dirname }}/spoke-lockdown-diff.txt"
+            mode: '0644'
+          when: not operators_match
+
+        - name: Warn about non-critical differences
+          ansible.builtin.debug:
+            msg: |
+              WARNING: Non-critical differences detected between input and generated lockdowns.
+              Bundle and FBC digests are identical — mirroring is consistent.
+              Differences are in other fields (e.g. catalog names, default_channel).
+              Review the diff output above for details.
+          when:
+            - not operators_match
+            - critical_fields_match
+
+        - name: Fail if bundle or fbc digests don't match
+          ansible.builtin.fail:
+            msg: |
+              VALIDATION FAILED: Bundle/FBC digest mismatch detected!
+
+              Generated lockdown has DIFFERENT bundle or FBC digests than the input lockdown.
+              This is CRITICAL because spoke operators must have identical digests
+              for consistent deployments across ZTP spoke clusters.
+
+              Review the diff output above to identify which operators changed.
+
+              Common causes:
+                - Operator bundle digests changed upstream
+                - FBC catalog digests changed
+                - Different operator versions selected
+
+              Input: {{ spoke_lockdown_uri }}
+              Generated: {{ lockdown_output_file }}
+              Diff saved to: {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/spoke-lockdown-diff.txt
+          when: not critical_fields_match

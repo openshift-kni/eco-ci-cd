@@ -1,0 +1,64 @@
+---
+# Report Generator Role - Default Configuration
+
+# Node-info timestamp filtering
+# When node-info-{spoke}.json exists with a 'collected_at' timestamp,
+# the role automatically excludes (and deletes) test artifacts older than
+# that timestamp. This ensures reports only include tests from the current
+# environment configuration, excluding tests that ran before environment changes.
+report_generator_filter_by_node_info: true
+
+# Test type mapping: normalize both hyphenated and underscore variants to canonical form
+report_generator_test_type_mapping:
+  oslat: oslat
+  ptp: ptp
+  cyclictest: cyclictest
+  cpu-util: cpu_util
+  cpu_util: cpu_util
+  reboot: reboot
+  rfc2544: rfc2544
+  rds-compare: rds_compare
+  rds_compare: rds_compare
+  ztp-ai-deployment-time: ztp_ai_deployment_time
+  ztp_ai_deployment_time: ztp_ai_deployment_time
+  bios-validation: bios_validation
+  bios_validation: bios_validation
+
+# Directory pattern for test artifacts: {test_name}-{spoke}-{YYYYMMDD}-{HHMMSS}
+report_generator_dir_pattern: '^(.+)-({{ spoke_cluster }})-(\d{8})-(\d{6})$'
+
+# Report metadata
+report_generator_title: "Telco KPIs Test Report"
+report_generator_script_name: "Ansible report-generator role"
+
+# Test execution status icons
+report_generator_status_icons:
+  ran: "✅ Ran"
+  not_ran: "⚠️ Not Run"
+  pass: "✅ PASS"
+  fail: "❌ FAIL"
+  na: "⚠️ N/A"
+
+# Test parsers map - maps canonical test name to parser task file
+report_generator_parsers:
+  oslat: parse_oslat.yml
+  ptp: parse_ptp.yml
+  cyclictest: parse_cyclictest.yml
+  cpu_util: parse_cpu_util.yml
+  reboot: parse_reboot.yml
+  rfc2544: parse_rfc2544.yml
+  rds_compare: parse_rds_compare.yml
+  ztp_ai_deployment_time: parse_ztp_ai_deployment.yml
+  bios_validation: parse_bios_validation.yml
+
+# Default test order in report (matches TEST_TYPES from Python script)
+report_generator_test_order:
+  - oslat
+  - ptp
+  - cyclictest
+  - cpu_util
+  - reboot
+  - rfc2544
+  - rds_compare
+  - bios_validation
+  - ztp_ai_deployment_time

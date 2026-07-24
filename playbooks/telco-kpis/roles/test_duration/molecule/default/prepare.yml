@@ -1,0 +1,16 @@
+---
+- name: Prepare test environment for test_duration role
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Remove previous test artifacts
+      ansible.builtin.file:
+        path: /tmp/molecule-test-duration
+        state: absent
+
+    - name: Create test artifacts directory
+      ansible.builtin.file:
+        path: /tmp/molecule-test-duration
+        state: directory
+        mode: '0755'

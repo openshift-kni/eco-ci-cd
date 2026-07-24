@@ -1,0 +1,391 @@
+{%- macro duration_breakdown_table(breakdown) -%}
+{% if breakdown is defined and breakdown.total_human != 'N/A' %}
+
+| **Total Duration** | **Test Execution** | **Overhead** |
+|-------------------|-------------------|--------------|
+| {{ breakdown.total_human }} | {{ breakdown.test_execution_human }} (actual test) | {{ breakdown.overhead_human }} (setup/teardown) |
+
+{% endif %}
+{%- endmacro -%}
+
+{%- macro test_criteria_note(criteria_text) -%}
+<sub>*Pass criteria: {{ criteria_text }}*</sub>
+
+{%- endmacro -%}
+
+{%- macro non_passing_tests_detail(test_cases, test_type='') -%}
+{%- set failed_tests = test_cases | selectattr('status', 'equalto', 'failed') | list %}
+{%- set skipped_tests = test_cases | selectattr('status', 'equalto', 'skipped') | list %}
+{% if failed_tests | length > 0 or skipped_tests | length > 0 %}
+
+<details>
+<summary><b>▶ Click to expand non-passing test details ({{ failed_tests | length }} failed, {{ skipped_tests | length }} skipped)</b></summary>
+
+{%- if failed_tests | length > 0 %}
+
+### ❌ Failed Tests ({{ failed_tests | length }})
+
+| # | Test Name | Time | Failure Message |
+|---|-----------|------|-----------------|
+{% for test in failed_tests -%}
+{%- set test_name_clean = test.name | regex_replace('\\[It\\] ', '') | regex_replace(' \\[\\d+, test_id:\\d+\\]', '') -%}
+| {{ loop.index }} | {{ test_name_clean[:80] }}{% if test_name_clean | length > 80 %}...{% endif %} | {{ test.time if test.time | float > 0 else '—' }} | {{ test.failure_message | default('No message') }} |
+{% endfor %}
+
+{%- endif %}
+{%- if skipped_tests | length > 0 %}
+
+### ⚠️ Skipped Tests ({{ skipped_tests | length }})
+
+| # | Test Name | Time | Skip Reason |
+|---|-----------|------|-------------|
+{% for test in skipped_tests -%}
+{%- set test_name_clean = test.name | regex_replace('\\[It\\] ', '') | regex_replace(' \\[\\d+, test_id:\\d+\\]', '') -%}
+| {{ loop.index }} | {{ test_name_clean[:80] }}{% if test_name_clean | length > 80 %}...{% endif %} | {{ test.time if test.time | float > 0 else '—' }} | {{ test.skip_message | default('No reason provided') }} |
+{% endfor %}
+
+{%- endif %}
+
+</details>
+{% endif %}
+{%- endmacro -%}
+
+# {{ report_generator_title }} - {{ report_data.cluster_info.cluster }}
+
+**Generated:** {{ report_timestamp }}
+
+---
+
+## Test Summary
+
+| Test | Ran | Result | Duration | Key Metric |
+|------|-----|--------|----------|------------|
+{% for test_name in report_generator_test_order %}
+{%   set test_run = report_data.test_runs | selectattr('test_name', 'equalto', test_name) | list | first | default(none) %}
+{%   if test_run %}
+{%     set result = report_data.test_results[test_run.dir_name] | default({'status': 'N/A', 'key_metric': '...', 'duration': 'N/A'}) %}
+{%     set test_display = test_name | upper | replace('-', '_') %}
+{%     set anchor = test_name | lower | replace('-', '_') %}
+{%     set status_icon = report_generator_status_icons.pass if result.status == 'PASS' else (report_generator_status_icons.fail if result.status == 'FAIL' else report_generator_status_icons.na) %}
+| [**{{ test_display }}**](#{{ anchor }}) | {{ report_generator_status_icons.ran }} | {{ status_icon }} | {{ result.duration }} | {{ result.key_metric }} |
+{%   endif %}
+{% endfor %}
+
+{% if output_filename %}
+
+📂 [Browse all test artifacts](.)
+{% endif %}
+
+---
+
+## Cluster Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Cluster** | {{ report_data.cluster_info.cluster }} |
+| **OCP Version** | {{ report_data.cluster_info.sw_version }} |
+| **Kernel** | {{ report_data.cluster_info.kernel_version }} |
+| **Power Mode** | {{ report_data.cluster_info.power_mode }} |
+| **BIOS Version** | {{ report_data.cluster_info.bios_version }} |
+| **Microcode** | {{ report_data.cluster_info.microcode_version }} |
+
+{% if report_data.proc_cmdline %}
+### Kernel cmdline (`/proc/cmdline`)
+
+```
+{{ report_data.proc_cmdline }}
+```
+{% endif %}
+
+{% if report_data.performance_profiles_yaml %}
+### PerformanceProfile
+
+```yaml
+{{ report_data.performance_profiles_yaml }}
+```
+{% endif %}
+
+---
+
+## Test Results
+
+{% for test_name in report_generator_test_order %}
+{%   set test_run = report_data.test_runs | selectattr('test_name', 'equalto', test_name) | list | first | default(none) %}
+{%   if test_run %}
+{%     set result = report_data.test_results[test_run.dir_name] | default({}) %}
+{%     set test_display = test_name | upper | replace('-', '_') %}
+
+### {{ test_display }}
+
+{% if output_filename %}
+{%   if result.test_type == 'ztp_ai_deployment_time' %}
+[Deployment Timeline Summary]({{ test_name }}/deployment-timeline-summary.txt) | [Timeline JSON]({{ test_name }}/deployment-timeline.json) | [All artifacts]({{ test_name }}/)
+{%   elif result.test_type == 'rds_compare' %}
+[Compare Log]({{ test_name }}/cluster-compare.log) | [All artifacts]({{ test_name }}/)
+{%   elif result.test_type == 'bios_validation' %}
+[BIOS Profile]({{ test_name }}/bios-profile.txt) | [Validation Report]({{ test_name }}/bios-validation-report.json) | [All artifacts]({{ test_name }}/)
+{%   else %}
+[Raw Log]({{ test_name }}/podman-run.log) | [All artifacts]({{ test_name }}/)
+{%   endif %}
+{% endif %}
+
+{% if result.test_type == 'oslat' and result.max_latency is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - OSLAT KPI Result
+{{ test_criteria_note("Maximum latency < 20µs on all cores") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+| Metric | Value |
+|--------|-------|
+| **Max Latency** | {{ result.max_latency }} µs |
+| **Availability** | {{ result.availability }}% |
+| **Duration** | {{ result.test_duration }}s |
+| **Cores** | {{ result.cores }} |
+
+{% if result.core_results %}
+| Core | Max | Result |
+|------|-----|--------|
+{%   for core in result.core_results %}
+| {{ core.core }} | {{ core.max }} µs | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% endif %}
+
+{{ non_passing_tests_detail(result.test_cases | default([]), 'oslat') }}
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'ptp' and result.ptp4l_max is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - PTP KPI Result
+{{ test_criteria_note("General offset < 100ns (Mellanox NIC: 100-200ns acceptable)") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+| Metric | Value |
+|--------|-------|
+| **PTP4L Max** | {{ result.ptp4l_max }} ns |
+| **PTP4L Min** | {{ result.ptp4l_min }} ns |
+| **PTP4L Avg** | {{ result.ptp4l_avg }} ns |
+| **PHC2SYS Max** | {{ result.phc2sys_max }} ns |
+| **PHC2SYS Min** | {{ result.phc2sys_min }} ns |
+| **PHC2SYS Avg** | {{ result.phc2sys_avg }} ns |
+| **ptp4l Restarts** | {{ result.ptp4l_restarts }} |
+
+{{ non_passing_tests_detail(result.test_cases | default([]), 'ptp') }}
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'cyclictest' and result.max_overall is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CYCLICTEST KPI Result
+{{ test_criteria_note("Maximum overall latency < 20µs across all threads") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+
+
+**Threads**: {{ result.threads }}
+**Max Latency**: {{ result.max_overall }} µs
+
+{% if result.thread_results %}
+| Thread | Min | Avg | Max | Result |
+|--------|-----|-----|-----|--------|
+{%   for thread in result.thread_results %}
+| {{ thread.thread }} | {{ thread.min }} µs | {{ thread.avg }} µs | {{ thread.max }} µs | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% endif %}
+
+{{ non_passing_tests_detail(result.test_cases | default([]), 'cyclictest') }}
+
+### Raw log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'cpu_util' and result.test_cases is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CPU_UTIL KPI Result
+{{ test_criteria_note("No test case failures in SNO core reduction test suite") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
+**Suite time**: {{ result.suite_time }}
+
+{{ non_passing_tests_detail(result.test_cases, 'cpu_util') }}
+
+{% elif result.test_type == 'reboot' and result.reboot_count is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - REBOOT KPI Result
+{{ test_criteria_note("No test case failures in cluster reboot resilience test suite") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
+**Reboot count**: {{ result.reboot_count }}
+
+{{ non_passing_tests_detail(result.test_cases, 'reboot') }}
+
+### Log excerpt
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+{% elif result.test_type == 'ztp_ai_deployment_time' and result.deployment_time_human is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - ZTP Assisted Installer Deployment Timeline
+{{ test_criteria_note("Deployment duration ≤ 2h0m (120 min) AND Reboot count ≤ 2") }}
+
+| **ZTP Deployment Duration** | **Reboot Count** |
+|-------------------|-------------------|
+| {{ result.deployment_time_human }} | {{ result.reboot_count | default('N/A') }} ({{ result.reboot_status | default('N/A') }}) |
+
+This section shows the complete ZTP/ACM deployment timeline for the spoke cluster,
+including all deployment phases from GitOps sync to workload readiness.
+
+{% if output_filename %}
+**📊 [View Raw Timeline JSON]({{ test_name }}/deployment-timeline.json)**
+{% endif %}
+
+{% if result.reboot_analysis is defined and result.reboot_analysis != 'Reboot analysis not available' %}
+
+```
+{{ result.reboot_analysis }}
+```
+
+{% endif %}
+
+{{ non_passing_tests_detail(result.test_cases | default([]), 'ztp') }}
+
+<details>
+<summary><b>▶ Click to expand deployment timeline details</b></summary>
+
+```
+{{ result.raw_log_excerpt }}
+```
+
+</details>
+
+{% elif result.test_type == 'rfc2544' and result.throughput_percent is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - RFC2544 Network Performance ({{ result.pass_criteria }})
+{{ test_criteria_note("RDS: Throughput ≥99.9% AND Max Latency <30µs, OR Tolerance: ≥6 nines AND Max Latency <50µs") }}
+
+{{ duration_breakdown_table(result.duration_breakdown) }}
+{% if result.config is defined %}
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Latency Test Duration** | {{ result.config.lat_duration }}s |
+| **Frame Size** | {{ result.config.frame_size }} bytes |
+| **LAT Rate** | {{ result.config.lat_rate }} |
+| **Port 1** | {{ result.config.port1 }} |
+| **Port 2** | {{ result.config.port2 }} |
+| **Test Config File** | {{ result.config.testcfg }} |
+| **Chassis** | {{ result.config.chassis }} |
+| **STC Web Server** | {{ result.config.stcweb }} |
+| **Cluster** | {{ result.config.cluster }} |
+
+{% endif %}
+### Test Results
+
+| Metric | Measured | Threshold | Status |
+|--------|----------|-----------|--------|
+| **Throughput** | {{ result.throughput_percent }}% | ≥ {{ result.thresholds.throughput }}% | {{ '✅' if (result.throughput_percent | float) >= (result.thresholds.throughput | float) else '❌' }} |
+| **Max Latency** | {{ result.max_latency }}μs | < {{ result.thresholds.max_latency }}μs | {{ '✅' if (result.max_latency | float) < (result.thresholds.max_latency | float) else '❌' }} |
+| **Avg Latency** | {{ result.avg_latency }}μs | - | - |
+| **Frame Size** | {{ result.frame_size | int }} bytes | - | - |
+| **Line Rate** | {{ result.actual_rate }}% | 80% | - |
+
+### Pass/Fail Criteria
+
+{% if result.rds_criteria_met %}
+**✅ RDS Primary Criteria Met:**
+- Throughput ≥ {{ result.thresholds.throughput }}% ✓
+- Max Latency < {{ result.thresholds.max_latency }}μs ✓
+{% elif result.tolerance_criteria_met %}
+**✅ Tolerance Fallback Criteria Met:**
+- Latency Distribution: {{ result.latency_distribution_nines }} nines ({{ result.latency_distribution_percent }}%)
+- Max Latency < {{ result.thresholds.absolute_max_latency }}μs ✓
+- Note: RDS primary latency threshold missed, but tolerance maintained
+{% else %}
+**❌ Test Failed:**
+- RDS Primary: {{ '✓' if result.rds_criteria_met else '✗' }} (Throughput ≥ {{ result.thresholds.throughput }}% AND Max Latency < {{ result.thresholds.max_latency }}μs)
+- Tolerance Fallback: {{ '✓' if result.tolerance_criteria_met else '✗' }} ({{ result.thresholds.tolerance_nines }} nines AND Max Latency < {{ result.thresholds.absolute_max_latency }}μs)
+{% endif %}
+
+### Latency Distribution
+
+**Distribution Quality**: {{ result.latency_distribution_nines }} nines ({{ result.latency_distribution_percent }}% of samples < 30μs)
+
+{% if result.ranmetrics_summary is defined and result.ranmetrics_summary | length > 0 %}
+
+### Raw log excerpt
+
+```
+{{ result.ranmetrics_summary }}
+```
+
+{% endif %}
+
+{{ non_passing_tests_detail(result.test_cases | default([]), 'rfc2544') }}
+
+{% elif result.test_type == 'bios_validation' and result.bios_settings is defined %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - BIOS Validation Result
+{{ test_criteria_note("All BIOS settings match expected profile values") }}
+
+**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }}
+{% if result.bios_profile_url is defined and result.bios_profile_url %}
+**Profile**: [{{ result.bios_profile_url | basename }}]({{ result.bios_profile_url }})
+{% endif %}
+
+{% if result.bios_settings | length > 0 %}
+| Setting | Expected | Actual | Status |
+|---------|----------|--------|--------|
+{%   for setting in result.bios_settings %}
+| {{ setting.key }} | {{ setting.value }} | {{ setting.current_value }} | {{ '✅ PASS' if setting.status == 'PASS' else '❌ **FAIL**' }} |
+{%   endfor %}
+{% endif %}
+
+{% elif result.test_type == 'rds_compare' %}
+
+## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - RDS Compare Result
+{{ test_criteria_note("No CR diffs or missing CRs compared to Reference Design Specification") }}
+
+**CRs with diffs:** {{ result.crs_with_diffs | default(0) }}/{{ result.total_crs | default(0) }} | **Missing CRs:** {{ result.missing_crs | default(0) }}
+
+{% if result.detail is defined and result.detail | length > 0 and (result.crs_with_diffs | default(0) | int > 0 or result.missing_crs | default(0) | int > 0) %}
+<details>
+<summary><b>▶ Click to expand diff details ({{ result.crs_with_diffs | default(0) }} CRs with differences)</b></summary>
+
+```
+{{ result.detail }}
+```
+
+</details>
+{% endif %}
+
+{% endif %}
+
+---
+
+{%   endif %}
+{% endfor %}
+
+## Report Metadata
+
+- **Generated by:** {{ report_generator_script_name }}
+- **Timestamp:** {{ report_timestamp }}
+- **Cluster:** {{ report_data.cluster_info.cluster }}

@@ -16,6 +16,7 @@
   vars:
     valid_tests:
       - cpu_util
+      - cpu_util_baseline
       - cyclictest
       - oslat
       - ptp
@@ -23,6 +24,10 @@
       - rfc2544
 
   tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/telco_kpis_defaults/defaults/main.yml"
+
     - name: Validate test_name parameter
       ansible.builtin.assert:
         that:

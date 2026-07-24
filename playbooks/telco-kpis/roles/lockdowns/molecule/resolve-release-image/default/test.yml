@@ -1,0 +1,17 @@
+---
+# Molecule test runner - executes all test phases
+#
+# Validates the common/resolve-release-image-digest.yml task by mocking skopeo
+# and verifying digest passthrough, tag resolution, and registry port handling.
+#
+# Usage:
+#   ansible-playbook -i localhost, -c local molecule/resolve-release-image/default/test.yml
+
+- name: Prepare resolve test environment
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Execute resolve logic
+  ansible.builtin.import_playbook: converge.yml
+
+- name: Verify results
+  ansible.builtin.import_playbook: verify.yml

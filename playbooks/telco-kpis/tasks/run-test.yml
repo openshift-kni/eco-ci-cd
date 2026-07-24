@@ -22,12 +22,31 @@
 - name: Ensure test-runner container image exists on bastion
   ansible.builtin.import_tasks: setup-test-runner.yml
 
+- name: Apply workarounds before reboot test
+  when: test_name == 'reboot'
+  ansible.builtin.include_role:
+    name: workarounds
+  vars:
+    workarounds_prometheus_enabled: true
+    workarounds_prometheus_kubeconfig: "{{ spoke_kubeconfig }}"
+
+- name: Build disconnected registry pattern from vault data (ansible_group_bastions)
+  ansible.builtin.set_fact:
+    test_disconnected_registry: >-
+      {{ [disconnected_registry_url | default('disconnected.registry.local'),
+      disconnected_registry_port | default('5000')] | join(':') }}
+
 - name: Create artifacts directory on bastion
   ansible.builtin.tempfile:
     state: directory
     suffix: .{{ test_name }}-{{ spoke_cluster }}
     path: /tmp
   register: artifacts_dir
+
+- name: Record test start time
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: start.yml
 
 - name: Display test configuration
   ansible.builtin.debug:
@@ -40,6 +59,7 @@
       - "Duration: {{ duration | default(test_default_duration | default('N/A')) }}"
       - "{% if test_name == 'cpu_util' %}Baseline Mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
       - "{% if test_name == 'reboot' %}Reboot Count: {{ reboot_count | default(test_default_reboot_count | default('N/A')) }}{% endif %}"
+      - "Disconnected Registry: {{ test_disconnected_registry }}"
       - "Artifacts: {{ artifacts_dir.path }}"
       - "=========================================="
 
@@ -66,8 +86,8 @@
 
 - name: Template test script to bastion - {{ test_display_name }}
   ansible.builtin.template:
-    src: templates/run-test.sh.j2
-    dest: "{{ artifacts_dir.path }}/run-{{ test_name }}-test.sh"
+    src: templates/run_test.sh.j2
+    dest: "{{ artifacts_dir.path }}/run_{{ test_name }}_test.sh"
     mode: '0755'
 
 - name: Run test in podman container - {{ test_display_name }}
@@ -77,10 +97,12 @@
     state: started
     detach: false
     rm: true
-    command: /workspace/artifacts/run-{{ test_name }}-test.sh
+    command: /workspace/artifacts/run_{{ test_name }}_test.sh
     volume:
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+    etc_hosts:
+      disconnected.registry.local: "{{ ansible_host }}"
   register: test_result
   failed_when: false
   changed_when: false
@@ -95,6 +117,18 @@
   ansible.builtin.set_fact:
     test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
 
+- name: Record test duration and save metadata
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: stop.yml
+  vars:
+    test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
+- name: Remove temporary auth.json file
+  ansible.builtin.file:
+    path: "{{ artifacts_dir.path }}/auth.json"
+    state: absent
+
 - name: Display test execution result
   ansible.builtin.debug:
     msg:
@@ -103,11 +137,15 @@
       - "{% if test_name == 'cpu_util' %}Baseline mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
       - "{% if test_name == 'reboot' %}Reboot count: {{ reboot_count | default(test_default_reboot_count) }}{% endif %}"
 
+- name: Convert test duration to seconds
+  ansible.builtin.set_fact:
+    duration_seconds: "{{ (duration | default(test_default_duration | default('0m'))) | community.general.to_seconds }}"
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
   vars:
-    artifact_management_test_name: "{{ test_artifact_name | default(test_name) }}"
+    artifact_management_test_name: "{{ test_name }}"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ test_exit_code }}"

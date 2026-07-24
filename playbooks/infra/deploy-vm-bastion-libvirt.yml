@@ -352,7 +352,18 @@
         name: "{{ hostname }}"
       become: true
 
+    - name: Display current connection list
+      become: true
+      ansible.builtin.command: nmcli connection show
+      register: nmcli_connection_list
+      changed_when: false
+
+    - name: Show connection list
+      ansible.builtin.debug:
+        var: nmcli_connection_list.stdout_lines
+
     - name: Rename external connection
+      when: "'System external-connection' in nmcli_connection_list.stdout"
       become: true
       ansible.builtin.command: nmcli connection modify "System external-connection" connection.id external
       changed_when: false

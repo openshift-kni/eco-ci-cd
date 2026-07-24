@@ -1,0 +1,162 @@
+---
+# Mirror an OCP release candidate image to the disconnected registry if not
+# already present.  Designed for ZTP spoke deployments on disconnected hubs
+# where the ClusterImageSet digest may reference an image that has not yet
+# been mirrored.
+#
+# Inputs  (see defaults/main.yml):
+#   mirror_rc_release_image      – quay.io/.../ocp-release@sha256:...
+#   mirror_rc_kubeconfig         – hub kubeconfig path
+#   mirror_rc_registry_url       – e.g. disconnected.registry.local
+#   mirror_rc_registry_port      – e.g. 5000
+#   mirror_rc_registry_path      – e.g. ocp4/openshift
+#   mirror_rc_pull_secret_path   – path to auth JSON file
+#
+# Outputs:
+#   mirror_rc_was_mirrored       – true if a mirror was performed
+
+- name: Validate required inputs
+  ansible.builtin.assert:
+    that:
+      - mirror_rc_release_image | length > 0
+      - "'@sha256:' in mirror_rc_release_image"
+      - mirror_rc_pull_secret_path | length > 0
+    fail_msg: >-
+      mirror_rc_release_image must be a digest reference
+      (repo@sha256:hash) and mirror_rc_pull_secret_path must be set.
+
+- name: Parse release image reference
+  ansible.builtin.set_fact:
+    _mirror_rc_image_repo: >-
+      {{ mirror_rc_release_image | regex_replace('@sha256:.*$', '') }}
+    _mirror_rc_digest: >-
+      {{ mirror_rc_release_image | regex_search('sha256:[a-f0-9]+') }}
+
+- name: Display release image to check
+  ansible.builtin.debug:
+    msg:
+      - "Release image: {{ mirror_rc_release_image }}"
+      - "Repository:    {{ _mirror_rc_image_repo }}"
+      - "Digest:        {{ _mirror_rc_digest }}"
+
+# -- Determine the mirror repo path via IDMS on the hub cluster -----------
+- name: Read ImageDigestMirrorSets from hub cluster
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ImageDigestMirrorSet
+    kubeconfig: "{{ mirror_rc_kubeconfig }}"
+  register: _mirror_rc_idms_list
+  ignore_errors: true
+
+- name: Find mirror path for source repository from IDMS
+  ansible.builtin.set_fact:
+    _mirror_rc_mirror_repo: >-
+      {{
+        _mirror_rc_idms_list.resources | default([])
+        | map(attribute='spec.imageDigestMirrors') | flatten
+        | selectattr('source', 'equalto', _mirror_rc_image_repo | trim)
+        | map(attribute='mirrors') | flatten
+        | select('match',
+            '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/')
+        | first | default('')
+        | regex_replace(
+            '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/', '')
+      }}
+
+- name: Fall back to default registry path if IDMS lookup returned nothing
+  ansible.builtin.set_fact:
+    _mirror_rc_mirror_repo: "{{ mirror_rc_registry_path }}/release-images"
+  when: (_mirror_rc_mirror_repo | trim) | length == 0
+
+- name: Display resolved mirror repository
+  ansible.builtin.debug:
+    msg: >-
+      Mirror repo: {{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port
+      }}/{{ _mirror_rc_mirror_repo }}
+
+# -- Check whether the digest already exists in the disconnected registry -
+- name: Read pull secret from remote host
+  ansible.builtin.slurp:
+    src: "{{ mirror_rc_pull_secret_path }}"
+  register: _mirror_rc_pull_secret_raw
+
+- name: Extract registry credentials from pull secret
+  ansible.builtin.set_fact:
+    _mirror_rc_registry_auth: >-
+      {{
+        (_mirror_rc_pull_secret_raw.content | b64decode | from_json)
+        .auths[mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port]
+        .auth | default('')
+      }}
+
+- name: Check if release image digest exists in disconnected registry
+  ansible.builtin.uri:
+    url: >-
+      https://{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port
+      }}/v2/{{ _mirror_rc_mirror_repo | trim }}/manifests/{{ _mirror_rc_digest | trim }}
+    method: HEAD
+    headers:
+      Authorization: "Basic {{ _mirror_rc_registry_auth | trim }}"
+      Accept: >-
+        application/vnd.oci.image.manifest.v1+json,
+        application/vnd.docker.distribution.manifest.v2+json,
+        application/vnd.docker.distribution.manifest.list.v2+json
+    validate_certs: false
+    status_code: [200, 404]
+  register: _mirror_rc_manifest_check
+
+- name: Release image already present in disconnected registry
+  ansible.builtin.debug:
+    msg: "Digest {{ _mirror_rc_digest | trim }} already exists — skipping mirror."
+  when: _mirror_rc_manifest_check.status == 200
+
+# -- Mirror the release image if missing ----------------------------------
+- name: Mirror release image to disconnected registry
+  when: _mirror_rc_manifest_check.status == 404
+  block:
+    - name: Display mirror operation
+      ansible.builtin.debug:
+        msg:
+          - "Digest {{ _mirror_rc_digest | trim }} NOT found in disconnected registry."
+          - "Mirroring {{ mirror_rc_release_image }}"
+          - "  → {{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}"
+
+    - name: Run oc adm release mirror # noqa: command-instead-of-shell
+      ansible.builtin.command:
+        cmd: >-
+          oc adm release mirror
+          --from={{ mirror_rc_release_image }}
+          --to={{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}
+          -a {{ mirror_rc_pull_secret_path }}
+          --insecure=true
+      register: _mirror_rc_result
+      changed_when: true
+
+    - name: Display mirror result
+      ansible.builtin.debug:
+        msg: "{{ _mirror_rc_result.stdout_lines[-5:] }}"
+
+    - name: Verify digest is now present in disconnected registry
+      ansible.builtin.uri:
+        url: >-
+          https://{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port
+          }}/v2/{{ _mirror_rc_mirror_repo | trim }}/manifests/{{ _mirror_rc_digest | trim }}
+        method: HEAD
+        headers:
+          Authorization: "Basic {{ _mirror_rc_registry_auth | trim }}"
+          Accept: >-
+            application/vnd.oci.image.manifest.v1+json,
+            application/vnd.docker.distribution.manifest.v2+json,
+            application/vnd.docker.distribution.manifest.list.v2+json
+        validate_certs: false
+        status_code: [200]
+
+    - name: Confirm mirror succeeded
+      ansible.builtin.debug:
+        msg: >-
+          Mirror verified — digest {{ _mirror_rc_digest | trim }}
+          now available in disconnected registry.
+
+- name: Set output fact
+  ansible.builtin.set_fact:
+    mirror_rc_was_mirrored: "{{ _mirror_rc_manifest_check.status == 404 }}"

@@ -181,5 +181,55 @@
       ansible.builtin.debug:
         msg: "No OCP release image override — ran playbook will use hub cluster's own release image"
 
+- name: Ensure OCP release image is mirrored to disconnected registry
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Resolve final release image for mirror check
+      when: (ocp_release_image | default('')) | length == 0
+      block:
+        - name: Get hub cluster release image (Path C fallback)
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: ClusterVersion
+            name: version
+            kubeconfig: "{{ kubeconfig }}"
+          register: _mirror_hub_cv
+
+        - name: Set release image from hub clusterversion
+          ansible.builtin.set_fact:
+            ocp_release_image: >-
+              {{ _mirror_hub_cv.resources[0].status.desired.image }}
+
+    - name: Fetch hub cluster pull secret for mirror auth
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+        kubeconfig: "{{ kubeconfig }}"
+      register: _mirror_hub_pull_secret
+
+    - name: Write pull secret to temp file
+      ansible.builtin.copy:
+        content: >-
+          {{ _mirror_hub_pull_secret.resources[0].data['.dockerconfigjson']
+             | b64decode }}
+        dest: /tmp/mirror-rc-pull-secret.json
+        mode: '0600'
+
+    - name: Check and mirror release image if needed
+      ansible.builtin.include_role:
+        name: mirror_ocp_release_candidate
+      vars:
+        mirror_rc_release_image: "{{ ocp_release_image }}"
+        mirror_rc_kubeconfig: "{{ kubeconfig }}"
+        mirror_rc_pull_secret_path: /tmp/mirror-rc-pull-secret.json
+
+    - name: Clean up temp pull secret
+      ansible.builtin.file:
+        path: /tmp/mirror-rc-pull-secret.json
+        state: absent
+
 - name: Deploy spoke cluster via ZTP
   import_playbook: ../ran/deploy-spoke-ztp.yml

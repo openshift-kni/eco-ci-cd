@@ -37,7 +37,7 @@
       - op: replace
         path: /spec/mastersSchedulable
         value: true
-  when: schedulable_master | bool and deploy_performance_profile_only | bool is false
+  when: scheduable_master | bool and deploy_performance_profile_only | bool is false
 
 - name: Deploy scheduler
   ansible.builtin.include_tasks: deploy_scheduler.yml

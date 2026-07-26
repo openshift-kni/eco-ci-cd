@@ -26,13 +26,15 @@
     scope: "reboot"
   when: run_reboot_tests_only | bool
 
-- name: Generate performance profile
+# Optional PP apply (e.g. Pod→Container scope change, or standalone APPLY_PERFORMANCE_PROFILE).
+# Reboot-only uses pod TM scope.
+- name: Apply PerformanceProfile
   ansible.builtin.include_role:
     name: nrop_config
   vars:
     deploy_performance_profile_only: true
-    topology_manager_scope: "{% if scope == 'reboot' %}pod{% else %}{{ scope }}{% endif %}"
-  when: scope != "reboot"
+    topology_manager_scope: "{{ 'pod' if scope == 'reboot' else scope }}"
+  when: apply_performance_profile | default(false) | bool
 
 - name: Gather sha images
   ansible.builtin.include_tasks: get_image_sha.yml

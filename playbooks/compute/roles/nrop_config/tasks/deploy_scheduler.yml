@@ -52,4 +52,6 @@
 
 - name: Wait for MCP restart
   ansible.builtin.include_tasks: wait_for_mcp.yml
-  when: (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.18', '<')
+  when:
+    - (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.18', '<')
+    - deploy_performance_profile_only | bool is false

@@ -1,7 +1,6 @@
 ---
 # configure-nrop-operator.yml
-# This playbook configures the NROP operator on the cluster.
-# It sets the target pool, the scheduler image uri, and deploys the operator manifest.
+# Configures NROP on the cluster: operator CRs, PerformanceProfile, and sample devices.
 
 # Variables required:
 # kubeconfig: The kubeconfig to use.
@@ -9,6 +8,8 @@
 
 # Variables optional:
 # custom_scheduler: The custom scheduler to use.
+# topology_manager_scope: pod | container (default: pod)
+# schedulable_master: Make masters schedulable before applying CRs.
 
 
 - name: Configure NROP operator

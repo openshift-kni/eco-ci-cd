@@ -24,6 +24,7 @@ You can adjust the execution by providing the following variables:
 | `sample_device_type_1/2/3` | No   | Custom device type override variables                               |
 | `ginkgo_focus`         | No       | Regex/filter to focus a subset of E2E tests                        |
 | `ginkgo_skip`          | No       | Regex/filter to skip a subset of E2E tests                         |
+| `apply_performance_profile` | No  | Apply PerformanceProfile for the phase TM scope before tests (default: `false`) |
 | `run_reboot_tests_only`| No       | Run only tests that require node reboots (`true/false`)             |
 | `ginkgo_label`         | No       | Custom test label filter                                            |
 | `skip_filter`          | No       | Additional skip filter for label selection                          |

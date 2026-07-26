@@ -4,6 +4,7 @@ nrop_test_dir: "{{ tmp_workdir }}/tests"
 
 dry_run: true
 run_reboot_tests_only: false
+apply_performance_profile: false
 
 test_env: prod
 scope: "pod"

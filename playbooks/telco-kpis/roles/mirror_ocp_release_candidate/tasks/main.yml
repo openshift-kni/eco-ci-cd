@@ -39,34 +39,101 @@
       - "Repository:    {{ _mirror_rc_image_repo }}"
       - "Digest:        {{ _mirror_rc_digest }}"
 
-# -- Determine the mirror repo path via IDMS on the hub cluster -----------
-- name: Read ImageDigestMirrorSets from hub cluster
+# -- Determine the mirror repo path from registries.conf ------------------
+# The assisted-service resolves image mirrors via its registries.conf
+# (from the mirror-registry-ca ConfigMap), NOT the cluster IDMS.
+# We find a mirror path common to both ocp-release and ocp-v4.0-art-dev
+# so the assisted-service can locate all mirrored images during ignition
+# generation.  Falls back to IDMS, then to a configurable default.
+
+- name: Read mirror-registry-ca ConfigMap
   kubernetes.core.k8s_info:
-    api_version: config.openshift.io/v1
-    kind: ImageDigestMirrorSet
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ mirror_rc_configmap_name }}"
+    namespace: "{{ mirror_rc_configmap_namespace }}"
     kubeconfig: "{{ mirror_rc_kubeconfig }}"
-  register: _mirror_rc_idms_list
+  register: _mirror_rc_registries_cm
   ignore_errors: true
 
-- name: Find mirror path for source repository from IDMS
-  ansible.builtin.set_fact:
-    _mirror_rc_mirror_repo: >-
-      {{
-        _mirror_rc_idms_list.resources | default([])
-        | map(attribute='spec.imageDigestMirrors') | flatten
-        | selectattr('source', 'equalto', _mirror_rc_image_repo | trim)
-        | map(attribute='mirrors') | flatten
-        | select('match',
-            '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/')
-        | first | default('')
-        | regex_replace(
-            '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/', '')
-      }}
+- name: Resolve mirror path from registries.conf
+  when: >-
+    _mirror_rc_registries_cm.resources | default([]) | length > 0
+    and 'registries.conf' in (_mirror_rc_registries_cm.resources[0].data | default({}))
+  block:
+    - name: Extract art-dev mirror paths from registries.conf
+      vars:
+        _conf: "{{ _mirror_rc_registries_cm.resources[0].data['registries.conf'] }}"
+        _prefix: "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}"
+      ansible.builtin.set_fact:
+        _mirror_rc_artdev_mirrors: >-
+          {{ _conf
+             | regex_findall('(?s)location\s*=\s*"quay\.io/openshift-release-dev/ocp-v4\.0-art-dev".*?(?=\n\[\[registry\]\]|\Z)')
+             | first | default('')
+             | regex_findall('\[\[registry\.mirror\]\][^[]*location\s*=\s*"([^"]+)"')
+             | select('match', '^' ~ _prefix)
+             | list }}
 
-- name: Fall back to default registry path if IDMS lookup returned nothing
+    - name: Extract release mirror paths from registries.conf
+      vars:
+        _conf: "{{ _mirror_rc_registries_cm.resources[0].data['registries.conf'] }}"
+        _prefix: "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}"
+      ansible.builtin.set_fact:
+        _mirror_rc_release_mirrors: >-
+          {{ _conf
+             | regex_findall('(?s)location\s*=\s*"quay\.io/openshift-release-dev/ocp-release".*?(?=\n\[\[registry\]\]|\Z)')
+             | first | default('')
+             | regex_findall('\[\[registry\.mirror\]\][^[]*location\s*=\s*"([^"]+)"')
+             | select('match', '^' ~ _prefix)
+             | list }}
+
+    - name: Set mirror path from registries.conf intersection
+      vars:
+        _prefix: "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}"
+      ansible.builtin.set_fact:
+        _mirror_rc_mirror_repo: >-
+          {{ (_mirror_rc_release_mirrors | default([]))
+             | intersect(_mirror_rc_artdev_mirrors | default([]))
+             | first | default('')
+             | regex_replace('^' ~ _prefix ~ '/', '') }}
+
+    - name: Display registries.conf mirror resolution
+      ansible.builtin.debug:
+        msg:
+          - "Release mirrors (registries.conf): {{ _mirror_rc_release_mirrors }}"
+          - "Art-dev mirrors (registries.conf): {{ _mirror_rc_artdev_mirrors }}"
+          - "Selected mirror path: {{ _mirror_rc_mirror_repo | default('(none)') }}"
+
+- name: Fall back to IDMS lookup
+  when: (_mirror_rc_mirror_repo | default('') | trim) | length == 0
+  block:
+    - name: Read ImageDigestMirrorSets from hub cluster
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ImageDigestMirrorSet
+        kubeconfig: "{{ mirror_rc_kubeconfig }}"
+      register: _mirror_rc_idms_list
+      ignore_errors: true
+
+    - name: Find mirror path for source repository from IDMS
+      ansible.builtin.set_fact:
+        _mirror_rc_mirror_repo: >-
+          {{
+            _mirror_rc_idms_list.resources | default([])
+            | map(attribute='spec.imageDigestMirrors') | flatten
+            | selectattr('source', 'equalto', _mirror_rc_image_repo | trim)
+            | map(attribute='mirrors') | flatten
+            | select('match',
+                '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/')
+            | first | default('')
+            | regex_replace(
+                '^' ~ mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port ~ '/', '')
+          }}
+
+- name: Fall back to default registry path if nothing found
   ansible.builtin.set_fact:
     _mirror_rc_mirror_repo: "{{ mirror_rc_registry_path }}/release-images"
-  when: (_mirror_rc_mirror_repo | trim) | length == 0
+  when: (_mirror_rc_mirror_repo | default('') | trim) | length == 0
 
 - name: Display resolved mirror repository
   ansible.builtin.debug:

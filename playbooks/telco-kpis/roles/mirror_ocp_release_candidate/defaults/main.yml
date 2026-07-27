@@ -17,3 +17,8 @@ mirror_rc_registry_path: "ocp4/openshift"
 # Path to pull secret JSON file (must include both quay.io and
 # disconnected registry credentials for oc adm release mirror).
 mirror_rc_pull_secret_path: ""
+
+# ConfigMap containing registries.conf used by the assisted-service.
+# Read to determine which mirror paths the assisted-service can resolve.
+mirror_rc_configmap_name: "mirror-registry-ca"
+mirror_rc_configmap_namespace: "multicluster-engine"

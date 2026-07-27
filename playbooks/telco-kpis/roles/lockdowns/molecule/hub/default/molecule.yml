@@ -14,7 +14,7 @@ driver:
 
 platforms:
   - name: lockdowns-hub-test
-    image: quay.io/ccardenosa/eco-ci-cd:latest
+    image: quay.io/telcov10n-ci/eco-ci-cd:latest
     pre_build_image: true
     override_command: false
     command: ""

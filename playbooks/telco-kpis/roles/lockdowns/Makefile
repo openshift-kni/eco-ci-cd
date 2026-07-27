@@ -16,7 +16,7 @@ test-hub-parse:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/hub/default/test.yml"
 	@echo ""
 	@echo "✓ Hub parse tests passed!"
@@ -31,7 +31,7 @@ test-hub-capture:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/hub/default/test-capture.yml"
 	@echo ""
 	@echo "✓ Hub capture tests passed!"
@@ -51,7 +51,7 @@ test-spoke:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/spoke/default/test.yml"
 	@echo ""
 	@echo "✓ Spoke tests passed!"
@@ -66,7 +66,7 @@ test-spoke-lockdown-uri:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/spoke-lockdown-uri-with-digests/default/test.yml"
 	@echo ""
 	@echo "✓ Spoke lockdown URI with digests test passed!"
@@ -81,7 +81,7 @@ test-spoke-retag-catalog:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/spoke-retag-catalog/default/test.yml"
 	@echo ""
 	@echo "✓ Spoke retag catalog index tests passed!"

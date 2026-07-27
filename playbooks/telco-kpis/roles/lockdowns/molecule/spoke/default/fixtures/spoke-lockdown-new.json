@@ -1,0 +1,48 @@
+{
+  "spoke": {
+    "ocp": {
+      "pull_spec": "quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64",
+      "major_version": "4",
+      "minor_version": "22",
+      "full_version": "4.22.0",
+      "architecture": "x86_64"
+    },
+    "ztp": {
+      "pull_spec": "registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:v4.22",
+      "version": "4.22"
+    },
+    "operator_source": "production-catalog",
+    "operators": [
+      {
+        "name": "sriov-network-operator",
+        "namespace": "openshift-sriov-network-operator",
+        "catalog": "cs-redhat-operator-index-v4-22",
+        "channel": "stable",
+        "bundle": "registry.redhat.io/openshift4/ose-sriov-network-operator-bundle@sha256:b16b9be8efaef673a31d0ae2fc5b7ebb548b6b90a39c36b82e0f17130",
+        "fbc": "registry.redhat.io/redhat/redhat-operator-index@sha256:bbde0040fdd0c099feb4486322ba9c4945a70d33dbd51d30635197d"
+      },
+      {
+        "name": "ptp-operator",
+        "namespace": "openshift-ptp",
+        "catalog": "cs-redhat-operator-index-v4-22",
+        "channel": "stable",
+        "bundle": "registry.redhat.io/openshift4/ose-ptp-operator-bundle@sha256:0632d04aa5622c57a125cabde20a47f7cc6e9a7c5774a9eede81401",
+        "fbc": "registry.redhat.io/redhat/redhat-operator-index@sha256:bbde0040fdd0c099feb4486322ba9c4945a70d33dbd51d30635197d"
+      },
+      {
+        "name": "local-storage-operator",
+        "namespace": "openshift-local-storage",
+        "catalog": "cs-redhat-operator-index-v4-22",
+        "channel": "stable",
+        "bundle": "registry.redhat.io/openshift4/ose-local-storage-operator-bundle@sha256:dc6ab5b2f0cad048d1ccc58563c7fd8667cb385134c92b4d575b538",
+        "fbc": "registry.redhat.io/redhat/redhat-operator-index@sha256:bbde0040fdd0c099feb4486322ba9c4945a70d33dbd51d30635197d"
+      }
+    ],
+    "metadata": {
+      "cluster_name": "dev-kpi-01",
+      "capture_timestamp": "2026-06-17T12:24:06Z",
+      "build_number": "67",
+      "format_version": "2.0"
+    }
+  }
+}

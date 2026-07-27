@@ -12,6 +12,18 @@
       - "Hub Cluster IP: {{ spoke_hub_connectivity_hub_cluster_ip }}"
       - "=========================================="
 
+- name: Wait for Provisioning CR to exist
+  when: not spoke_hub_connectivity_dry_run | bool
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ spoke_hub_connectivity_hub_kubeconfig }}"
+    api_version: metal3.io/v1alpha1
+    kind: Provisioning
+    name: provisioning-configuration
+  register: provisioning_cr_check
+  until: provisioning_cr_check.resources | length > 0
+  retries: 60
+  delay: 30
+
 - name: Update Provisioning CR with externalIPs
   when: not spoke_hub_connectivity_dry_run | bool
   kubernetes.core.k8s:
@@ -26,6 +38,20 @@
         externalIPs:
           - "{{ spoke_hub_connectivity_hv_corporate_ip }}"
   register: provisioning_update_result
+  failed_when: provisioning_update_result.result | length == 0
+
+- name: Verify Provisioning CR was updated
+  when: not spoke_hub_connectivity_dry_run | bool
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ spoke_hub_connectivity_hub_kubeconfig }}"
+    api_version: metal3.io/v1alpha1
+    kind: Provisioning
+    name: provisioning-configuration
+  register: provisioning_cr_verify
+  failed_when: >-
+    provisioning_cr_verify.resources | length == 0 or
+    not (provisioning_cr_verify.resources[0].spec.virtualMediaViaExternalNetwork | default(false)) or
+    spoke_hub_connectivity_hv_corporate_ip not in (provisioning_cr_verify.resources[0].spec.externalIPs | default([]))
 
 - name: Display Provisioning CR update result
   when: not spoke_hub_connectivity_dry_run | bool

@@ -17,7 +17,7 @@ test-check:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/check-status/default/test.yml"
 	echo ""
 	echo "✓ Check status tests passed!"
@@ -32,7 +32,7 @@ test-remove:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/spoke_hub_connectivity \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/remove/default/test.yml"
 	echo ""
 	echo "✓ Remove tests passed!"

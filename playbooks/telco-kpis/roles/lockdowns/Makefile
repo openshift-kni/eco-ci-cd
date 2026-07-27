@@ -96,7 +96,7 @@ test-resolve-release-image:
 		-w /eco-ci-cd/playbooks/telco-kpis/roles/lockdowns \
 		-e ANSIBLE_ROLES_PATH=/eco-ci-cd/playbooks/telco-kpis/roles \
 		--entrypoint /bin/sh \
-		quay.io/ccardenosa/eco-ci-cd:latest \
+		quay.io/telcov10n-ci/eco-ci-cd:latest \
 		-c "ansible-playbook -i localhost, -c local molecule/resolve-release-image/default/test.yml"
 	@echo ""
 	@echo "✓ Resolve release image tests passed!"

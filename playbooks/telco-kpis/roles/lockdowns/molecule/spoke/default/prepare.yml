@@ -1,0 +1,45 @@
+---
+# Molecule prepare phase - sets up test fixtures
+#
+# Creates mock spoke lockdown JSON files (legacy and new format) for parse testing
+# Creates mock metadata for generate testing
+
+- name: Prepare test environment
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: /tmp/molecule-tests
+        state: directory
+        mode: '0755'
+
+    - name: Create mock spoke lockdown JSON (legacy format)
+      ansible.builtin.copy:
+        src: fixtures/spoke-lockdown-legacy.json
+        dest: /tmp/molecule-tests/spoke-lockdown-legacy.json
+        mode: '0644'
+
+    - name: Create mock spoke lockdown JSON (new format - future compatible)
+      ansible.builtin.copy:
+        src: fixtures/spoke-lockdown-new.json
+        dest: /tmp/molecule-tests/spoke-lockdown-new.json
+        mode: '0644'
+
+    - name: Setup mock metadata for generate testing
+      ansible.builtin.set_fact:
+        lockdown_metadata_operators:
+          sriov-network-operator:
+            name: sriov-network-operator
+            catalog: cs-redhat-operator-index-v4-22
+            nsname: openshift-sriov-network-operator
+            channel: stable
+            bundle: "registry.redhat.io/openshift4/ose-sriov-network-operator-bundle@sha256:test1234"
+            fbc: "registry.redhat.io/redhat/redhat-operator-index@sha256:test5678"
+          ptp-operator:
+            name: ptp-operator
+            catalog: cs-redhat-operator-index-v4-22
+            nsname: openshift-ptp
+            channel: stable
+            bundle: "registry.redhat.io/openshift4/ose-ptp-operator-bundle@sha256:testabc"
+            fbc: "registry.redhat.io/redhat/redhat-operator-index@sha256:testdef"

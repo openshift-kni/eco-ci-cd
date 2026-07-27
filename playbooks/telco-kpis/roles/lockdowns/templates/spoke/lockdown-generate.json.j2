@@ -1,0 +1,35 @@
+{
+  "deployment": {
+    "ocp_pull_spec": "quay.io/openshift-release-dev/ocp-release:{{ lockdown_ocp_version }}.0-{{ lockdown_architecture }}",
+    "ocp_version": "{{ lockdown_ocp_version }}",
+    "ztp_pull_spec": "registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:v{{ lockdown_ocp_version }}",
+    "ztp_version": "{{ lockdown_ocp_version }}",
+    "architecture": "{{ lockdown_architecture }}",
+    "operator_source": "production-catalog"
+  },
+  "operators": [
+{% set valid_operators = [] %}
+{% for op_name, op_data in lockdown_metadata_operators.items() %}
+{% if op_data.bundle %}
+{% set _ = valid_operators.append(op_data) %}
+{% endif %}
+{% endfor %}
+{% for op_data in valid_operators %}
+    {
+      "name": "{{ op_data.name }}",
+      "catalog": "{{ op_data.catalog }}",
+      "nsname": "{{ op_data.nsname }}",
+      "channel": "{{ op_data.channel }}"{% if op_data.default_channel is defined and op_data.default_channel %},
+      "default_channel": "{{ op_data.default_channel }}"{% endif %},
+      "bundle": "{{ op_data.bundle }}",
+      "fbc": "{{ op_data.fbc }}"
+    }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+  ],
+  "metadata": {
+    "hub_name": "{{ lockdown_hub_name }}",
+    "mirror_timestamp": "{{ ansible_date_time.iso8601 }}",
+    "build_number": "{{ lockdown_build_number }}"
+  }
+}

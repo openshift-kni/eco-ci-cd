@@ -3,13 +3,18 @@
 #
 # Downloads spoke lockdown from URI, validates structure, and sets facts for operator deployment
 #
+# Supports TWO formats:
+#   1. Legacy format (build #66): deployment.ocp_version, flat operators array
+#   2. New format (future): spoke.ocp.pull_spec, nested spoke.operators
+#
 # Required variables:
 #   - spoke_lockdown_uri: URL to spoke lockdown JSON
 #
-# Sets facts:
+# Sets facts (consistent regardless of format):
 #   - spoke_lockdown_operators: List of operators ready for deployment
 #   - spoke_ocp_pull_spec: OCP pull spec from lockdown
 #   - spoke_ocp_version: OCP version (major.minor format)
+#   - spoke_architecture: CPU architecture extracted from pull spec (e.g., "x86_64", "arm64")
 
 - name: Download spoke lockdown JSON
   ansible.builtin.include_tasks: ../common/download-lockdown.yml
@@ -17,34 +22,86 @@
     lockdown_uri: "{{ spoke_lockdown_uri }}"
     lockdown_download_path: /tmp/spoke-lockdown.json
 
+- name: Read spoke lockdown JSON from bastion
+  ansible.builtin.slurp:
+    src: /tmp/spoke-lockdown.json
+  register: spoke_lockdown_file
+
 - name: Parse spoke lockdown JSON
   ansible.builtin.set_fact:
-    spoke_lockdown_data: "{{ lookup('file', '/tmp/spoke-lockdown.json') | from_json }}"
+    spoke_lockdown_data: "{{ spoke_lockdown_file.content | b64decode | from_json }}"
 
-- name: Validate spoke lockdown structure
-  ansible.builtin.include_tasks: ../common/validate-structure.yml
-  vars:
-    lockdown_data: "{{ spoke_lockdown_data }}"
-    lockdown_mode: spoke
-
-- name: Extract spoke operators from lockdown
+- name: Detect lockdown format (legacy vs new)
   ansible.builtin.set_fact:
-    spoke_lockdown_operators: "{{ spoke_lockdown_data.spoke.operators }}"
+    spoke_lockdown_format: >-
+      {{ 'legacy' if 'deployment' in spoke_lockdown_data else 'new' }}
 
-- name: Extract spoke OCP details from lockdown
-  ansible.builtin.set_fact:
-    spoke_ocp_pull_spec: "{{ spoke_lockdown_data.spoke.ocp.pull_spec }}"
-    spoke_ocp_version: "{{ spoke_lockdown_data.spoke.ocp.major_version }}.{{ spoke_lockdown_data.spoke.ocp.minor_version }}"
-
-- name: Display spoke lockdown parsing results
+- name: Display detected format
   ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "Spoke Lockdown Parsed Successfully"
-      - "=========================================="
-      - "OCP Version: {{ spoke_ocp_version }}"
-      - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
-      - "Operators Count: {{ spoke_lockdown_operators | length }}"
-      - "Cluster Name: {{ spoke_lockdown_data.spoke.metadata.cluster_name }}"
-      - "Capture Timestamp: {{ spoke_lockdown_data.spoke.metadata.capture_timestamp }}"
-      - "=========================================="
+    msg: "Detected spoke lockdown format: {{ spoke_lockdown_format }}"
+
+- name: Parse legacy format lockdown (build # 66 compatible)
+  when: spoke_lockdown_format == 'legacy'
+  block:
+    - name: Extract operators from legacy format
+      ansible.builtin.set_fact:
+        spoke_lockdown_operators: "{{ spoke_lockdown_data.operators }}"
+
+    - name: Extract OCP details from legacy format
+      ansible.builtin.set_fact:
+        spoke_ocp_pull_spec: "{{ spoke_lockdown_data.deployment.ocp_pull_spec }}"
+        spoke_ocp_version: "{{ spoke_lockdown_data.deployment.ocp_version }}"
+
+    - name: Extract architecture from OCP pull spec (legacy format)
+      ansible.builtin.set_fact:
+        spoke_architecture: "{{ spoke_ocp_pull_spec.split(':')[-1].split('-')[-1] }}"
+
+    - name: Display legacy format parsing results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Spoke Lockdown Parsed Successfully (Legacy Format)"
+          - "=========================================="
+          - "OCP Version: {{ spoke_ocp_version }}"
+          - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
+          - "Architecture: {{ spoke_architecture }}"
+          - "Operators Count: {{ spoke_lockdown_operators | length }}"
+          - "Hub Name: {{ spoke_lockdown_data.metadata.hub_name | default('N/A') }}"
+          - "Mirror Timestamp: {{ spoke_lockdown_data.metadata.mirror_timestamp | default('N/A') }}"
+          - "=========================================="
+
+- name: Parse new format lockdown (future compatibility)
+  when: spoke_lockdown_format == 'new'
+  block:
+    - name: Validate new format structure
+      ansible.builtin.include_tasks: ../common/validate-structure.yml
+      vars:
+        lockdown_data: "{{ spoke_lockdown_data }}"
+        lockdown_mode: spoke
+
+    - name: Extract operators from new format
+      ansible.builtin.set_fact:
+        spoke_lockdown_operators: "{{ spoke_lockdown_data.spoke.operators }}"
+
+    - name: Extract OCP details from new format
+      ansible.builtin.set_fact:
+        spoke_ocp_pull_spec: "{{ spoke_lockdown_data.spoke.ocp.pull_spec }}"
+        spoke_ocp_version: "{{ spoke_lockdown_data.spoke.ocp.major_version }}.{{ spoke_lockdown_data.spoke.ocp.minor_version }}"
+
+    - name: Extract architecture from OCP pull spec (new format)
+      ansible.builtin.set_fact:
+        spoke_architecture: "{{ spoke_ocp_pull_spec.split(':')[-1].split('-')[-1] }}"
+
+    - name: Display new format parsing results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Spoke Lockdown Parsed Successfully (New Format)"
+          - "=========================================="
+          - "OCP Version: {{ spoke_ocp_version }}"
+          - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
+          - "Architecture: {{ spoke_architecture }}"
+          - "Operators Count: {{ spoke_lockdown_operators | length }}"
+          - "Cluster Name: {{ spoke_lockdown_data.spoke.metadata.cluster_name }}"
+          - "Capture Timestamp: {{ spoke_lockdown_data.spoke.metadata.capture_timestamp }}"
+          - "=========================================="

@@ -1,9 +1,4 @@
 ---
-# Molecule configuration for lockdowns role (hub scenario)
-#
-# This test suite validates the hub lockdown parse logic without requiring a real cluster.
-# Tests run in Podman containers for isolation.
-
 dependency:
   name: galaxy
   options:
@@ -13,7 +8,7 @@ driver:
   name: podman
 
 platforms:
-  - name: lockdowns-hub-test
+  - name: lockdowns-spoke-retag-test
     image: quay.io/telcov10n-ci/eco-ci-cd:latest
     pre_build_image: true
     override_command: false
@@ -32,7 +27,7 @@ provisioner:
       callback_whitelist: profile_tasks, timer, yaml
   inventory:
     host_vars:
-      lockdowns-hub-test:
+      lockdowns-spoke-retag-test:
         ansible_connection: local
 
 verifier:

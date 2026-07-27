@@ -1,0 +1,3 @@
+# Molecule test fixtures with long bundle/fbc digest URLs (unavoidable in JSON)
+molecule/spoke/default/prepare.yml yaml[line-length]
+molecule/spoke-lockdown-uri-with-digests/default/prepare.yml yaml[line-length]

@@ -1,0 +1,283 @@
+---
+# Spoke lockdown: Extract operator metadata from oc-mirror production catalog output
+#
+# Called from ocp_operator_mirror role's mirror_operators_prod.yaml hook
+# when ocp_operator_mirror_generate_lockdown=true
+#
+# Required variables (passed from hook):
+#   - lockdown_oc_mirror_output: oc-mirror stdout containing image copy logs
+#   - lockdown_operators_list: List of operators from ocp_operator_mirror_operators_prod
+#   - lockdown_catalog_version: Catalog version (e.g., "4.22")
+#
+# Sets facts:
+#   - lockdown_metadata_operators: Dict of operators with bundle/fbc/channel metadata
+#
+# Approach:
+#   1. Parse oc-mirror stdout to extract bundle and catalog images with digests
+#   2. Match bundle images to operators by name
+#   3. Build lockdown_metadata_operators dict with bundle/FBC
+#
+# Note: oc-mirror in mirrorToMirror mode does NOT generate mapping.txt.
+# We extract SOURCE images (registry.redhat.io/...) from oc-mirror stdout.
+
+- name: Initialize lockdown metadata operators dict if not exists
+  when: lockdown_metadata_operators is not defined
+  ansible.builtin.set_fact:
+    lockdown_metadata_operators: {}
+
+- name: Initialize catalog and bundle tracking
+  ansible.builtin.set_fact:
+    _lockdown_primary_catalog_image: ""
+    _lockdown_mirrored_bundles: []
+
+- name: Parse oc-mirror output for images using Ansible filters
+  when: lockdown_oc_mirror_output is defined and lockdown_oc_mirror_output | length > 0
+  block:
+    - name: Extract all "Success copying" lines
+      ansible.builtin.set_fact:
+        _lockdown_oc_mirror_lines: "{{ lockdown_oc_mirror_output.split('\n') }}"
+
+    - name: Find catalog copy line
+      ansible.builtin.set_fact:
+        _lockdown_catalog_lines: >-
+          {{
+            _lockdown_oc_mirror_lines
+            | select('search', 'Success copying.*redhat-operator-index')
+            | list
+          }}
+
+    - name: Extract catalog tag from copy line
+      when: _lockdown_catalog_lines | length > 0
+      ansible.builtin.set_fact:
+        _lockdown_catalog_tag: >-
+          {{
+            _lockdown_catalog_lines[0]
+            | regex_replace('^.*docker://([^ ]+redhat-operator-index[^ ]+).*$', '\1')
+          }}
+
+    - name: DEBUG - Catalog tag extracted
+      ansible.builtin.debug:
+        msg: "Catalog tag: {{ _lockdown_catalog_tag | default('NOT FOUND') }}"
+
+    # Optimization: Reuse frozen FBC digest if available (saves ~4 minutes)
+    - name: Check if frozen FBC digest is available from input lockdown
+      when: ocp_operator_mirror_freeze_fbc_digest | default('') | length > 0
+      ansible.builtin.set_fact:
+        _lockdown_primary_catalog_image: "{{ ocp_operator_mirror_freeze_fbc_digest }}"
+        _lockdown_catalog_digest_reused: true
+
+    - name: DEBUG - FBC digest reuse status
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'REUSED frozen FBC digest from input lockdown (saves ~4 minutes)'
+            if (_lockdown_catalog_digest_reused | default(false))
+            else 'No frozen digest available, will resolve via skopeo'
+          }}
+
+    - name: Resolve catalog tag to digest using skopeo
+      when: >-
+        not (_lockdown_catalog_digest_reused | default(false))
+        and _lockdown_catalog_tag is defined
+        and _lockdown_catalog_tag | length > 0
+      ansible.builtin.shell:
+        cmd: >-
+          skopeo inspect
+          --authfile {{ ocp_operator_mirror_pull_secret_path }}
+          docker://{{ _lockdown_catalog_tag }}
+          --format '{{ '{{' }}.Digest{{ '}}' }}'
+      register: _lockdown_catalog_digest_result
+      failed_when: false
+      changed_when: false
+
+    - name: DEBUG - Skopeo catalog digest result
+      when: _lockdown_catalog_digest_result is not skipped
+      ansible.builtin.debug:
+        msg:
+          - "Skopeo RC: {{ _lockdown_catalog_digest_result.rc | default('skipped') }}"
+          - "Digest: {{ _lockdown_catalog_digest_result.stdout | default('') }}"
+          - "Error: {{ _lockdown_catalog_digest_result.stderr | default('') }}"
+
+    - name: Build catalog image with digest (from skopeo)
+      when: >-
+        not (_lockdown_catalog_digest_reused | default(false))
+        and _lockdown_catalog_digest_result is not skipped
+        and _lockdown_catalog_digest_result.rc == 0
+        and _lockdown_catalog_digest_result.stdout | length > 0
+      ansible.builtin.set_fact:
+        _lockdown_primary_catalog_image: >-
+          {{ _lockdown_catalog_tag | regex_replace('@.*', '') }}@{{ _lockdown_catalog_digest_result.stdout }}
+
+    - name: DEBUG - Catalog with digest
+      ansible.builtin.debug:
+        msg: "Catalog: {{ _lockdown_primary_catalog_image | default('NOT RESOLVED') }}"
+
+    - name: Find bundle copy lines
+      ansible.builtin.set_fact:
+        _lockdown_bundle_lines: >-
+          {{
+            _lockdown_oc_mirror_lines
+            | select('search', 'Success copying.*-operator-bundle@sha256:')
+            | list
+          }}
+
+    - name: Extract bundle images from copy lines
+      when: _lockdown_bundle_lines | length > 0
+      ansible.builtin.set_fact:
+        _lockdown_mirrored_bundles: >-
+          {{
+            _lockdown_bundle_lines
+            | map('regex_replace', '^.*docker://([^ ]+@sha256:[^ ]+).*$', '\1')
+            | list
+          }}
+
+    - name: DEBUG - Show extracted bundles
+      ansible.builtin.debug:
+        msg: "Extracted {{ _lockdown_mirrored_bundles | default([]) | length }} bundles"
+
+- name: Build lockdown metadata by matching bundles to operators
+  when: _lockdown_mirrored_bundles | length > 0
+  block:
+    - name: Match bundles to operators and build lockdown dict
+      loop: "{{ lockdown_operators_list }}"
+      loop_control:
+        loop_var: operator
+        label: "{{ operator.name }}"
+      vars:
+        # Known operator namespace mappings (for operators with empty nsname from v1 lockdown)
+        _lockdown_operator_namespace_map:
+          sriov-network-operator: "openshift-sriov-network-operator"
+          ptp-operator: "openshift-ptp"
+          performance-addon-operator: "openshift-performance-addon-operator"
+          kubernetes-nmstate-operator: "openshift-nmstate"
+          local-storage-operator: "openshift-local-storage"
+          cluster-logging: "openshift-logging"
+          elasticsearch-operator: "openshift-operators-redhat"
+          nfd: "openshift-nfd"
+          node-observability-operator: "node-observability-operator"
+
+        # Find matching bundle
+        _lockdown_matching_bundles: >-
+          {{
+            _lockdown_mirrored_bundles
+            | select('search', operator.name)
+            | select('search', 'bundle')
+            | list
+          }}
+
+        _lockdown_bundle_image: >-
+          {{
+            _lockdown_matching_bundles[0] if _lockdown_matching_bundles | length > 0 else ''
+          }}
+
+        # Use existing nsname if not empty, otherwise look up in map
+        _lockdown_resolved_nsname: >-
+          {{
+            operator.nsname
+            if (operator.nsname | default('') | length > 0)
+            else (_lockdown_operator_namespace_map[operator.name] | default(''))
+          }}
+      ansible.builtin.set_fact:
+        lockdown_metadata_operators: >-
+          {{
+            lockdown_metadata_operators | combine({
+              operator.name: {
+                'name': operator.name,
+                'catalog': operator.catalog,
+                'nsname': _lockdown_resolved_nsname,
+                'channel': operator.channel | default(''),
+                'default_channel': operator.default_channel | default(''),
+                'bundle': _lockdown_bundle_image,
+                'fbc': _lockdown_primary_catalog_image
+              }
+            })
+          }}
+
+    - name: DEBUG - Lockdown operators built
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Operators with bundles:
+            {{ lockdown_metadata_operators
+               | dict2items
+               | selectattr('value.bundle', 'ne', '')
+               | map(attribute='key')
+               | list }}
+          - >-
+            Operators without bundles:
+            {{ lockdown_metadata_operators
+               | dict2items
+               | selectattr('value.bundle', 'equalto', '')
+               | map(attribute='key')
+               | list }}
+          - "Total: {{ lockdown_metadata_operators | length }}"
+
+- name: Fallback - Build lockdown with catalog references only
+  when: (lockdown_metadata_operators | default({}) | length) < (lockdown_operators_list | length)
+  block:
+    - name: Build simplified lockdown with catalog references
+      loop: "{{ lockdown_operators_list }}"
+      loop_control:
+        loop_var: operator
+        label: "{{ operator.name }}"
+      when: operator.name not in (lockdown_metadata_operators | default({}) | list)
+      vars:
+        # Known operator namespace mappings (same as main block)
+        _lockdown_operator_namespace_map:
+          sriov-network-operator: "openshift-sriov-network-operator"
+          ptp-operator: "openshift-ptp"
+          performance-addon-operator: "openshift-performance-addon-operator"
+          kubernetes-nmstate-operator: "openshift-nmstate"
+          local-storage-operator: "openshift-local-storage"
+          cluster-logging: "openshift-logging"
+          elasticsearch-operator: "openshift-operators-redhat"
+          nfd: "openshift-nfd"
+          node-observability-operator: "node-observability-operator"
+
+        # Use existing nsname if not empty, otherwise look up in map
+        _lockdown_resolved_nsname: >-
+          {{
+            operator.nsname
+            if (operator.nsname | default('') | length > 0)
+            else (_lockdown_operator_namespace_map[operator.name] | default(''))
+          }}
+      ansible.builtin.set_fact:
+        lockdown_metadata_operators: >-
+          {{
+            lockdown_metadata_operators | combine({
+              operator.name: {
+                'name': operator.name,
+                'catalog': operator.catalog,
+                'nsname': _lockdown_resolved_nsname,
+                'channel': operator.channel | default(''),
+                'default_channel': operator.default_channel | default(''),
+                'bundle': '',
+                'fbc': _lockdown_primary_catalog_image
+              }
+            })
+          }}
+
+- name: Display lockdown metadata accumulation summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Lockdown Metadata (Production Catalogs)"
+      - "=========================================="
+      - "Total operators: {{ lockdown_operators_list | length }}"
+      - "Metadata captured: {{ lockdown_metadata_operators | length }}"
+      - "Catalog image: {{ _lockdown_primary_catalog_image | default('unknown') }}"
+      - "=========================================="
+      - "Operators: {{ lockdown_metadata_operators.keys() | list }}"
+      - "=========================================="
+
+- name: Warn if bundle digests missing
+  when: >-
+    lockdown_metadata_operators.values()
+    | selectattr('bundle', 'equalto', '')
+    | list
+    | length > 0
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: Some operators missing bundle digest information"
+      - "Operators without bundles may not match naming patterns in oc-mirror output"
+      - "Lockdown will use catalog FBC reference only for these operators"

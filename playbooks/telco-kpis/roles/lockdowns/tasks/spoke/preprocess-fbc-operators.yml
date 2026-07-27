@@ -1,0 +1,47 @@
+---
+# Spoke lockdown: Preprocess FBC operators for routing
+#
+# Called from ocp_operator_mirror role's mirror_operators_fbc.yaml hook
+# when operators with FBC digests exist
+#
+# Required variables (passed from hook):
+#   - lockdown_fbc_operators: List of FBC operators to split
+#
+# Sets facts:
+#   - fbc_operators_iib: Operators that need IIB extraction (have fbc_iib_repo)
+#   - fbc_operators_lockdown: Operators with full digests (from lockdown, skip extraction)
+#
+# Purpose:
+#   Split FBC operators into two types:
+#   1. IIB operators: Need catalog extraction (have fbc_iib_repo field)
+#   2. Lockdown operators: Have full bundle+FBC digests (from lockdown JSON)
+#
+# This allows lockdown operators to bypass expensive catalog extraction
+# and mirror directly using provided digests.
+
+- name: Split FBC operators into IIB and lockdown types
+  ansible.builtin.set_fact:
+    fbc_operators_iib: >-
+      {{ lockdown_fbc_operators
+         | selectattr('fbc_iib_repo', 'defined')
+         | list }}
+    fbc_operators_lockdown: >-
+      {{ lockdown_fbc_operators
+         | rejectattr('fbc_iib_repo', 'defined')
+         | selectattr('fbc', 'defined')
+         | selectattr('fbc', 'search', '@sha256:')
+         | list }}
+
+- name: Display FBC operator routing summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "FBC Operator Routing"
+      - "=========================================="
+      - "Total FBC operators: {{ lockdown_fbc_operators | length }}"
+      - "IIB operators (need extraction): {{ fbc_operators_iib | length }}"
+      - "Lockdown operators (have digests): {{ fbc_operators_lockdown | length }}"
+      - "=========================================="
+      - "IIB operators: {{ fbc_operators_iib | map(attribute='name') | list }}"
+      - "Lockdown operators: {{ fbc_operators_lockdown | map(attribute='name') | list }}"
+      - "=========================================="

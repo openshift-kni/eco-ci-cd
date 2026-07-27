@@ -1,0 +1,17 @@
+---
+# Molecule test runner - executes all test phases for spoke lockdown URI with digests
+#
+# This playbook can be run locally without molecule (using local ansible)
+# to reproduce and validate the empty lockdown_metadata_operators issue.
+#
+# Usage:
+#   ansible-playbook -i localhost, -c local molecule/spoke-lockdown-uri-with-digests/default/test.yml
+
+- name: Run spoke lockdown URI with digests test - prepare
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Run spoke lockdown URI with digests test - converge
+  ansible.builtin.import_playbook: converge.yml
+
+- name: Run spoke lockdown URI with digests test - verify
+  ansible.builtin.import_playbook: verify.yml

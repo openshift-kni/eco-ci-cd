@@ -1,0 +1,70 @@
+---
+# Spoke lockdown: Generate lockdown JSON from accumulated metadata
+#
+# Called from wrapper playbook when generate_spoke_lockdown=true
+#
+# Required variables:
+#   - lockdown_metadata_operators: Dict of operators with bundle/fbc metadata (from accumulate tasks)
+#   - lockdown_ocp_version: OCP version (e.g., "4.22")
+#   - lockdown_architecture: Architecture (e.g., "x86_64")
+#   - lockdown_hub_name: Hub cluster name
+#   - lockdown_build_number: Build number for metadata
+#   - lockdown_output_file: Path where to save generated lockdown JSON
+#
+# Generates:
+#   - Lockdown JSON file at lockdown_output_file path
+#   - Format matches build #66 (flat deployment structure with actual pull specs)
+
+- name: Validate generate parameters
+  ansible.builtin.assert:
+    that:
+      - lockdown_metadata_operators is defined
+      - lockdown_metadata_operators | length > 0
+      - lockdown_ocp_version is defined
+      - lockdown_architecture is defined
+      - lockdown_hub_name is defined
+      - lockdown_output_file is defined
+    fail_msg: "Required variables for lockdown generation are missing"
+    success_msg: "Generating spoke lockdown for {{ lockdown_metadata_operators | length }} operators"
+
+- name: Check if lockdown output directory exists
+  ansible.builtin.stat:
+    path: "{{ lockdown_output_file | dirname }}"
+  register: lockdown_dir_stat
+
+- name: Create lockdown output directory if it doesn't exist
+  when: not lockdown_dir_stat.stat.exists
+  ansible.builtin.file:
+    path: "{{ lockdown_output_file | dirname }}"
+    state: directory
+    mode: '0755'
+
+- name: Generate spoke lockdown JSON from template
+  ansible.builtin.template:
+    src: spoke/lockdown-generate.json.j2
+    dest: "{{ lockdown_output_file }}"
+    mode: '0644'
+
+- name: Validate generated lockdown JSON
+  ansible.builtin.command:
+    cmd: python3 -m json.tool "{{ lockdown_output_file }}"
+  register: _lockdown_json_validation
+  changed_when: false
+  failed_when: _lockdown_json_validation.rc != 0
+
+- name: Display lockdown generation result
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke Lockdown Generated Successfully"
+      - "=========================================="
+      - "OCP Version: {{ lockdown_ocp_version }}"
+      - "Architecture: {{ lockdown_architecture }}"
+      - "Hub Name: {{ lockdown_hub_name }}"
+      - "Operators: {{ lockdown_metadata_operators | length }}"
+      - "Output File: {{ lockdown_output_file }}"
+      - "=========================================="
+      - "Pull Specs (actual values, not omit placeholders):"
+      - "  OCP: quay.io/openshift-release-dev/ocp-release:{{ lockdown_ocp_version }}.0-{{ lockdown_architecture }}"
+      - "  ZTP: registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:v{{ lockdown_ocp_version }}"
+      - "=========================================="

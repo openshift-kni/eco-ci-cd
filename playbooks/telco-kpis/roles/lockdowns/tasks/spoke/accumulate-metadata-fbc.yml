@@ -1,0 +1,71 @@
+---
+# Spoke lockdown: Accumulate operator metadata from FBC mirroring
+#
+# Called from ocp_operator_mirror role's mirror_from.yaml
+# when ocp_operator_mirror_generate_lockdown=true
+#
+# Required variables (passed from hook):
+#   - lockdown_operator_data: Operator dict with name, catalog, channel, etc.
+#   - lockdown_bundle_digest: Bundle image with digest (e.g., "registry.redhat.io/.../bundle@sha256:...")
+#   - lockdown_fbc_digest: FBC digest (e.g., "sha256:abc123...")
+#
+# Sets facts:
+#   - lockdown_metadata_operators: Dict of operators with bundle/fbc/channel metadata
+
+- name: Initialize lockdown metadata operators dict (first call)
+  when: lockdown_metadata_operators is not defined
+  ansible.builtin.set_fact:
+    lockdown_metadata_operators: {}
+
+- name: Normalize FBC digest (remove leading @ and @sha256 artifacts)
+  ansible.builtin.set_fact:
+    _normalized_fbc_digest: >-
+      {{
+        lockdown_fbc_digest
+        | regex_replace('^@+', '')
+        | regex_replace('^sha256@', '')
+      }}
+
+- name: Detect if FBC digest is complete image reference (lockdown mode)
+  ansible.builtin.set_fact:
+    _fbc_is_complete_ref: "{{ _normalized_fbc_digest is search('registry\\.') }}"
+
+- name: Build FBC upstream image reference (IIB mode)
+  when: not (_fbc_is_complete_ref | bool)
+  ansible.builtin.set_fact:
+    _lockdown_fbc_upstream_ref: >-
+      {{
+        (lockdown_operator_data.ocp_operator_mirror_fbc_image_base |
+        default(ocp_operator_mirror_fbc_image_base))
+      }}@{{ _normalized_fbc_digest }}
+
+- name: Use FBC digest directly (lockdown mode)
+  when: _fbc_is_complete_ref | bool
+  ansible.builtin.set_fact:
+    _lockdown_fbc_upstream_ref: "{{ _normalized_fbc_digest }}"
+
+- name: Add operator metadata to lockdown dict
+  ansible.builtin.set_fact:
+    lockdown_metadata_operators: >-
+      {{
+        lockdown_metadata_operators | combine({
+          lockdown_operator_data.name: {
+            'name': lockdown_operator_data.name,
+            'catalog': lockdown_operator_data.catalog,
+            'nsname': lockdown_operator_data.nsname | default(''),
+            'channel': lockdown_operator_data.channel,
+            'default_channel': lockdown_operator_data.default_channel | default(''),
+            'bundle': lockdown_bundle_digest,
+            'fbc': _lockdown_fbc_upstream_ref
+          }
+        })
+      }}
+
+- name: Display accumulated lockdown metadata
+  ansible.builtin.debug:
+    msg:
+      - "Captured lockdown metadata for: {{ lockdown_operator_data.name }}"
+      - "  Bundle: {{ lockdown_bundle_digest }}"
+      - "  FBC: {{ _lockdown_fbc_upstream_ref }}"
+      - "  Channel: {{ lockdown_operator_data.channel }}"
+      - "Total operators captured: {{ lockdown_metadata_operators | length }}"

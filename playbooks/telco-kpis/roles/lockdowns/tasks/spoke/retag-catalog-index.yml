@@ -1,0 +1,51 @@
+---
+# Spoke lockdown: Re-tag oc-mirror catalog index with a static spoke tag
+#
+# After oc-mirror pushes the catalog index to the disconnected registry with
+# a digest-based tag (e.g., :sha256-af78a…), this task copies it to a static
+# tag (e.g., :v4.22-spoke) so ZTP configs can reference a predictable image.
+#
+# The -spoke suffix avoids colliding with the hub's :v<version> tag.
+#
+# Required variables:
+#   - lockdown_retag_source_image: digest-based image ref from oc-mirror CatalogSource
+#       (e.g., disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-af78a…)
+#   - lockdown_retag_target_image: static tag destination
+#       (e.g., disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.22-spoke)
+#   - lockdown_retag_authfile: path to registry auth file (default: /tmp/auth.json)
+
+- name: Validate retag variables
+  ansible.builtin.assert:
+    that:
+      - lockdown_retag_source_image is defined
+      - lockdown_retag_source_image | length > 0
+      - lockdown_retag_target_image is defined
+      - lockdown_retag_target_image | length > 0
+    fail_msg: "Missing required variables for catalog retag (lockdown_retag_source_image, lockdown_retag_target_image)"
+    success_msg: "Retagging catalog index for spoke ZTP"
+
+- name: Display retag operation
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Spoke Catalog Index Re-Tag"
+      - "=========================================="
+      - "Source (digest): {{ lockdown_retag_source_image }}"
+      - "Target (static): {{ lockdown_retag_target_image }}"
+      - "=========================================="
+
+- name: Copy catalog index to static spoke tag
+  ansible.builtin.command:
+    cmd: >-
+      skopeo copy --all
+      --authfile {{ lockdown_retag_authfile | default('/tmp/auth.json') }}
+      docker://{{ lockdown_retag_source_image }}
+      docker://{{ lockdown_retag_target_image }}
+  register: _lockdown_retag_result
+  changed_when: true
+
+- name: Display retag result
+  ansible.builtin.debug:
+    msg:
+      - "Catalog re-tag completed successfully"
+      - "{{ _lockdown_retag_result.stdout | default('') }}"

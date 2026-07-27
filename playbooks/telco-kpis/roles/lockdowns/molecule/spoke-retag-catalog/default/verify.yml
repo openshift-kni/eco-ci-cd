@@ -1,0 +1,115 @@
+---
+- name: Verify retag-catalog-index results
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read skopeo call log
+      ansible.builtin.slurp:
+        src: /tmp/molecule-retag/skopeo-calls.log
+      register: _skopeo_log
+
+    - name: Parse skopeo calls
+      ansible.builtin.set_fact:
+        skopeo_calls: "{{ (_skopeo_log.content | b64decode).strip().split('\n') }}"
+
+    - name: Display skopeo calls for debugging
+      ansible.builtin.debug:
+        msg:
+          - "Total skopeo calls: {{ skopeo_calls | length }}"
+          - "{{ skopeo_calls }}"
+
+    # Assertion 1: Correct number of skopeo calls (3 successful retags)
+    - name: "Assert: exactly 3 skopeo copy calls were made"
+      ansible.builtin.assert:
+        that:
+          - skopeo_calls | length == 3
+        fail_msg: "Expected 3 skopeo calls, got {{ skopeo_calls | length }}"
+        success_msg: "✓ Correct number of skopeo copy calls"
+
+    # Assertion 2: First call uses correct source digest image
+    - name: "Assert: call 1 source is digest-based redhat-operator-index"
+      ansible.builtin.assert:
+        that:
+          # yamllint disable-line rule:line-length
+          - "'docker://disconnected.registry.local:5000/operators/redhat/redhat-operator-index:sha256-af78a2837be4aeba837c6c6c7aaff67a34c018eb095fd8a662f7ed9fdccfa2e3' in skopeo_calls[0]"
+        fail_msg: "First call missing correct source image"
+        success_msg: "✓ Call 1 source image correct"
+
+    # Assertion 3: First call uses correct target spoke tag
+    - name: "Assert: call 1 target is v4.22-spoke"
+      ansible.builtin.assert:
+        that:
+          - "'docker://disconnected.registry.local:5000/operators/redhat/redhat-operator-index:v4.22-spoke' in skopeo_calls[0]"
+        fail_msg: "First call missing correct target image"
+        success_msg: "✓ Call 1 target image correct"
+
+    # Assertion 4: First call uses --all flag
+    - name: "Assert: call 1 uses --all flag for manifest list copy"
+      ansible.builtin.assert:
+        that:
+          - "'copy --all' in skopeo_calls[0]"
+        fail_msg: "First call missing --all flag"
+        success_msg: "✓ Call 1 uses --all flag"
+
+    # Assertion 5: First call uses custom authfile
+    - name: "Assert: call 1 uses custom authfile"
+      ansible.builtin.assert:
+        that:
+          - "'--authfile /tmp/molecule-retag/auth.json' in skopeo_calls[0]"
+        fail_msg: "First call missing custom authfile"
+        success_msg: "✓ Call 1 uses custom authfile"
+
+    # Assertion 6: Second call retags certified-operator-index
+    - name: "Assert: call 2 retags certified-operator-index"
+      ansible.builtin.assert:
+        that:
+          - "'certified-operator-index:sha256-1234567890abcdef' in skopeo_calls[1]"
+          - "'certified-operator-index:v4.22-spoke' in skopeo_calls[1]"
+        fail_msg: "Second call incorrect for certified-operator-index"
+        success_msg: "✓ Call 2 retags certified-operator-index correctly"
+
+    # Assertion 7: Third call uses default authfile (/tmp/auth.json)
+    - name: "Assert: call 3 uses default authfile fallback"
+      ansible.builtin.assert:
+        that:
+          - "'--authfile /tmp/auth.json' in skopeo_calls[2]"
+        fail_msg: "Third call should use default authfile /tmp/auth.json"
+        success_msg: "✓ Call 3 uses default authfile fallback"
+
+    # Assertion 8: Third call uses v4.18-spoke tag (different version)
+    - name: "Assert: call 3 uses v4.18-spoke target tag"
+      ansible.builtin.assert:
+        that:
+          - "'redhat-operator-index:v4.18-spoke' in skopeo_calls[2]"
+        fail_msg: "Third call should target v4.18-spoke"
+        success_msg: "✓ Call 3 targets v4.18-spoke"
+
+    # Assertion 9: Validation failed for empty source
+    - name: "Assert: validation rejected empty source image"
+      ansible.builtin.assert:
+        that:
+          - validation_failed | default(false) | bool
+        fail_msg: "Validation should have failed for empty source image"
+        success_msg: "✓ Validation correctly rejected empty source"
+
+    # Assertion 10: All calls use docker:// prefix
+    - name: "Assert: all calls use docker:// transport"
+      ansible.builtin.assert:
+        that:
+          - skopeo_calls | select('search', 'docker://') | list | length == skopeo_calls | length
+        fail_msg: "Not all calls use docker:// transport"
+        success_msg: "✓ All calls use docker:// transport"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Spoke Retag Catalog Index Tests: ALL PASSED"
+          - "=========================================="
+          - "✓ 10 assertions verified"
+          - "✓ Digest-based source → static spoke tag"
+          - "✓ Custom and default authfile paths"
+          - "✓ Multiple catalog types (redhat, certified)"
+          - "✓ Validation rejects empty source"
+          - "✓ --all flag for manifest list copy"
+          - "=========================================="

@@ -13,7 +13,7 @@
 #   - spoke_name: Spoke cluster name
 #   - hub_name: Hub cluster name
 #   - hypervisor: Hub hypervisor FQDN (from getClusterHypervisor() - retrieved from vault)
-#   - action: Action to perform (setup, remove, check-only, list-interconnections)
+#   - connectivity_action: Action to perform (setup, remove, check-only, list-interconnections)
 #   - update_dns: Update DNS configuration (true/false)
 #   - update_provisioning_cr: Update Provisioning CR (true/false)
 #   - dry_run: Dry run mode (true/false)
@@ -30,7 +30,7 @@
 #       "spoke_name=spree-01",
 #       "hub_name=kni-qe-70",
 #       "hypervisor=${hypervisor}",  // Value from vault, not hardcoded
-#       "action=setup",
+#       "connectivity_action=setup",
 #       "update_dns=true",
 #       "update_provisioning_cr=true",
 #       "dry_run=false",
@@ -42,7 +42,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    spoke_hub_connectivity_action: "{{ action | default('setup') }}"
+    spoke_hub_connectivity_action: "{{ connectivity_action | default('setup') }}"
     spoke_hub_connectivity_spoke_name: "{{ spoke_name }}"
     spoke_hub_connectivity_hub_name: "{{ hub_name }}"
     spoke_hub_connectivity_hypervisor: "{{ hypervisor }}"

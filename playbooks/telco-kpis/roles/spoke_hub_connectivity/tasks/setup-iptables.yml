@@ -109,60 +109,37 @@
   loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
   delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
 
-# Firewalld persistence (BMC traffic)
-- name: Add firewalld rich rules for BMC traffic
+# Firewalld persistence (all rules in one flock-serialized script)
+#
+# Uses firewall-cmd via shell + flock instead of ansible.posix.firewalld.
+# The firewalld module reads, modifies, and writes zone XML non-atomically.
+# When multiple Prow jobs run setup-spoke-hub-connectivity concurrently on
+# the same hypervisor, the second module invocation overwrites the first's
+# zone XML changes, silently dropping rich rules. flock(1) serializes all
+# firewalld operations through a kernel-level lock that is automatically
+# released on process exit or crash.
+- name: Create firewalld setup script on hypervisor
   when: not spoke_hub_connectivity_dry_run | bool
-  become: true
-  ansible.posix.firewalld:
-    rich_rule: >-
-      rule family='ipv4'
-      source address='{{ spoke_hub_connectivity_spoke_bmc_ip_range }}'
-      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
-      forward-port port='{{ item }}' protocol='tcp'
-      to-port='{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}'
-      to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
-    permanent: true
-    immediate: true
-    state: enabled
-  loop: "{{ spoke_hub_connectivity_bmc_ports }}"
-  register: firewalld_bmc_result
+  ansible.builtin.template:
+    src: setup-firewalld-rules.sh.j2
+    dest: "/tmp/setup-firewalld-{{ spoke_hub_connectivity_spoke_name }}-{{ spoke_hub_connectivity_hub_name }}.sh"
+    mode: '0755'
   delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
 
-# Firewalld persistence (Cluster traffic)
-- name: Add firewalld rich rules for cluster traffic
+- name: Execute firewalld setup with exclusive lock
   when: not spoke_hub_connectivity_dry_run | bool
   become: true
-  ansible.posix.firewalld:
-    rich_rule: >-
-      rule family='ipv4'
-      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
-      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
-      forward-port port='{{ item }}' protocol='tcp'
-      to-port='{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}'
-      to-addr='{{ spoke_hub_connectivity_hub_cluster_ip }}'
-    permanent: true
-    immediate: true
-    state: enabled
-  loop: "{{ spoke_hub_connectivity_cluster_ports }}"
-  register: firewalld_cluster_result
+  ansible.builtin.command: >-
+    bash /tmp/setup-firewalld-{{ spoke_hub_connectivity_spoke_name }}-{{ spoke_hub_connectivity_hub_name }}.sh
   delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
+  register: firewalld_result
+  changed_when: "'success' in firewalld_result.stdout"
 
-# Firewalld persistence (Registry traffic to bastion)
-- name: Add firewalld rich rules for registry traffic
+- name: Clean up firewalld setup script
   when: not spoke_hub_connectivity_dry_run | bool
-  become: true
-  ansible.posix.firewalld:
-    rich_rule: >-
-      rule family='ipv4'
-      source address='{{ spoke_hub_connectivity_spoke_cluster_ip_range }}'
-      destination address='{{ spoke_hub_connectivity_hv_corporate_ip }}/32'
-      forward-port port='{{ item }}' protocol='tcp'
-      to-port='{{ item }}' to-addr='{{ spoke_hub_connectivity_hub_bastion_ip }}'
-    permanent: true
-    immediate: true
-    state: enabled
-  loop: "{{ spoke_hub_connectivity_cluster_registry_ports }}"
-  register: firewalld_registry_result
+  ansible.builtin.file:
+    path: "/tmp/setup-firewalld-{{ spoke_hub_connectivity_spoke_name }}-{{ spoke_hub_connectivity_hub_name }}.sh"
+    state: absent
   delegate_to: "{{ spoke_hub_connectivity_hypervisor }}"
 
 - name: Display iptables setup summary

@@ -18,6 +18,10 @@ mirror_rc_registry_path: "ocp4/openshift"
 # disconnected registry credentials for oc adm release mirror).
 mirror_rc_pull_secret_path: ""
 
+# OCP version string (e.g. "4.22") used to gate sigstore .sig mirroring.
+# Sigstore mirroring is enabled for OCP >= 4.21.
+mirror_rc_ocp_version: ""
+
 # ConfigMap containing registries.conf used by the assisted-service.
 # Read to determine which mirror paths the assisted-service can resolve.
 mirror_rc_configmap_name: "mirror-registry-ca"

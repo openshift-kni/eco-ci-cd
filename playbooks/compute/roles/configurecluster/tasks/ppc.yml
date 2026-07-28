@@ -33,11 +33,18 @@
   when:
     - (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.19', '<')
 
+- name: Create private tempfile for pull secret
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .pull_secret
+  register: ppc_pull_secret_tmp
+
 - name: Save pull secret
   ansible.builtin.copy:
     content: "{{ pull_secret_string | b64decode }}"
-    dest: /tmp/pull_secret
-    mode: '0660'
+    dest: "{{ ppc_pull_secret_tmp.path }}"
+    mode: '0600'
+  no_log: true
 
 - name: Generate Performance Profile using PPC container
   containers.podman.podman_container:
@@ -46,7 +53,7 @@
     rm: true
     entrypoint: performance-profile-creator
     detach: false
-    authfile: /tmp/pull_secret
+    authfile: "{{ ppc_pull_secret_tmp.path }}"
     volumes:
       - "/tmp/must-gather:/must-gather:Z"
     command: >

@@ -142,6 +142,27 @@
           ansible.builtin.set_fact:
             ocp_release_image: "{{ resolved_release_image | default(_wrapper_extracted_image) }}"
 
+        - name: Extract OCP version from lockdown data
+          ansible.builtin.set_fact:
+            ocp_version: >-
+              {{
+                _wrapper_lockdown_data.deployment.ocp_version
+                if ('deployment' in _wrapper_lockdown_data and
+                    'ocp_version' in _wrapper_lockdown_data.deployment)
+                else (
+                  _wrapper_lockdown_data.spoke.ocp.major_version ~ '.' ~
+                  _wrapper_lockdown_data.spoke.ocp.minor_version
+                  if 'spoke' in _wrapper_lockdown_data
+                  else (
+                    (_wrapper_lockdown_data.hub.ocp.pull_spec.tag
+                     | regex_search(':(\d+\.\d+)', '\1'))[0]
+                    if (_wrapper_lockdown_data.hub.ocp.pull_spec is mapping)
+                    else (_wrapper_lockdown_data.hub.ocp.pull_spec
+                     | regex_search(':(\d+\.\d+)', '\1'))[0]
+                  )
+                )
+              }}
+
         - name: Display resolved release image from lockdown
           ansible.builtin.debug:
             msg:
@@ -152,6 +173,7 @@
               - "Lockdown format: {{ _wrapper_lockdown_format }}"
               - "Extracted:       {{ _wrapper_extracted_image }}"
               - "Resolved:        {{ ocp_release_image }}"
+              - "OCP version:     {{ ocp_version }}"
               - "=========================================="
 
         - name: Clean up lockdown temp file

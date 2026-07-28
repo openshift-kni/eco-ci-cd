@@ -37,6 +37,7 @@
   gather_facts: true
   roles:
     - role: container_image_mirror
+      no_log: "{{ ansible_verbosity < 3 }}"
       vars:
         container_image_mirror_operation: mirror
         container_image_mirror_images: "{{ images }}"

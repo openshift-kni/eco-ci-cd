@@ -73,12 +73,12 @@
     bmc_address: "{{ hostvars[master_node].bmc_address | default('') }}"
     bmc_user: "{{ hostvars[master_node].bmc_user | default('') }}"
     bmc_pass: "{{ hostvars[master_node].bmc_password | default('') }}"
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
     bmc_ip: "{{ bmc_address | urlsplit('hostname') }}"
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Verify BMC credentials are configured
   ansible.builtin.fail:
@@ -96,7 +96,7 @@
     timeout: 30
     status_code: 200
   register: redfish_systems
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract system ID from Redfish response
   ansible.builtin.set_fact:
@@ -113,7 +113,7 @@
     timeout: 30
     status_code: 200
   register: redfish_bios
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract current BIOS attributes
   ansible.builtin.set_fact:
@@ -210,7 +210,7 @@
         timeout: 30
         status_code: [200, 202, 204]
       register: bios_patch_result
-      no_log: true
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Record fix application in report
       ansible.builtin.set_fact:
@@ -244,7 +244,7 @@
         timeout: 30
         status_code: [200, 202, 204]
       register: reboot_result
-      no_log: true
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Record reboot trigger in report
       ansible.builtin.set_fact:

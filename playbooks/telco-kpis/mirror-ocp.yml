@@ -39,12 +39,14 @@
             namespace: openshift-config
             kubeconfig: "{{ kubeconfig }}"
           register: _wrapper_hub_pull_secret
+          no_log: "{{ ansible_verbosity < 3 }}"
 
         - name: Write pull secret to temp file
           ansible.builtin.copy:
             content: "{{ _wrapper_hub_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode }}"
             dest: /tmp/resolve-digest-pull-secret.json
             mode: '0600'
+          no_log: "{{ ansible_verbosity < 3 }}"
 
         - name: Resolve release image to digest
           ansible.builtin.include_role:
@@ -127,12 +129,14 @@
                 namespace: openshift-config
                 kubeconfig: "{{ kubeconfig }}"
               register: _wrapper_hub_pull_secret
+              no_log: "{{ ansible_verbosity < 3 }}"
 
             - name: Write pull secret to temp file
               ansible.builtin.copy:
                 content: "{{ _wrapper_hub_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode }}"
                 dest: /tmp/resolve-digest-pull-secret.json
                 mode: '0600'
+              no_log: "{{ ansible_verbosity < 3 }}"
 
             - name: Resolve extracted image to digest
               ansible.builtin.include_role:
@@ -204,6 +208,7 @@
         namespace: openshift-config
         kubeconfig: "{{ kubeconfig }}"
       register: _mirror_hub_pull_secret
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Write pull secret to temp file
       ansible.builtin.copy:
@@ -212,6 +217,7 @@
              | b64decode }}
         dest: /tmp/mirror-rc-pull-secret.json
         mode: '0600'
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Check and mirror release image if needed
       ansible.builtin.include_role:

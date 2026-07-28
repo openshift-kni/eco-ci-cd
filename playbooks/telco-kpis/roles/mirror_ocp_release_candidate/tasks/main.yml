@@ -146,6 +146,7 @@
   ansible.builtin.slurp:
     src: "{{ mirror_rc_pull_secret_path }}"
   register: _mirror_rc_pull_secret_raw
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract registry credentials from pull secret
   ansible.builtin.set_fact:
@@ -155,6 +156,7 @@
         .auths[mirror_rc_registry_url ~ ':' ~ mirror_rc_registry_port]
         .auth | default('')
       }}
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Check if release image digest exists in disconnected registry
   ansible.builtin.uri:
@@ -171,6 +173,7 @@
     validate_certs: false
     status_code: [200, 404]
   register: _mirror_rc_manifest_check
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Release image already present in disconnected registry
   ansible.builtin.debug:
@@ -217,6 +220,7 @@
             application/vnd.docker.distribution.manifest.list.v2+json
         validate_certs: false
         status_code: [200]
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Confirm mirror succeeded
       ansible.builtin.debug:

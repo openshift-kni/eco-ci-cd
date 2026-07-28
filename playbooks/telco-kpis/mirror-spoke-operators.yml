@@ -199,6 +199,7 @@
         ocp_operator_mirror_freeze_fbc_digest: "{{ _lockdown_production_catalog_digest | default('') }}"
         # Lockdown flag triggers hooks that call lockdowns role accumulate tasks
         # (already set at play level based on ocp_operator_mirror_generate_lockdown)
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Generate lockdown JSON from accumulated metadata
       when: ocp_operator_mirror_generate_lockdown | bool

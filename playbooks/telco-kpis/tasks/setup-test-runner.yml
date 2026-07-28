@@ -73,7 +73,7 @@
     dest: "{{ build_dir.path }}/auth.json"
     mode: '0600'
   when: not image_exists
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Copy registry certificates to build directory
   ansible.builtin.copy:

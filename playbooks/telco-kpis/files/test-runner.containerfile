@@ -44,14 +44,19 @@ RUN ARCH=$(uname -m) && \
 # Preinstall kube-compare plugin binary from official release artifacts.
 # This avoids runtime/compile dependency on newer Go toolchains.
 ARG KUBE_COMPARE_VERSION=v0.12.0
+# sha256 of kube-compare_linux_{amd64,arm64}.tar.gz for KUBE_COMPARE_VERSION above — bump together
+ARG KUBE_COMPARE_SHA256_amd64=32966e0d0b827f80b565df50caf57aca1e207ab1a877f5ec2339b215bc5fb2d0
+ARG KUBE_COMPARE_SHA256_arm64=812f77226ea5a6bf66b144fd9072bbd601c5e756de9fef43a7ed1e5a33777cbe
 RUN ARCH=$(uname -m) && \
     case "$ARCH" in \
       x86_64)   KC_ARCH=amd64 ;; \
       aarch64)  KC_ARCH=arm64 ;; \
       *) echo "Unsupported architecture for kube-compare: $ARCH" && exit 1 ;; \
     esac && \
-    curl -fsSL "https://github.com/openshift/kube-compare/releases/download/${KUBE_COMPARE_VERSION}/kube-compare_linux_${KC_ARCH}.tar.gz" \
-      | tar -C /usr/local/bin -xzf - kubectl-cluster_compare && \
+    eval KC_SHA256=\$KUBE_COMPARE_SHA256_${KC_ARCH} && \
+    curl -fsSL -o /tmp/kc.tgz "https://github.com/openshift/kube-compare/releases/download/${KUBE_COMPARE_VERSION}/kube-compare_linux_${KC_ARCH}.tar.gz" && \
+    echo "${KC_SHA256}  /tmp/kc.tgz" | sha256sum -c - && \
+    tar -C /usr/local/bin -xzf /tmp/kc.tgz kubectl-cluster_compare && rm -f /tmp/kc.tgz && \
     chmod 0755 /usr/local/bin/kubectl-cluster_compare
 
 # Copy registry authentication and certificates into image

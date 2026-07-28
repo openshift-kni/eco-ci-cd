@@ -42,6 +42,10 @@
 #   bmc_user: 'user'                            # Username for BMC authentication
 #   ssh_public_key: 'public_ssh_key'            # Public SSH key for authentication after bare-metal installation
 #   system_rpm_link: http://example.rpm         # URL to the RPM package used for system activation
+#   system_rpm_sha256: 'deadbeef...'            # sha256 of the artifact at system_rpm_link
+#   ca_update_link: https://example/ca.crt      # URL to the CA certificate to trust
+#   ca_update_sha256: 'deadbeef...'             # sha256 of the artifact at ca_update_link
+#   oc_mirror_sha256: 'deadbeef...'             # sha256 of the resolved oc-mirror.rhel*.tar.gz
 
 # hypervisor:
 #   ansible_host: 10.1.1.1                      # IP address or hostname of the hypervisor
@@ -62,6 +66,7 @@
 #   vm_external_interface: eno0         # External network interface for the VM
 #   vm_ram: "16384"                     # Amount of RAM allocated to the VM (in megabytes)
 #   golang_pkg: go1.24.2.linux-amd64.tar.gz     # golang package version
+#   golang_pkg_sha256: 'deadbeef...'            # sha256 of https://go.dev/dl/{{ golang_pkg }}
 #   brew_repo: https://download.repo/brew.repo  # link to brew repo
 
 # Roles/Tasks Overview:
@@ -255,6 +260,7 @@
       ansible.builtin.get_url:
         url: "{{ system_rpm_link }}"
         dest: "{{ system_rpm_path }}"
+        checksum: "sha256:{{ system_rpm_sha256 }}"
         force: false
         mode: "0640"
 
@@ -262,7 +268,7 @@
       ansible.builtin.dnf:
         name: "{{ system_rpm_path }}"
         state: present
-        disable_gpg_check: true
+        disable_gpg_check: false
 
     - name: Activate OS
       ansible.builtin.command:
@@ -372,6 +378,7 @@
           ansible.builtin.get_url:
             url: "{{ ca_update_link }}"
             dest: /etc/pki/ca-trust/source/anchors/certificate.crt
+            checksum: "sha256:{{ ca_update_sha256 }}"
             mode: '0644'
 
         - name: Update certificate
@@ -407,6 +414,7 @@
       ansible.builtin.get_url:
         url: "https://go.dev/dl/{{ golang_pkg }}"
         dest: /tmp/
+        checksum: "sha256:{{ golang_pkg_sha256 }}"
         mode: '0640'
 
     - name: Ensure destination GO directory exists
@@ -435,7 +443,7 @@
       become: true
       ansible.builtin.copy:
         content: "export REGISTRY_AUTH_FILE=/etc/containers/auth.json"
-        dest: /etc/profile.d/podman-auth-var.sh
+        dest: /etc/p1rofile.d/podman-auth-var.sh
         mode: "0755"
 
     # TODO: Uncomment once rehdatci bump completed
@@ -474,6 +482,7 @@
       ansible.builtin.get_url:
         url: "{{ _oc_mirror_url }}"
         dest: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+        checksum: "sha256:{{ oc_mirror_sha256 }}"
         mode: '0644'
 
     - name: Extract oc-mirror archive

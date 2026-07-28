@@ -38,6 +38,9 @@
 #   bmc_user: 'user'                                      # Username for BMC authentication
 #   ssh_public_key: 'public_ssh_key'                      # Public SSH key for authentication after bare-metal installation
 #   system_rpm_link: http://example.rpm                   # URL to the RPM package used for system activation
+#   system_rpm_sha256: 'deadbeef...'                       # sha256 of the artifact at system_rpm_link
+#   ca_update_link: https://example/ca.crt                 # URL to the CA certificate to trust
+#   ca_update_sha256: 'deadbeef...'                        # sha256 of the artifact at ca_update_link
 
 # hypervisor:
 #   ansible_host: 10.1.1.1                                # IP address or hostname of the hypervisor
@@ -161,6 +164,7 @@
       ansible.builtin.get_url:
         url: "{{ system_rpm_link }}"
         dest: "{{ system_rpm_path }}"
+        checksum: "sha256:{{ system_rpm_sha256 }}"
         force: false
         mode: "0640"
 
@@ -168,7 +172,7 @@
       ansible.builtin.dnf:
         name: "{{ system_rpm_path }}"
         state: present
-        disable_gpg_check: true
+        disable_gpg_check: false
 
     - name: Activate OS
       ansible.builtin.command:
@@ -364,6 +368,7 @@
           ansible.builtin.get_url:
             url: "{{ ca_update_link }}"
             dest: /etc/pki/ca-trust/source/anchors/certificate.crt
+            checksum: "sha256:{{ ca_update_sha256 }}"
             mode: '0644'
 
         - name: Update certificate

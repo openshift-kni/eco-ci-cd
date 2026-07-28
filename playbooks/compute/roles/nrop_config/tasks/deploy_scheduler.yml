@@ -29,6 +29,20 @@
   ansible.builtin.debug:
     msg: "Target pool: {{ nrop_target_pool }}"
 
+- name: Disable scheduler validation
+  when: custom_scheduler is defined
+  kubernetes.core.k8s_json_patch:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: numaresources-operator
+    namespace: openshift-numaresources
+    patch:
+      - op: add
+        path: /spec/config/env
+        value:
+          - name: SCHEDULER_IMAGE_VALIDATION
+            value: "false"
+
 - name: Set scheduler
   when: custom_scheduler is not defined
   block:
@@ -51,9 +65,22 @@
       register: scheduler_image_sha
       changed_when: false
 
-    - name: Set image name
-      ansible.builtin.set_fact:
-        scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
+    - name: Patch Subscription with image digests
+      kubernetes.core.k8s_json_patch:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: numaresources-operator
+        namespace: openshift-numaresources
+        patch:
+          - op: add
+            path: /spec/config/env
+            value:
+              - name: SCHEDULER_IMAGE_DIGESTS
+                value: "{{ scheduler_image_sha.stdout.split('@')[1] }}"
+
+- name: Set image name
+  ansible.builtin.set_fact:
+    scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
 
 - name: Overwrite scheduler image uri
   ansible.builtin.set_fact:

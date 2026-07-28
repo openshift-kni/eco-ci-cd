@@ -68,6 +68,10 @@
 
 - name: Mirror FBC index image to internal registry (if missing)
   changed_when: true
+  register: _mirror_fbc_result
+  retries: 5
+  delay: 60
+  until: _mirror_fbc_result is success
   ansible.builtin.command: >-
     skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
     "docker://{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}:{{ fbc_tag }}"
@@ -86,6 +90,9 @@
         --authfile {{ ocp_operator_mirror_pull_secret_path }}
         docker://{{ operator.ocp_operator_mirror_fbc_image_base }}:{{ fbc_tag }}
       register: _fbc_digest_result
+      retries: 5
+      delay: 60
+      until: _fbc_digest_result is success
       changed_when: false
 
     - name: Mirror sigstore .sig artifact to disconnected registry

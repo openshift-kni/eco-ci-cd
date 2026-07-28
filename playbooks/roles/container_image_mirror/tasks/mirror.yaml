@@ -56,6 +56,9 @@
     label: "{{ image_item.source }} -> {{ container_image_mirror_registry_namespace }}{{ image_item.dest }}"
   changed_when: true
   register: _mirror_result
+  retries: 5
+  delay: 60
+  until: _mirror_result.rc == 0
   failed_when: false
   ignore_errors: true
 

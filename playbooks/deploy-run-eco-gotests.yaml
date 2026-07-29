@@ -81,6 +81,27 @@
           - features is defined
           - labels is defined
 
+    - name: Approve pending kubelet-serving CSRs until stable
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          pending=$(oc --kubeconfig {{ kubeconfig }} get csr -o json \
+            | jq -r '.items[]
+                | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+                | select((.status.conditions // []) | length == 0)
+                | .metadata.name')
+          if [ -z "$pending" ]; then
+            echo "no_pending"
+            exit 0
+          fi
+          echo "$pending" | xargs oc --kubeconfig {{ kubeconfig }} adm certificate approve
+          echo "approved"
+      register: csr_result
+      until: csr_result.stdout_lines | last == "no_pending"
+      retries: 5
+      delay: 15
+      changed_when: '"approved" in csr_result.stdout'
+
     - name: Ensure test directory does not exist
       ansible.builtin.file:
         path: "{{ eco_gotest_dir }}"

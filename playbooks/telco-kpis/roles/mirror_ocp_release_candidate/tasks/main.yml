@@ -233,61 +233,117 @@
 # images. The .sig tags must exist alongside each mirrored image in the
 # disconnected registry, otherwise image pulls fail with:
 #   "A signature was required, but no signature exists"
+#
+# This runs independently of the image-mirror step above: the image may have
+# been mirrored by a previous run that did not copy .sig tags (e.g. the mirror
+# step found the digest already present and skipped), so we check for the .sig
+# tag rather than relying on the mirror status.
 - name: Mirror sigstore .sig tags for release images (OCP 4.21+)
   when:
-    - _mirror_rc_manifest_check.status == 404
     - (mirror_rc_ocp_version | default('0.0', true)).split('.')[1] | int >= 21
   block:
-    - name: Mirror sigstore .sig for release image
+    - name: Check if release image .sig tag exists in disconnected registry
       vars:
-        _sig_digest: "{{ _mirror_rc_digest | trim | replace(':', '-') }}"
-      ansible.builtin.command: >-
-        oc image mirror --insecure=true
-        -a {{ mirror_rc_pull_secret_path }}
-        "{{ _mirror_rc_image_repo | trim }}:{{ _sig_digest }}.sig"
-        "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}:{{ _sig_digest }}.sig"
-      register: _mirror_rc_sig_release_result
-      failed_when: false
-      changed_when: _mirror_rc_sig_release_result.rc == 0
+        _sig_tag: "{{ _mirror_rc_digest | trim | replace(':', '-') }}.sig"
+      ansible.builtin.uri:
+        url: >-
+          https://{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port
+          }}/v2/{{ _mirror_rc_mirror_repo | trim }}/manifests/{{ _sig_tag }}
+        method: HEAD
+        headers:
+          Authorization: "Basic {{ _mirror_rc_registry_auth | trim }}"
+          Accept: >-
+            application/vnd.oci.image.manifest.v1+json,
+            application/vnd.oci.image.index.v1+json,
+            application/vnd.docker.distribution.manifest.v2+json,
+            application/vnd.docker.distribution.manifest.list.v2+json
+        validate_certs: false
+        status_code: [200, 404]
+      register: _mirror_rc_sig_check
+      no_log: "{{ ansible_verbosity < 3 }}"
 
-    - name: Display release image .sig mirror result
+    - name: Sigstore .sig tags already present
+      when: _mirror_rc_sig_check.status == 200
       ansible.builtin.debug:
-        msg: >-
-          Release .sig mirror {{ 'succeeded' if _mirror_rc_sig_release_result.rc == 0
-          else 'skipped (rc=' ~ _mirror_rc_sig_release_result.rc ~ ')' }}
+        msg: "Release .sig tag already exists in disconnected registry — skipping sigstore mirror."
 
-    - name: Extract art-dev image digests from mirror output
-      ansible.builtin.set_fact:
-        _mirror_rc_art_dev_digests: >-
-          {{ _mirror_rc_result.stdout
-             | regex_findall('(sha256:[a-f0-9]{64})\s')
-             | unique }}
+    - name: Mirror missing sigstore .sig tags
+      when: _mirror_rc_sig_check.status == 404
+      block:
+        - name: Mirror sigstore .sig for release image
+          vars:
+            _sig_digest: "{{ _mirror_rc_digest | trim | replace(':', '-') }}"
+          ansible.builtin.command: >-
+            oc image mirror --insecure=true
+            -a {{ mirror_rc_pull_secret_path }}
+            "{{ _mirror_rc_image_repo | trim }}:{{ _sig_digest }}.sig"
+            "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}:{{ _sig_digest }}.sig"
+          register: _mirror_rc_sig_release_result
+          failed_when: false
+          changed_when: _mirror_rc_sig_release_result.rc == 0
 
-    - name: Display art-dev digest count
-      ansible.builtin.debug:
-        msg: "Found {{ _mirror_rc_art_dev_digests | length }} unique art-dev image digests for .sig mirroring"
+        - name: Display release image .sig mirror result
+          ansible.builtin.debug:
+            msg: >-
+              Release .sig mirror {{ 'succeeded' if _mirror_rc_sig_release_result.rc == 0
+              else 'skipped (rc=' ~ _mirror_rc_sig_release_result.rc ~ ')' }}
 
-    - name: Mirror sigstore .sig tags for art-dev images
-      vars:
-        _sig_tag: "{{ item | replace(':', '-') }}.sig"
-      ansible.builtin.command: >-
-        oc image mirror --insecure=true
-        -a {{ mirror_rc_pull_secret_path }}
-        "quay.io/openshift-release-dev/ocp-v4.0-art-dev:{{ _sig_tag }}"
-        "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}:{{ _sig_tag }}"
-      loop: "{{ _mirror_rc_art_dev_digests }}"
-      loop_control:
-        label: "{{ item[:16] }}..."
-      register: _mirror_rc_sig_artdev_results
-      failed_when: false
-      changed_when: false
+        - name: Get art-dev image digests from mirror output (fresh mirror)
+          when: _mirror_rc_result is defined and _mirror_rc_result.stdout is defined
+          ansible.builtin.set_fact:
+            _mirror_rc_art_dev_digests: >-
+              {{ _mirror_rc_result.stdout
+                 | regex_findall('(sha256:[a-f0-9]{64})\s')
+                 | unique }}
 
-    - name: Summarize art-dev .sig mirroring results
-      vars:
-        _succeeded: "{{ _mirror_rc_sig_artdev_results.results | selectattr('rc', 'equalto', 0) | list | length }}"
-        _failed: "{{ _mirror_rc_sig_artdev_results.results | rejectattr('rc', 'equalto', 0) | list | length }}"
-      ansible.builtin.debug:
-        msg: "Art-dev .sig mirroring: {{ _succeeded }}/{{ _mirror_rc_art_dev_digests | length }} succeeded, {{ _failed }} skipped"
+        - name: Get art-dev image digests via release info (existing mirror)
+          when: _mirror_rc_result is not defined or _mirror_rc_result.stdout is not defined
+          block:
+            - name: Query release image for art-dev digests
+              ansible.builtin.command: >-
+                oc adm release info
+                {{ mirror_rc_release_image }}
+                -a {{ mirror_rc_pull_secret_path }}
+                -o json
+              register: _mirror_rc_release_info
+              changed_when: false
+
+            - name: Extract art-dev digests from release info
+              ansible.builtin.set_fact:
+                _mirror_rc_art_dev_digests: >-
+                  {{ (_mirror_rc_release_info.stdout | from_json).references.spec.tags
+                     | map(attribute='from.name')
+                     | select('search', '@sha256:')
+                     | map('regex_search', 'sha256:[a-f0-9]{64}')
+                     | select('string')
+                     | unique
+                     | list }}
+
+        - name: Display art-dev digest count
+          ansible.builtin.debug:
+            msg: "Found {{ _mirror_rc_art_dev_digests | length }} unique art-dev image digests for .sig mirroring"
+
+        - name: Mirror sigstore .sig tags for art-dev images
+          vars:
+            _sig_tag: "{{ item | replace(':', '-') }}.sig"
+          ansible.builtin.command: >-
+            oc image mirror --insecure=true
+            -a {{ mirror_rc_pull_secret_path }}
+            "quay.io/openshift-release-dev/ocp-v4.0-art-dev:{{ _sig_tag }}"
+            "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}:{{ _sig_tag }}"
+          loop: "{{ _mirror_rc_art_dev_digests }}"
+          loop_control:
+            label: "{{ item[:16] }}..."
+          register: _mirror_rc_sig_artdev_results
+          failed_when: false
+          changed_when: false
+
+        - name: Summarize art-dev .sig mirroring results
+          vars:
+            _succeeded: "{{ _mirror_rc_sig_artdev_results.results | selectattr('rc', 'equalto', 0) | list | length }}"
+            _failed: "{{ _mirror_rc_sig_artdev_results.results | rejectattr('rc', 'equalto', 0) | list | length }}"
+          ansible.builtin.debug:
+            msg: "Art-dev .sig mirroring: {{ _succeeded }}/{{ _mirror_rc_art_dev_digests | length }} succeeded, {{ _failed }} skipped"
 
 - name: Set output fact
   ansible.builtin.set_fact:

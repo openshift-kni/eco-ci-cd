@@ -1,0 +1,103 @@
+---
+# Extract OCP version from lockdown JSON
+#
+# Downloads a lockdown JSON (hub or spoke format), auto-detects the format,
+# extracts the OCP version in X.Y format, and writes it to a local file.
+#
+# Required variables:
+#   - lockdown_uri: URL to lockdown JSON (hub or spoke)
+#
+# Optional variables:
+#   - ocp_version_output_file: Local path to write the version (default: /tmp/ocp_version)
+#
+# Supported formats:
+#   - Hub:          hub.ocp.major_version + hub.ocp.minor_version
+#   - Spoke legacy: deployment.ocp_version
+#   - Spoke new:    spoke.ocp.major_version + spoke.ocp.minor_version
+#
+# The output file is written on the controller (delegate_to: localhost) so
+# Prow steps can pass ${SHARED_DIR}/ocp_version_from_<tail> directly.
+
+- name: Extract OCP version from lockdown
+  hosts: bastion
+  gather_facts: false
+  vars:
+    ocp_version_output_file: /tmp/ocp_version
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - lockdown_uri is defined
+          - lockdown_uri | length > 0
+        fail_msg: "lockdown_uri is required"
+
+    - name: Download lockdown JSON
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: common/download-lockdown.yml
+      vars:
+        lockdown_download_path: /tmp/ocp-version-lockdown.json
+
+    - name: Read downloaded lockdown JSON
+      ansible.builtin.slurp:
+        src: /tmp/ocp-version-lockdown.json
+      register: _ocp_ver_lockdown_file
+
+    - name: Parse lockdown JSON
+      ansible.builtin.set_fact:
+        _ocp_ver_lockdown_data: "{{ _ocp_ver_lockdown_file.content | b64decode | from_json }}"
+
+    - name: Detect lockdown type
+      ansible.builtin.set_fact:
+        _ocp_ver_lockdown_type: "{{ 'hub' if 'hub' in _ocp_ver_lockdown_data else 'spoke' }}"
+
+    - name: Display detected lockdown type
+      ansible.builtin.debug:
+        msg: "Lockdown type: {{ _ocp_ver_lockdown_type }} (from {{ lockdown_uri }})"
+
+    - name: Parse hub lockdown
+      when: _ocp_ver_lockdown_type == 'hub'
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: hub
+        lockdown_action: parse
+        hub_lockdown_uri: "{{ lockdown_uri }}"
+
+    - name: Parse spoke lockdown
+      when: _ocp_ver_lockdown_type == 'spoke'
+      ansible.builtin.include_role:
+        name: lockdowns
+      vars:
+        lockdown_mode: spoke
+        lockdown_action: parse
+        spoke_lockdown_uri: "{{ lockdown_uri }}"
+
+    - name: Normalize extracted OCP version
+      ansible.builtin.set_fact:
+        _extracted_ocp_version: >-
+          {{ hub_ocp_version if _ocp_ver_lockdown_type == 'hub' else spoke_ocp_version }}
+
+    - name: Display extracted OCP version
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "OCP Version from Lockdown"
+          - "=========================================="
+          - "Lockdown URI:  {{ lockdown_uri }}"
+          - "Lockdown type: {{ _ocp_ver_lockdown_type }}"
+          - "OCP version:   {{ _extracted_ocp_version }}"
+          - "Output file:   {{ ocp_version_output_file }}"
+          - "=========================================="
+
+    - name: Write OCP version to output file
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ _extracted_ocp_version }}"
+        dest: "{{ ocp_version_output_file }}"
+        mode: '0644'
+
+    - name: Clean up lockdown temp file
+      ansible.builtin.file:
+        path: /tmp/ocp-version-lockdown.json
+        state: absent

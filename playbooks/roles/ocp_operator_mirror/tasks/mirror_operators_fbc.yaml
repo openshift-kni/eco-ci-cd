@@ -13,8 +13,8 @@
     loop_var: image
     label: "{{ image.src }} -> {{ image.dst }}"
   register: mirror_cmd
-  retries: 5
-  delay: 60
+  retries: 3
+  delay: 3
   until: mirror_cmd.rc == 0
   changed_when: true
 

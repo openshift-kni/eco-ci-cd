@@ -48,10 +48,6 @@
     docker://{{ operator_registry_image }}
     docker://{{ operator_registry_mirror_image }}
   when: opreg_check.rc != 0
-  register: _opreg_copy_result
-  retries: 5
-  delay: 60
-  until: _opreg_copy_result is success
   changed_when: true
 
 - name: Mirror sigstore signature for operator-registry image (OCP 4.21+ workaround)
@@ -67,9 +63,6 @@
         --authfile {{ ocp_operator_mirror_pull_secret_path }}
         docker://{{ operator_registry_image }}
       register: _opreg_digest_result
-      retries: 5
-      delay: 60
-      until: _opreg_digest_result is success
       changed_when: false
 
     - name: Mirror sigstore .sig artifact for operator-registry to disconnected registry

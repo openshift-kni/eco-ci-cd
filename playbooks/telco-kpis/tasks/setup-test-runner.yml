@@ -43,23 +43,6 @@
     mode: '0644'
   when: not image_exists
 
-- name: Clone telco-kpis-test-local-scripts repo for report generation script
-  ansible.builtin.git:
-    repo: 'https://gitlab.cee.redhat.com/ccardeno/telco-kpis-test-local-scripts.git'
-    dest: "{{ build_dir.path }}/telco-kpis-test-local-scripts"
-    version: main
-    update: true
-    force: true
-  when: not image_exists
-
-- name: Copy analyze-podman-test-results.py to build directory
-  ansible.builtin.copy:
-    src: "{{ build_dir.path }}/telco-kpis-test-local-scripts/scripts/python/analyze-podman-test-results/analyze-podman-test-results.py"
-    dest: "{{ build_dir.path }}/analyze-podman-test-results.py"
-    mode: '0755'
-    remote_src: true
-  when: not image_exists
-
 - name: Create auth.json with disconnected registry credentials for image build
   ansible.builtin.copy:
     content: |

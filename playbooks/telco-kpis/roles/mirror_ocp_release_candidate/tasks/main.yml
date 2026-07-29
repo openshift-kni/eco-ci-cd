@@ -236,7 +236,7 @@
 - name: Mirror sigstore .sig tags for release images (OCP 4.21+)
   when:
     - _mirror_rc_manifest_check.status == 404
-    - (mirror_rc_ocp_version | default('0.0')).split('.')[1] | int >= 21
+    - (mirror_rc_ocp_version | default('0.0', true)).split('.')[1] | int >= 21
   block:
     - name: Mirror sigstore .sig for release image
       vars:

@@ -443,7 +443,7 @@
       become: true
       ansible.builtin.copy:
         content: "export REGISTRY_AUTH_FILE=/etc/containers/auth.json"
-        dest: /etc/p1rofile.d/podman-auth-var.sh
+        dest: /etc/profile.d/podman-auth-var.sh
         mode: "0755"
 
     # TODO: Uncomment once rehdatci bump completed

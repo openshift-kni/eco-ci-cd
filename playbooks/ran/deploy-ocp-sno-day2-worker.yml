@@ -109,6 +109,48 @@
           retries: 30
           delay: 30
 
+        - name: Wait for the spoke cluster to finish bootstrapping
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: ClusterVersion
+            name: version
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_cv
+          until: >-
+            spoke_cv is success and
+            spoke_cv.resources is defined and
+            spoke_cv.resources | length > 0 and
+            spoke_cv.resources[0].status.conditions |
+              selectattr('type', 'equalto', 'Available') |
+              selectattr('status', 'equalto', 'True') |
+              list | length > 0 and
+            spoke_cv.resources[0].status.conditions |
+              selectattr('type', 'equalto', 'Progressing') |
+              selectattr('status', 'equalto', 'False') |
+              list | length > 0
+          retries: 60
+          delay: 30
+          failed_when: false
+
+        - name: Assert the spoke cluster finished bootstrapping
+          ansible.builtin.assert:
+            that:
+              - spoke_cv is success
+              - spoke_cv.resources | length > 0
+              - >-
+                spoke_cv.resources[0].status.conditions |
+                  selectattr('type', 'equalto', 'Available') |
+                  selectattr('status', 'equalto', 'True') |
+                  list | length > 0
+              - >-
+                spoke_cv.resources[0].status.conditions |
+                  selectattr('type', 'equalto', 'Progressing') |
+                  selectattr('status', 'equalto', 'False') |
+                  list | length > 0
+            fail_msg: >-
+              Spoke cluster did not finish bootstrapping within 30 minutes.
+              ClusterVersion is not yet Available or is still Progressing.
+
         - name: Get the configs from spoke cluster for each operator
           kubernetes.core.k8s_info:
             api_version: "{{ item.api_version }}"

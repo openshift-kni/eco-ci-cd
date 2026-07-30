@@ -45,6 +45,11 @@
         path: /tmp
       register: test_artifacts_dir
 
+    - name: Record test start time
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: start.yml
+
     - name: Get current timestamp (UTC)
       ansible.builtin.command: date -u +%Y%m%d-%H%M%S
       register: utc_timestamp
@@ -52,8 +57,8 @@
 
     - name: Set test artifact directory names
       ansible.builtin.set_fact:
-        test_result_dir: "ztp-ai-deployment-time-{{ spoke_cluster }}-{{ utc_timestamp.stdout }}"
-        test_artifacts_name: "ztp-ai-deployment-time-{{ spoke_cluster }}"
+        test_result_dir: "{{ test_name }}-{{ spoke_cluster }}-{{ utc_timestamp.stdout }}"
+        test_artifacts_name: "{{ test_name }}-{{ spoke_cluster }}"
 
     - name: Display test configuration
       ansible.builtin.debug:
@@ -74,6 +79,118 @@
       vars:
         generate_detailed_summary: true
 
+    - name: Get ZTP deployment start and end times
+      ansible.builtin.set_fact:
+        ztp_start_time: "{{ ztp_deployment_timeline_start_time }}"
+        ztp_end_time: "{{ ztp_deployment_timeline_end_time }}"
+
+    - name: Convert timestamps to journalctl format (YYYY-MM-DD HH:MM:SS)
+      ansible.builtin.set_fact:
+        ztp_start_journalctl: "{{ ztp_start_time | regex_replace('T', ' ') | regex_replace('Z$', '') }}"
+        ztp_end_journalctl: "{{ ztp_end_time | regex_replace('T', ' ') | regex_replace('Z$', '') }}"
+
+    - name: Construct spoke kubeconfig path (created by setup-spoke-hub-connectivity)
+      ansible.builtin.set_fact:
+        spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+
+    - name: Get spoke node name from cluster
+      ansible.builtin.shell: |
+        set -o pipefail
+        oc --kubeconfig {{ spoke_kubeconfig }} get node -oname | head -1 | cut -d/ -f2
+      register: spoke_node_name_result
+      changed_when: false
+
+    - name: Set spoke node name fact
+      ansible.builtin.set_fact:
+        spoke_node_name: "{{ spoke_node_name_result.stdout }}"
+
+    - name: Get all boots from spoke node
+      ansible.builtin.shell: |
+        oc --kubeconfig {{ spoke_kubeconfig }} debug node/{{ spoke_node_name }} \
+          -- chroot /host journalctl --list-boots --no-pager
+      register: journalctl_all_boots
+      failed_when: false
+      changed_when: false
+
+    - name: Save all boots to temp file for filtering
+      ansible.builtin.copy:
+        content: "{{ journalctl_all_boots.stdout }}"
+        dest: /tmp/ztp-all-boots.txt
+        mode: "0644"
+
+    - name: Filter boots whose start time falls within ZTP window
+      ansible.builtin.shell: |
+        awk -v start="{{ ztp_start_journalctl }}" -v end="{{ ztp_end_journalctl }}" '
+          /^[[:space:]]*-?[0-9]+[[:space:]]+[a-f0-9]{32}/ {
+            boot_ts = $4 " " $5
+            if (boot_ts >= start && boot_ts <= end) print
+          }' /tmp/ztp-all-boots.txt
+      register: journalctl_filtered_boots
+      changed_when: false
+
+    - name: Parse filtered boot lines
+      ansible.builtin.set_fact:
+        ztp_window_boots: >-
+          {{ journalctl_filtered_boots.stdout_lines |
+             default([]) |
+             select('match', '^\s*-?\d+\s+[a-f0-9]{32}\s') |
+             list }}
+
+    - name: Count boots and prepare details
+      ansible.builtin.set_fact:
+        spoke_reboot_count: "{{ ztp_window_boots | length }}"
+        spoke_reboot_details: |
+          {% if ztp_window_boots | length > 0 %}
+          IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+          {% for boot in ztp_window_boots %}
+          {{ boot }}
+          {% endfor %}
+          {% endif %}
+        all_boots_info: "{{ journalctl_all_boots.stdout }}"
+
+    - name: Check reboot count threshold (must be <= 2)
+      ansible.builtin.set_fact:
+        reboot_count_pass: "{{ spoke_reboot_count | int <= 2 }}"
+        reboot_count_status: "{{ 'PASS' if (spoke_reboot_count | int <= 2) else 'FAIL' }}"
+
+    - name: Save reboot analysis to file
+      ansible.builtin.copy:
+        content: |
+          ZTP Deployment Reboot Analysis
+          ==============================
+          Spoke Cluster: {{ spoke_cluster }}
+          ZTP Start Time: {{ ztp_start_time }}
+          ZTP End Time: {{ ztp_end_time }}
+          ZTP Duration: {{ ztp_deployment_timeline_duration_formatted }}
+
+          REBOOT COUNT VALIDATION
+          -----------------------
+          Reboots During ZTP: {{ spoke_reboot_count }}
+          Threshold: <= 2
+          Result: {{ reboot_count_status }}
+
+          {% if spoke_reboot_count | int > 2 %}
+          ⚠️  WARNING: Reboot count ({{ spoke_reboot_count }}) exceeds threshold (2)
+          {% endif %}
+
+          Boots Within ZTP Deployment Window:
+          -----------------------------------
+          {% if spoke_reboot_details | trim %}
+          {{ spoke_reboot_details }}
+          {% else %}
+          No boots detected in ZTP window
+          {% endif %}
+
+          All Boot Entries (journalctl --list-boots):
+          -------------------------------------------
+          {% if all_boots_info | trim %}
+          {{ all_boots_info }}
+          {% else %}
+          No boot entries found
+          {% endif %}
+        dest: "{{ test_artifacts_dir.path }}/spoke-reboot-count.txt"
+        mode: '0644'
+
     - name: Parse threshold duration to seconds
       ansible.builtin.set_fact:
         threshold_hours: "{{ threshold_duration | regex_search('(\\d+)h') | default('0h', true) | regex_replace('h', '') | int }}"
@@ -83,10 +200,17 @@
       ansible.builtin.set_fact:
         threshold_seconds: "{{ (threshold_hours | int * 3600) + (threshold_minutes | int * 60) }}"
 
-    - name: Determine test result
+    - name: Determine test result (both duration and reboot count must pass)
       ansible.builtin.set_fact:
-        test_passed: "{{ ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int }}"
-        test_status: "{{ 'PASS' if (ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int) else 'FAIL' }}"
+        duration_passed: >-
+          {{ ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int }}
+        test_passed: >-
+          {{ (ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int)
+             and (spoke_reboot_count | int <= 2) }}
+        test_status: >-
+          {{ 'PASS' if ((ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int)
+                        and (spoke_reboot_count | int <= 2))
+                   else 'FAIL' }}
 
     - name: Save deployment timeline JSON
       ansible.builtin.copy:
@@ -105,6 +229,13 @@
         src: ztp-junit-result.xml.j2
         dest: "{{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml"
         mode: '0644'
+
+    - name: Record test duration and save metadata
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: stop.yml
+      vars:
+        test_duration_artifacts_dir: "{{ test_artifacts_dir.path }}"
 
     - name: List test artifacts
       ansible.builtin.find:
@@ -134,6 +265,15 @@
       loop: "{{ test_artifact_files.files }}"
       when: test_artifact_files.files | length > 0
 
+    - name: Cleanup old ZTP test artifacts (keep only latest)
+      ansible.builtin.include_role:
+        name: artifact_management
+        tasks_from: cleanup-old-artifacts.yml
+      vars:
+        artifact_management_shared_base: "/home/telcov10n/telco-kpis-artifacts"
+        artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+        artifact_management_test_name: "{{ test_name }}"
+
     - name: Create local artifact directory
       ansible.builtin.file:
         path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_artifacts_name }}"
@@ -162,18 +302,41 @@
           - "=========================================="
           - "Spoke: {{ spoke_cluster }}"
           - "Hub: {{ hub_cluster }}"
-          - "Duration: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)"
-          - "Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)"
-          - "Result: {{ test_status }}"
+          - ""
+          - "Duration Check:"
+          - "  Actual: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)"
+          - "  Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)"
+          - "  Status: {{ 'PASS' if duration_passed else 'FAIL' }}"
+          - ""
+          - "Reboot Count Check:"
+          - "  Actual: {{ spoke_reboot_count }}"
+          - "  Threshold: <= 2"
+          - "  Status: {{ reboot_count_status }}"
+          - ""
+          - "Overall Result: {{ test_status }}"
           - "Artifacts: {{ test_artifact_files.files | length }} files"
           - "Location: /home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/{{ test_result_dir }}"
           - "=========================================="
 
-    - name: Fail if test did not pass
-      ansible.builtin.fail:
+    - name: Report test failure (WARNING - playbook continues successfully)
+      ansible.builtin.debug:
         msg: |
-          ZTP AI Deployment Time test FAILED
-          Actual: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
-          Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
-          Exceeded by: {{ ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int }} seconds
+          ⚠️  WARNING: ZTP AI Deployment Time test FAILED
+
+          Duration Check:
+            Actual: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
+            Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
+            Status: {{ 'PASS' if duration_passed else 'FAIL' }}
+            {{ 'Exceeded by: ' ~ (ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int) ~ ' seconds' if not duration_passed else '' }}
+
+          Reboot Count Check:
+            Actual: {{ spoke_reboot_count }}
+            Threshold: <= 2
+            Status: {{ reboot_count_status }}
+
+          Overall Result: FAIL
+
+          NOTE: Test results and artifacts have been collected.
+                JUnit XML will show this test as FAILED.
+                Playbook completes successfully for artifact processing.
       when: not test_passed

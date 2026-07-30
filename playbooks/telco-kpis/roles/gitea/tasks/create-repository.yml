@@ -10,6 +10,7 @@
     force_basic_auth: true
     status_code: [200, 404]
   register: repo_check
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Display repository status
   ansible.builtin.debug:
@@ -35,6 +36,7 @@
           readme: "Default"
         status_code: [201, 422]  # 422 if already exists
       register: repo_create
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Display repository creation result
       ansible.builtin.debug:
@@ -51,6 +53,7 @@
       http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@{{ gitea_domain }}:{{
       gitea_http_port }}/{{ gitea_admin_user }}/{{ gitea_repo_name }}.git
     gitea_repo_web_url: "{{ gitea_root_url }}{{ gitea_admin_user }}/{{ gitea_repo_name }}"
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Display repository URLs
   ansible.builtin.debug:

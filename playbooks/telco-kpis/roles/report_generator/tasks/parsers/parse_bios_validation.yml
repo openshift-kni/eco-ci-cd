@@ -1,0 +1,67 @@
+---
+# Parse BIOS Validation results from bios-validation-report.json
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
+- name: Read bios-validation-report.json
+  ansible.builtin.slurp:
+    src: "{{ current_test.dir_path }}/bios-validation-report.json"
+  register: bios_json_content
+  failed_when: false
+
+- name: Parse BIOS validation results from JSON
+  when: bios_json_content.content is defined
+  block:
+    - name: Decode JSON content
+      ansible.builtin.set_fact:
+        bios_report: "{{ bios_json_content.content | b64decode | from_json }}"
+
+    - name: Count pass and fail settings
+      ansible.builtin.set_fact:
+        bios_pass_count: "{{ bios_report.results | selectattr('status', 'equalto', 'PASS') | list | length }}"
+        bios_fail_count: "{{ bios_report.results | selectattr('status', 'equalto', 'FAIL') | list | length }}"
+
+    - name: Determine overall status
+      ansible.builtin.set_fact:
+        bios_status: "{{ 'PASS' if (bios_fail_count | int) == 0 else 'FAIL' }}"
+
+    - name: Store BIOS validation result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'bios_validation',
+                  'status': bios_status,
+                  'key_metric': 'P:' ~ bios_pass_count ~ ' F:' ~ bios_fail_count,
+                  'duration': test_duration_human,
+                  'passed': bios_pass_count,
+                  'failed': bios_fail_count,
+                  'bios_settings': bios_report.results,
+                  'bios_profile_url': bios_report.bios_profile_url | default('')
+                }
+              })
+            })
+          }}
+
+- name: Handle missing BIOS validation results
+  when: bios_json_content.content is not defined
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'bios_validation',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'passed': 0,
+              'failed': 0,
+              'bios_settings': []
+            }
+          })
+        })
+      }}

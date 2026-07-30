@@ -1,0 +1,50 @@
+---
+# Extract test execution time from test logs
+# Looks for: "Test execution time: XXXs (HHhMMmSSs)"
+# Sets facts: test_execution_seconds, test_execution_human, overhead_seconds, overhead_human
+#
+# Required variables:
+#   - test_log: Log content to parse
+#   - actual_test_duration_seconds: Total playbook duration (from test-duration.yml)
+#   - test_duration_human: Human-readable playbook duration
+
+- name: Extract test execution time from log
+  ansible.builtin.set_fact:
+    test_execution_match: "{{ test_log | regex_search('Test execution time: ([0-9]+)s \\(([^)]+)\\)', '\\1', '\\2') }}"
+
+- name: Parse test execution time
+  ansible.builtin.set_fact:
+    test_execution_seconds: "{{ test_execution_match[0] | int }}"
+    test_execution_human: "{{ test_execution_match[1] }}"
+  when: test_execution_match and test_execution_match | length >= 2
+
+- name: Calculate overhead
+  ansible.builtin.set_fact:
+    overhead_seconds: "{{ (actual_test_duration_seconds | int) - (test_execution_seconds | int) }}"
+  when:
+    - actual_test_duration_seconds != 'N/A'
+    - test_execution_seconds is defined
+
+- name: Convert overhead to human-readable format
+  ansible.builtin.set_fact:
+    overhead_human: >-
+      {%- set total_secs = overhead_seconds | int -%}
+      {%- set hours = (total_secs / 3600) | int -%}
+      {%- set minutes = ((total_secs % 3600) / 60) | int -%}
+      {%- set seconds = total_secs % 60 -%}
+      {%- if hours > 0 -%}
+        {{ hours }}h{{ minutes }}m{{ seconds }}s
+      {%- elif minutes > 0 -%}
+        {{ minutes }}m{{ seconds }}s
+      {%- else -%}
+        {{ seconds }}s
+      {%- endif -%}
+  when: overhead_seconds is defined
+
+- name: Set defaults if extraction failed
+  ansible.builtin.set_fact:
+    test_execution_seconds: "N/A"
+    test_execution_human: "N/A"
+    overhead_seconds: "N/A"
+    overhead_human: "N/A"
+  when: not test_execution_match or test_execution_match | length < 2

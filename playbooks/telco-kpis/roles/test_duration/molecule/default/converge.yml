@@ -1,0 +1,21 @@
+---
+- name: Converge - Exercise test_duration role start/stop
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Record test start time
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: start.yml
+
+    - name: Simulate test execution (2 second pause)
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Record test duration and save metadata
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: stop.yml
+      vars:
+        test_duration_artifacts_dir: /tmp/molecule-test-duration

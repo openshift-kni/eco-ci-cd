@@ -1,0 +1,176 @@
+---
+# Parse reboot test results from JUnit XML
+
+- name: Read test duration from test-duration.yml
+  ansible.builtin.include_tasks: read_test_duration.yml
+
+- name: Find reboot JUnit XML files
+  ansible.builtin.find:
+    paths: "{{ current_test.dir_path }}"
+    patterns: "*reboot*.xml,*suite*.xml"
+  register: reboot_xml_files
+
+- name: Parse reboot results from XML
+  when: reboot_xml_files.files | length > 0
+  block:
+    - name: Read XML content
+      ansible.builtin.slurp:
+        src: "{{ reboot_xml_files.files[0].path }}"
+      register: xml_content
+
+    - name: Parse XML to extract test results
+      ansible.builtin.set_fact:
+        reboot_xml: "{{ xml_content.content | b64decode }}"
+
+    - name: Read podman-run.log
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/podman-run.log"
+      register: reboot_log_content
+      failed_when: false
+
+    - name: Extract test execution time from log
+      ansible.builtin.include_tasks: extract_test_execution_time.yml
+      vars:
+        test_log: "{{ reboot_log_content.content | b64decode if reboot_log_content.content is defined else '' }}"
+      when: reboot_log_content.content is defined
+
+
+    - name: Extract test counts from XML
+      ansible.builtin.set_fact:
+        reboot_tests: "{{ (reboot_xml | regex_search('tests=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        reboot_failures: "{{ (reboot_xml | regex_search('failures=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+        reboot_skipped: "{{ (reboot_xml | regex_search('skipped=\"(\\d+)\"', '\\1') | default(['0'], true) | first) | int }}"
+
+    - name: Read podman-run.log for detailed output
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/podman-run.log"
+      register: reboot_log_content
+      failed_when: false
+
+    - name: Extract reboot count and status when log exists
+      when: reboot_log_content.content is defined
+      block:
+        - name: Decode log
+          ansible.builtin.set_fact:
+            reboot_log: "{{ reboot_log_content.content | b64decode }}"
+
+        - name: Extract reboot count from log
+          ansible.builtin.set_fact:
+            reboot_count_match: "{{ reboot_log | regex_search('reboot_count=(\\d+)', '\\1') }}"
+
+        - name: Set reboot count
+          ansible.builtin.set_fact:
+            reboot_count: "{{ (reboot_count_match | default(['N/A'], true) | first) }}"
+
+        - name: Extract log excerpt (first 500 chars)
+          ansible.builtin.set_fact:
+            reboot_log_excerpt: "{{ reboot_log[:500] }}{{ '...' if reboot_log | length > 500 else '' }}"
+
+    - name: Set defaults when no log
+      when: reboot_log_content.content is not defined
+      ansible.builtin.set_fact:
+        reboot_count: "N/A"
+        reboot_log_excerpt: "No log available"
+
+    - name: Extract test case names and status
+      ansible.builtin.set_fact:
+        reboot_testcase_basic: "{{ reboot_xml | regex_findall('<testcase name=\"([^\"]+)\"[^>]+status=\"([^\"]+)\" time=\"([^\"]+)\"', multiline=True) }}"
+
+    - name: Extract skip messages
+      ansible.builtin.set_fact:
+        reboot_skip_msg_map: {}
+
+    - name: Build skip message mapping
+      ansible.builtin.set_fact:
+        reboot_skip_msg_map: >-
+          {{ reboot_skip_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ reboot_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<skipped message=\"([^\"]*)\"', multiline=True) }}"
+      when: reboot_xml | regex_search('skipped message')
+
+    - name: Extract failure messages
+      ansible.builtin.set_fact:
+        reboot_failure_msg_map: {}
+
+    - name: Build failure message mapping
+      ansible.builtin.set_fact:
+        reboot_failure_msg_map: >-
+          {{ reboot_failure_msg_map | combine({item[0]: item[1]}) }}
+      loop: "{{ reboot_xml | regex_findall('name=\"([^\"]+)\"[^>]*>\\s*<failure message=\"([^\"]*)\"', multiline=True) }}"
+      when: reboot_xml | regex_search('failure message')
+
+    - name: Build test case list
+      ansible.builtin.set_fact:
+        reboot_test_cases: >-
+          {{ reboot_test_cases | default([]) + [{
+            'name': item[0],
+            'status': item[1],
+            'time': item[2],
+            'skip_message': reboot_skip_msg_map.get(item[0], ''),
+            'failure_message': reboot_failure_msg_map.get(item[0], '')
+          }] }}
+      loop: "{{ reboot_testcase_basic }}"
+      when: reboot_testcase_basic | length > 0
+
+    - name: Filter out BeforeSuite/AfterSuite/ReportAfter from display
+      ansible.builtin.set_fact:
+        reboot_filtered_test_cases: "{{ (reboot_test_cases | default([])) | rejectattr('name', 'search', '\\[(?:Before|After|ReportAfter)') | list }}"
+
+    - name: Build reboot result summary
+      ansible.builtin.set_fact:
+        reboot_result:
+          passed: "{{ reboot_tests }}"
+          failed: "{{ reboot_failures }}"
+          skipped: "{{ reboot_skipped }}"
+          status: "{{ 'PASS' if reboot_failures | int == 0 else 'FAIL' }}"
+          key_metric: "P:{{ reboot_tests }} F:{{ reboot_failures }} S:{{ reboot_skipped }}"
+          reboot_count: "{{ reboot_count }}"
+          test_cases: "{{ reboot_filtered_test_cases | default([]) }}"
+
+    - name: Store reboot result in report data
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'test_results': report_data.test_results | combine({
+                current_test.dir_name: {
+                  'test_type': 'reboot',
+                  'status': reboot_result.status,
+                  'key_metric': reboot_result.key_metric,
+                  'duration': test_duration_human,
+                  'passed': reboot_result.passed,
+                  'failed': reboot_result.failed,
+                  'skipped': reboot_result.skipped,
+                  'reboot_count': reboot_result.reboot_count,
+                  'test_cases': reboot_result.test_cases,
+                  'raw_log_excerpt': reboot_log_excerpt | default('No log available'),
+                  'duration_breakdown': {
+                    'total_seconds': actual_test_duration_seconds,
+                    'total_human': test_duration_human,
+                    'test_execution_seconds': test_execution_seconds,
+                    'test_execution_human': test_execution_human,
+                    'overhead_seconds': overhead_seconds,
+                    'overhead_human': overhead_human
+                  },
+                }
+              })
+            })
+          }}
+
+- name: Handle missing reboot results
+  when: reboot_xml_files.files | length == 0
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'test_results': report_data.test_results | combine({
+            current_test.dir_name: {
+              'test_type': 'reboot',
+              'status': 'N/A',
+              'key_metric': 'No results',
+              'duration': 'N/A',
+              'reboot_count': 'N/A',
+              'raw_log_excerpt': 'No JUnit XML results found'
+            }
+          })
+        })
+      }}

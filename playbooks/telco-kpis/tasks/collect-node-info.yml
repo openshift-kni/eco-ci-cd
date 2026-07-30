@@ -119,6 +119,21 @@
     cpu_type: "unknown"
   when: lscpu_result.stdout is not defined
 
+- name: Get kernel cmdline
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs cat /proc/cmdline
+  register: cmdline_result
+  failed_when: false
+  changed_when: false
+
+- name: Set kernel cmdline fact
+  ansible.builtin.set_fact:
+    kernel_cmdline: "{{ cmdline_result.stdout | default('') | trim }}"
+
 - name: Get PerformanceProfiles
   kubernetes.core.k8s_info:
     api_version: performance.openshift.io/v2
@@ -139,7 +154,7 @@
     name: master0_vault
   when: master0_vault_stat.stat.exists
   delegate_to: localhost
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Set BMC credentials from vault (NEVER logged)
   ansible.builtin.set_fact:
@@ -147,7 +162,7 @@
     bmc_user: "{{ master0_vault.bmc_user | default('') }}"
     bmc_pass: "{{ master0_vault.bmc_password | default('') }}"
   when: master0_vault_stat.stat.exists and master0_vault is defined
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Set empty BMC credentials if vault not found
   ansible.builtin.set_fact:
@@ -158,11 +173,11 @@
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
-    bmc_ip: >-
-      {{ (bmc_address | regex_search('https?://([^/]+)', '\\1'))[0]
-         if bmc_address and (bmc_address | regex_search('https?://([^/]+)', '\\1'))
-         else '' }}
-  no_log: true
+    bmc_ip: "{{
+      ((bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] | trim)
+      if (bmc_address and bmc_address | regex_search('https?://([^/]+)', '\\1'))
+      else '' }}"
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Query BIOS settings via Redfish (if BMC configured)
   ansible.builtin.uri:
@@ -175,7 +190,7 @@
     timeout: 30
   register: redfish_systems
   when: bmc_ip != '' and bmc_user != '' and bmc_pass != ''
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
   failed_when: false
 
 - name: Get BIOS attributes from Redfish
@@ -193,7 +208,7 @@
     - redfish_systems is defined
     - redfish_systems.json is defined
     - redfish_systems.json.Members is defined
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
   failed_when: false
 
 - name: Set architecture fact from node info
@@ -280,6 +295,7 @@
       bios_version: "{{ bios_version | default('') }}"
       microcode_version: "{{ microcode_version | default('') }}"
       cpu_type: "{{ cpu_type | default('') }}"
+      kernel_cmdline: "{{ kernel_cmdline | default('') }}"
       collected_at: "{{ ansible_date_time.iso8601 }}"
       performance_profiles_yaml: >-
         {{ performance_profiles.resources | to_nice_yaml

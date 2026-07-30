@@ -1,0 +1,79 @@
+---
+- name: Verify resolve-release-image-digest results
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Assertion 1: Digest passthrough returns input unchanged
+    - name: "Assert: digest image passes through unchanged"
+      ansible.builtin.assert:
+        that:
+          - test1_result == "quay.io/openshift-release-dev/ocp-release@sha256:df94fff5219721391e48098e258d7bc8a645b1d635a1b65148dc29f2ecb749c8"
+        fail_msg: "Digest passthrough failed: {{ test1_result }}"
+        success_msg: "Pass: digest image unchanged"
+
+    # Assertion 2: Tag-based image resolved to digest
+    - name: "Assert: tag-based image resolved to digest format"
+      ansible.builtin.assert:
+        that:
+          - "'@sha256:' in test2_result"
+          - test2_result == "quay.io/openshift-release-dev/ocp-release@sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        fail_msg: "Tag resolution failed: {{ test2_result }}"
+        success_msg: "Pass: tag resolved to digest"
+
+    # Assertion 3: Registry port preserved correctly (only last colon stripped)
+    - name: "Assert: registry port preserved in resolved image"
+      ansible.builtin.assert:
+        that:
+          - "'registry.example.com:5000' in test3_result"
+          - test3_result == "registry.example.com:5000/ocp/release@sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        fail_msg: "Registry port handling failed: {{ test3_result }}"
+        success_msg: "Pass: registry port preserved correctly"
+
+    # Assertion 4: Skopeo was called for tag-based images only
+    - name: Read skopeo call log
+      ansible.builtin.slurp:
+        src: /tmp/molecule-resolve/skopeo-calls.log
+      register: _skopeo_log
+
+    - name: Parse skopeo calls
+      ansible.builtin.set_fact:
+        skopeo_calls: "{{ (_skopeo_log.content | b64decode).strip().split('\n') }}"
+
+    - name: "Assert: exactly 2 skopeo inspect calls (tests 2 and 3)"
+      ansible.builtin.assert:
+        that:
+          - skopeo_calls | length == 2
+        fail_msg: "Expected 2 skopeo calls, got {{ skopeo_calls | length }}: {{ skopeo_calls }}"
+        success_msg: "Pass: skopeo called only for tag-based images"
+
+    # Assertion 5: Skopeo used correct authfile
+    - name: "Assert: skopeo calls use correct authfile"
+      ansible.builtin.assert:
+        that:
+          - "'--authfile /tmp/molecule-resolve/pull-secret.json' in skopeo_calls[0]"
+          - "'--authfile /tmp/molecule-resolve/pull-secret.json' in skopeo_calls[1]"
+        fail_msg: "Skopeo calls missing correct authfile"
+        success_msg: "Pass: skopeo uses correct authfile"
+
+    # Assertion 6: Skopeo inspected the correct images
+    - name: "Assert: skopeo inspected tag-based images"
+      ansible.builtin.assert:
+        that:
+          - "'docker://quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64' in skopeo_calls[0]"
+          - "'docker://registry.example.com:5000/ocp/release:4.22.0' in skopeo_calls[1]"
+        fail_msg: "Skopeo called with wrong images"
+        success_msg: "Pass: skopeo inspected correct images"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Resolve Release Image Digest Tests: ALL PASSED"
+          - "=========================================="
+          - "Pass: 6 assertions verified"
+          - "Pass: Digest passthrough (no skopeo call)"
+          - "Pass: Tag-based resolution via skopeo"
+          - "Pass: Registry port preserved correctly"
+          - "Pass: Correct number of skopeo calls"
+          - "Pass: Correct authfile and image targets"
+          - "=========================================="

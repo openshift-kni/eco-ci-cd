@@ -1,0 +1,45 @@
+---
+- name: Test resolve-release-image-digest task
+  hosts: all
+  gather_facts: false
+  environment:
+    PATH: "/tmp/molecule-resolve/bin:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+  tasks:
+    # Test 1: Already in digest format — passthrough, no skopeo call
+    - name: "Test 1 - Digest format passes through unchanged"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: common/resolve-release-image-digest.yml
+      vars:
+        resolve_release_image: "quay.io/openshift-release-dev/ocp-release@sha256:df94fff5219721391e48098e258d7bc8a645b1d635a1b65148dc29f2ecb749c8"
+        resolve_pull_secret_path: /tmp/molecule-resolve/pull-secret.json
+
+    - name: Save test 1 result
+      ansible.builtin.set_fact:
+        test1_result: "{{ resolved_release_image }}"
+
+    # Test 2: Tag-based image — skopeo called, resolved to digest
+    - name: "Test 2 - Tag-based image resolved via skopeo"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: common/resolve-release-image-digest.yml
+      vars:
+        resolve_release_image: "quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64"
+        resolve_pull_secret_path: /tmp/molecule-resolve/pull-secret.json
+
+    - name: Save test 2 result
+      ansible.builtin.set_fact:
+        test2_result: "{{ resolved_release_image }}"
+
+    # Test 3: Tag-based image with port in registry URL
+    - name: "Test 3 - Tag-based image with registry port"
+      ansible.builtin.include_role:
+        name: lockdowns
+        tasks_from: common/resolve-release-image-digest.yml
+      vars:
+        resolve_release_image: "registry.example.com:5000/ocp/release:4.22.0"
+        resolve_pull_secret_path: /tmp/molecule-resolve/pull-secret.json
+
+    - name: Save test 3 result
+      ansible.builtin.set_fact:
+        test3_result: "{{ resolved_release_image }}"

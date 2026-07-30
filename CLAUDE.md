@@ -235,7 +235,7 @@ The `playbooks/telco-kpis/` directory contains a comprehensive testing framework
 
 **Report Generation** (`generate-report.yml`):
 - Aggregates all test artifacts from shared location (`/home/telcov10n/telco-kpis-artifacts/{spoke}/`)
-- Runs `analyze-podman-test-results.py` in `telco-kpis-test-runner` container
+- Uses `report_generator` Ansible role (pure Ansible implementation)
 - Filters tests based on node-info timestamp (excludes stale tests from old environment configs)
 - Integrates ZTP deployment timeline into report before "Report Metadata" section
 - Publishes Markdown report + compressed tarball to Gitea repository

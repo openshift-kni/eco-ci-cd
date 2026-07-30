@@ -8,10 +8,11 @@ SOURCE_RANGE="{{ spoke_hub_connectivity_spoke_bmc_ip_range }}"
 HV_IP="{{ spoke_hub_connectivity_hv_corporate_ip }}"
 HUB_IP="{{ spoke_hub_connectivity_hub_cluster_ip }}"
 PORT="{{ item }}"
+DEST_PORT="{{ spoke_hub_connectivity_port_dest_mapping[item] | default(item) }}"
 
 sudo iptables -t nat -D PREROUTING -s ${SOURCE_RANGE} -d ${HV_IP} -p tcp \
-  --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${PORT} 2>/dev/null \
+  --dport ${PORT} -j DNAT --to-destination ${HUB_IP}:${DEST_PORT} 2>/dev/null \
   && echo "✓ Removed DNAT" || true
 sudo iptables -t nat -D POSTROUTING -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp \
-  --dport ${PORT} -j MASQUERADE 2>/dev/null && echo "✓ Removed MASQUERADE" || true
-sudo iptables -D FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${PORT} -j ACCEPT 2>/dev/null && echo "✓ Removed FORWARD" || true
+  --dport ${DEST_PORT} -j MASQUERADE 2>/dev/null && echo "✓ Removed MASQUERADE" || true
+sudo iptables -D FORWARD -s ${SOURCE_RANGE} -d ${HUB_IP} -p tcp --dport ${DEST_PORT} -j ACCEPT 2>/dev/null && echo "✓ Removed FORWARD" || true

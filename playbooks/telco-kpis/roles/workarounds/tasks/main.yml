@@ -14,3 +14,8 @@
   ansible.builtin.include_tasks: talm-manifestwork-crd.yml
   when:
     - "'topology-aware-lifecycle-manager' in (workarounds_talm_manifestwork_crd_operators | map(attribute='name') | list)"
+
+- name: Apply Prometheus stuck workaround (prometheus-k8s-0 stuck in Init state blocks reboot tests)
+  ansible.builtin.include_tasks: prometheus-stuck-init.yml
+  when:
+    - workarounds_prometheus_enabled | default(false)

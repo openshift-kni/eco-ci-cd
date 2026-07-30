@@ -1,8 +1,8 @@
 #!/bin/bash
 ################################################################################
-# Script: run-{{ test_name }}-test.sh
+# Script: run_{{ test_name }}_test.sh
 # Purpose: Execute {{ test_display_name | default(test_name | upper) }} test inside telco-kpis-test-runner container
-# Generated from: playbooks/telco-kpis/templates/run-test.sh.j2
+# Generated from: playbooks/telco-kpis/templates/run_test.sh.j2
 #
 # Description:
 {% for line in test_description.splitlines() %}
@@ -41,7 +41,16 @@ export RAN_METRICS_URL=https://pushgateway.ran-metrics.telco5g.corp.redhat.com/m
 
 # Clone ran-integration repository
 echo "Cloning ran-integration repository..."
-git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration
+set -x
+git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration --branch {{ ran_integration_branch | default('master') }}
+set +x
+
+# WORKAROUND: Patch ran-integration's set_ran_test_image() to use correct registry regex
+# The original grep pattern 'registry.*500.' is too loose and causes authentication failures
+# We replace it with the actual disconnected registry FQDN pattern from vault
+echo "Patching ran-integration's set_ran_test_image() function for correct registry detection..."
+sed -i "s|grep -E \"registry\.\*500\.\"|grep -E \"{{ test_disconnected_registry }}\"|g" /workspace/ran-integration/scripts/ranStageUtils.sh
+
 cd /workspace/ran-integration{% if test_working_subdir is defined %}/{{ test_working_subdir }}{% endif %}
 
 
@@ -69,7 +78,12 @@ echo "Creating artifacts symlink..."
 ln -sfn /workspace/artifacts /workspace/ran-integration/artifacts
 
 # Execute {{ test_display_name | default(test_name | upper) }} test
+echo "=========================================="
 echo "Starting {{ test_display_name | default(test_name | upper) }} test{{ test_params_display | default('') }}..."
+TEST_START_TIME=$(date +%s)
+echo "Start time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "=========================================="
+
 {% if test_command_prefix is defined %}
 {{ test_command_prefix }}
 {% endif %}
@@ -77,5 +91,11 @@ set +e
 {{ test_command }}
 exit_code=$?
 
+TEST_END_TIME=$(date +%s)
+TEST_DURATION=$((TEST_END_TIME - TEST_START_TIME))
+echo "=========================================="
 echo "{{ test_display_name | default(test_name | upper) }} test completed with exit code: $exit_code"
+echo "End time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Test execution time: ${TEST_DURATION}s ($(printf '%02dh%02dm%02ds' $((TEST_DURATION/3600)) $((TEST_DURATION%3600/60)) $((TEST_DURATION%60))))"
+echo "=========================================="
 exit $exit_code

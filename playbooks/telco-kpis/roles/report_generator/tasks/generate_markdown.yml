@@ -1,0 +1,18 @@
+---
+# Generate Markdown report from collected data
+
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Generate report from template
+  ansible.builtin.template:
+    src: report.md.j2
+    dest: "{{ output_dir }}/{{ output_filename }}"
+    mode: '0644'
+
+- name: Display report location
+  ansible.builtin.debug:
+    msg: "Report generated: {{ output_dir }}/{{ output_filename }}"

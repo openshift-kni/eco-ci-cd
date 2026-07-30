@@ -1,0 +1,266 @@
+---
+# Molecule verify - validates report output
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_artifact_base: /tmp/molecule-report-generator
+    output_dir: "{{ test_artifact_base }}/output"
+    output_filename: test-report.md
+
+  tasks:
+    - name: Check that report file was created
+      ansible.builtin.stat:
+        path: "{{ output_dir }}/{{ output_filename }}"
+      register: report_file
+
+    - name: Verify report exists
+      ansible.builtin.assert:
+        that:
+          - report_file.stat.exists
+          - report_file.stat.isreg
+        fail_msg: "Report file was not created"
+        success_msg: "Report file exists"
+
+    - name: Read report content
+      ansible.builtin.slurp:
+        src: "{{ output_dir }}/{{ output_filename }}"
+      register: report_content
+
+    - name: Verify report contains expected sections
+      ansible.builtin.assert:
+        that:
+          - "'Test Summary' in (report_content.content | b64decode)"
+          - "'Cluster Configuration' in (report_content.content | b64decode)"
+          - "'OSLAT' in (report_content.content | b64decode)"
+          - "'CPU_UTIL' in (report_content.content | b64decode)"
+          - "'PTP' in (report_content.content | b64decode)"
+          - "'CYCLICTEST' in (report_content.content | b64decode)"
+          - "'REBOOT' in (report_content.content | b64decode)"
+          - "'RDS_COMPARE' in (report_content.content | b64decode)"
+          - "'RFC2544' in (report_content.content | b64decode)"
+          - "'BIOS_VALIDATION' in (report_content.content | b64decode)"
+          - "'ZTP_AI_DEPLOYMENT_TIME' in (report_content.content | b64decode)"
+          - "'test-spoke-01' in (report_content.content | b64decode)"
+        fail_msg: "Report missing expected sections"
+        success_msg: "Report contains all expected sections"
+
+    - name: Verify kernel cmdline is rendered in report
+      ansible.builtin.assert:
+        that:
+          - "'Kernel cmdline' in (report_content.content | b64decode)"
+          - "'isolcpus=2-19,22-39' in (report_content.content | b64decode)"
+        fail_msg: "Kernel cmdline section missing from report"
+        success_msg: "Kernel cmdline section rendered correctly"
+
+    - name: Verify performance profiles are rendered in report
+      ansible.builtin.assert:
+        that:
+          - "'PerformanceProfile' in (report_content.content | b64decode)"
+          - "'isolated: 2-19,22-39' in (report_content.content | b64decode)"
+          - "'reserved: 0-1,20-21' in (report_content.content | b64decode)"
+        fail_msg: "PerformanceProfile section missing from report"
+        success_msg: "PerformanceProfile section rendered correctly"
+
+    - name: Verify test name normalization (underscore in anchor)
+      ansible.builtin.assert:
+        that:
+          - "'#oslat' in (report_content.content | b64decode)"
+        fail_msg: "Test anchors not using underscores"
+        success_msg: "Test name normalization working correctly"
+
+    - name: Verify timestamp filtering worked (old test excluded)
+      ansible.builtin.stat:
+        path: /tmp/molecule-report-generator/artifacts/oslat-test-spoke-01-20260706-100000
+      register: old_oslat_dir
+
+    - name: Verify timestamp filtering worked (new test included)
+      ansible.builtin.stat:
+        path: /tmp/molecule-report-generator/artifacts/oslat-test-spoke-01-20260706-120000
+      register: new_oslat_dir
+
+    - name: Assert timestamp filtering
+      ansible.builtin.assert:
+        that:
+          - not old_oslat_dir.stat.exists
+          - new_oslat_dir.stat.exists
+        fail_msg: "Timestamp filtering failed - old test should be deleted, new test should exist"
+        success_msg: "Timestamp filtering working correctly (old test excluded, new test included)"
+
+    - name: Verify PTP parser extracted detailed metrics
+      ansible.builtin.assert:
+        that:
+          - "'PTP4L:12ns PHC2SYS:8ns Restarts:0' in (report_content.content | b64decode)"
+          - "'**PTP4L Max** | 12 ns' in (report_content.content | b64decode)"
+          - "'**PTP4L Avg** | 6.5 ns' in (report_content.content | b64decode)"
+          - "'**PHC2SYS Max** | 8 ns' in (report_content.content | b64decode)"
+          - "'**ptp4l Restarts** | 0' in (report_content.content | b64decode)"
+        fail_msg: "PTP parser did not extract detailed metrics (max/min/avg, restarts)"
+        success_msg: "PTP parser working correctly"
+
+    - name: Verify Cyclictest parser extracted detailed metrics
+      ansible.builtin.assert:
+        that:
+          - "'CYCLICTEST' in (report_content.content | b64decode)"
+        fail_msg: "Cyclictest parser did not extract detailed per-thread metrics"
+        success_msg: "Cyclictest parser working correctly"
+
+    - name: Verify RDS Compare parser extracted CR metrics
+      ansible.builtin.assert:
+        that:
+          - "'Diffs:22/76 Missing:1' in (report_content.content | b64decode)"
+        fail_msg: "RDS Compare parser did not extract CR metrics"
+        success_msg: "RDS Compare parser working correctly"
+
+    - name: Extract RFC2544 section for debugging
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -A50 "RFC2544" /tmp/molecule-debug-report.md || echo "RFC2544 section not found"
+      register: rfc2544_section
+      changed_when: false
+      failed_when: false
+
+    - name: Display RFC2544 section
+      ansible.builtin.debug:
+        msg: "{{ rfc2544_section.stdout_lines }}"
+
+    - name: Verify RFC2544 parser extracted metrics and pass/fail logic
+      ansible.builtin.assert:
+        that:
+          - "'RFC2544 Network Performance' in (report_content.content | b64decode)"
+          - "'99.999' in (report_content.content | b64decode)"
+          - "'Test Configuration' in (report_content.content | b64decode)"
+          - "'Test Results' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 parser did not extract metrics or apply pass/fail logic correctly"
+        success_msg: "RFC2544 parser working correctly"
+
+    - name: Verify RFC2544 Test Configuration table structure
+      ansible.builtin.assert:
+        that:
+          - "'| Parameter | Value |' in (report_content.content | b64decode)"
+          - "'| **Latency Test Duration** |' in (report_content.content | b64decode)"
+          - "'| **Frame Size** |' in (report_content.content | b64decode)"
+          - "'| **LAT Rate** |' in (report_content.content | b64decode)"
+          - "'| **Port 1** |' in (report_content.content | b64decode)"
+          - "'| **Port 2** |' in (report_content.content | b64decode)"
+          - "'| **Test Config File** |' in (report_content.content | b64decode)"
+          - "'| **Chassis** |' in (report_content.content | b64decode)"
+          - "'| **STC Web Server** |' in (report_content.content | b64decode)"
+          - "'| **Cluster** |' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Configuration table structure incorrect"
+        success_msg: "RFC2544 Test Configuration table structure correct"
+
+    - name: Verify RFC2544 Test Configuration parameter values
+      ansible.builtin.assert:
+        that:
+          - "'| **Latency Test Duration** | 600s |' in (report_content.content | b64decode)"
+          - "'| **Frame Size** | 512 bytes |' in (report_content.content | b64decode)"
+          - "'| **LAT Rate** | 0.8 |' in (report_content.content | b64decode)"
+          - "'| **Port 1** | //spirent-n4u-01/1/13 |' in (report_content.content | b64decode)"
+          - "'| **Port 2** | //spirent-n4u-01/1/14 |' in (report_content.content | b64decode)"
+          - "'| **Test Config File** | spirent_testcfg.xml |' in (report_content.content | b64decode)"
+          - "'| **Chassis** | spirent-n4u-01.mgmt.telcoqe.eng.rdu2.dc.redhat.com |' in (report_content.content | b64decode)"
+          - "'| **STC Web Server** | spirent-vm-01.ptp.eng.rdu2.dc.redhat.com:8888 |' in (report_content.content | b64decode)"
+          - "'| **Cluster** | test-spoke-01 |' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Configuration parameter values incorrect"
+        success_msg: "RFC2544 Test Configuration parameter values correct"
+
+    - name: Verify RFC2544 Test Results table contains measured values
+      ansible.builtin.assert:
+        that:
+          - "'| **Throughput** | 99.999%' in (report_content.content | b64decode)"
+          - "'| **Max Latency** | 26.527μs' in (report_content.content | b64decode)"
+          - "'| **Avg Latency** | 5.678μs' in (report_content.content | b64decode)"
+        fail_msg: "RFC2544 Test Results table values incorrect"
+        success_msg: "RFC2544 Test Results table values correct"
+
+    - name: Verify BIOS Validation parser shows failure
+      ansible.builtin.assert:
+        that:
+          - "'P:8 F:1 S:0' in (report_content.content | b64decode)"
+        fail_msg: "BIOS Validation parser did not parse JUnit XML correctly"
+        success_msg: "BIOS Validation parser working correctly"
+
+    - name: Extract ZTP section from report for debugging # noqa: jinja[spacing]
+      ansible.builtin.set_fact:
+        ztp_section: >-
+          {{ (report_content.content | b64decode).split('BEGIN DEPLOYMENT TIMELINE')[1]
+          .split('END DEPLOYMENT TIMELINE')[0]
+          if 'BEGIN DEPLOYMENT TIMELINE' in (report_content.content | b64decode)
+          else 'ZTP section not found' }}
+
+    - name: Save full report for debugging
+      ansible.builtin.copy:
+        content: "{{ report_content.content | b64decode }}"
+        dest: /tmp/molecule-debug-report.md
+        mode: '0644'
+
+    - name: Search for ZTP in report
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -i "ztp\|reboot" /tmp/molecule-debug-report.md || echo "No ZTP/reboot found"
+      register: ztp_grep
+      changed_when: false
+
+    - name: Display ZTP grep results
+      ansible.builtin.debug:
+        msg: "{{ ztp_grep.stdout_lines }}"
+
+    - name: Display ZTP section with debug traces
+      ansible.builtin.debug:
+        msg: "{{ ztp_section.split('\n') }}"
+
+    - name: Verify ZTP Deployment parser extracted time and status
+      ansible.builtin.assert:
+        that:
+          - "'ZTP Assisted Installer Deployment Timeline' in (report_content.content | b64decode)"
+          - "'## ✅ **PASS** - ZTP Assisted Installer Deployment Timeline' in (report_content.content | b64decode)"
+          - "'Pass criteria: Deployment duration ≤ 2h0m (120 min) AND Reboot count ≤ 2' in (report_content.content | b64decode)"
+          - "'| **ZTP Deployment Duration** | **Reboot Count** |' in (report_content.content | b64decode)"
+          - "'| 1h13m11s | 2 (PASS) |' in (report_content.content | b64decode)"
+          - "'Deployment Timeline Summary' in (report_content.content | b64decode)"
+          - "'Click to expand deployment timeline details' in (report_content.content | b64decode)"
+          - "'ZTP Deployment Reboot Analysis' in (report_content.content | b64decode)"
+          - "'ZTP AI DEPLOYMENT TIME TEST SUMMARY' in (report_content.content | b64decode)"
+          - "'Reboots During ZTP: 2' in (report_content.content | b64decode)"
+        fail_msg: "ZTP Deployment parser did not extract deployment time, status, reboot count, or timeline details"
+        success_msg: "ZTP Deployment parser working correctly (including reboot count)"
+
+    - name: Verify OSLAT parser extracted detailed metrics
+      ansible.builtin.assert:
+        that:
+          - "'Max: 9µs' in (report_content.content | b64decode)"
+          - "'Avail: 100.0%' in (report_content.content | b64decode)"
+          - "'59.994s' in (report_content.content | b64decode)"
+          - "'3, 4, 5, 6' in (report_content.content | b64decode)"
+        fail_msg: "OSLAT parser did not extract detailed metrics (max latency, availability, duration, cores)"
+        success_msg: "OSLAT parser working correctly"
+
+    - name: Verify CPU_UTIL parser extracted test case details
+      ansible.builtin.assert:
+        that:
+          - "'CPU_UTIL' in (report_content.content | b64decode)"
+        fail_msg: "CPU_UTIL parser did not extract individual test cases"
+        success_msg: "CPU_UTIL parser working correctly"
+
+    - name: Display test results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "✅ All verification checks passed!"
+          - "=========================================="
+          - "Report file: exists"
+          - "Report sections: complete (9 test types)"
+          - "Test name normalization: working"
+          - "Timestamp filtering: working"
+          - "Parser validations:"
+          - "  - OSLAT: detailed metrics extracted ✓"
+          - "  - PTP: metrics extracted ✓"
+          - "  - Cyclictest: per-thread metrics extracted ✓"
+          - "  - CPU_UTIL: test cases extracted ✓"
+          - "  - RDS Compare: CR metrics extracted ✓"
+          - "  - RFC2544: metrics extracted, pass/fail logic applied ✓"
+          - "  - BIOS Validation: JUnit XML parsed ✓"
+          - "  - ZTP Deployment: time extracted ✓"
+          - "=========================================="

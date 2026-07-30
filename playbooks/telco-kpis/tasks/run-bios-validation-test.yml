@@ -11,6 +11,11 @@
     path: /tmp
   register: artifacts_dir
 
+- name: Record test start time
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: start.yml
+
 - name: Display BIOS validation configuration
   ansible.builtin.debug:
     msg:
@@ -68,12 +73,12 @@
     bmc_address: "{{ hostvars[master_node].bmc_address | default('') }}"
     bmc_user: "{{ hostvars[master_node].bmc_user | default('') }}"
     bmc_pass: "{{ hostvars[master_node].bmc_password | default('') }}"
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
     bmc_ip: "{{ bmc_address | urlsplit('hostname') }}"
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Verify BMC credentials are configured
   ansible.builtin.fail:
@@ -91,7 +96,7 @@
     timeout: 30
     status_code: 200
   register: redfish_systems
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract system ID from Redfish response
   ansible.builtin.set_fact:
@@ -108,7 +113,7 @@
     timeout: 30
     status_code: 200
   register: redfish_bios
-  no_log: true
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Extract current BIOS attributes
   ansible.builtin.set_fact:
@@ -205,7 +210,7 @@
         timeout: 30
         status_code: [200, 202, 204]
       register: bios_patch_result
-      no_log: true
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Record fix application in report
       ansible.builtin.set_fact:
@@ -239,7 +244,7 @@
         timeout: 30
         status_code: [200, 202, 204]
       register: reboot_result
-      no_log: true
+      no_log: "{{ ansible_verbosity < 3 }}"
 
     - name: Record reboot trigger in report
       ansible.builtin.set_fact:
@@ -262,15 +267,26 @@
   ansible.builtin.set_fact:
     bios_validation_rc: "{{ 0 if (failed_settings | int == 0 or (apply_fixes | bool)) else 1 }}"
 
+- name: Set test name for artifact management
+  ansible.builtin.set_fact:
+    test_name: "bios_validation"
+
+- name: Record test duration and save metadata
+  ansible.builtin.include_role:
+    name: test_duration
+    tasks_from: stop.yml
+  vars:
+    test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
   vars:
-    artifact_management_test_name: "bios-validation"
+    artifact_management_test_name: "{{ test_name }}"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
     artifact_management_test_rc: "{{ bios_validation_rc }}"
-    artifact_management_test_duration: "600"  # BIOS validation doesn't have duration, use default
+    artifact_management_test_duration: "{{ test_duration_seconds }}"
 
 - name: Cleanup artifacts directory on bastion
   ansible.builtin.file:

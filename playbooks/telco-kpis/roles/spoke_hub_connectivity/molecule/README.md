@@ -50,7 +50,7 @@ All tests follow the same three-phase pattern:
 2. **Converge**: Generates templates and reads them back as facts
 3. **Verify**: Runs assertions to validate template correctness
 
-Tests run in containerized environment using `quay.io/ccardenosa/eco-ci-cd:latest` for consistency.
+Tests run in containerized environment using `quay.io/telcov10n-ci/eco-ci-cd:latest` for consistency.
 
 ## What's NOT Tested
 

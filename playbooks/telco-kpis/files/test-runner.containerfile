@@ -1,7 +1,7 @@
 # Containerfile for telco-kpis test runner
 # Used by --podman mode in run-local-test-*.sh scripts
 #
-# Build:  podman build -t telco-kpis-test-runner:latest -f Containerfile.test-runner .
+# Build:  podman build -t telco-kpis-test-runner:latest -f test-runner.containerfile .
 # Manual: podman run -it --rm -v /path/kubeconfig:/tmp/kubeconfig:ro telco-kpis-test-runner:latest bash
 
 FROM registry.access.redhat.com/ubi9-minimal:latest
@@ -16,10 +16,10 @@ RUN microdnf install -y \
       nmap-ncat iputils \
     && microdnf clean all
 
-# ipmitool and python3.11 (needed for reboot test and report generation) from CentOS Stream 9 AppStream
+# ipmitool (needed for reboot test) from CentOS Stream 9 AppStream
 RUN printf '[centos9-appstream]\nname=CentOS Stream 9 - AppStream\nbaseurl=https://mirror.stream.centos.org/9-stream/AppStream/$basearch/os/\ngpgcheck=0\nenabled=1\n' \
       > /etc/yum.repos.d/centos9-appstream.repo \
-    && microdnf install -y ipmitool python3.11 \
+    && microdnf install -y ipmitool \
     && rm -f /etc/yum.repos.d/centos9-appstream.repo \
     && microdnf clean all
 
@@ -54,12 +54,13 @@ RUN ARCH=$(uname -m) && \
       | tar -C /usr/local/bin -xzf - kubectl-cluster_compare && \
     chmod 0755 /usr/local/bin/kubectl-cluster_compare
 
-# Install analyze-podman-test-results.py for report generation
-# Script is copied from cloned telco-kpis-test-local-scripts repo during build
-COPY analyze-podman-test-results.py /opt/analyze-podman-test-results.py
-RUN chmod 0755 /opt/analyze-podman-test-results.py
+# Copy registry authentication and certificates into image
+# These are generated during setup-test-runner.yml from vault credentials
+COPY auth.json /run/containers/0/auth.json
+COPY certs.d /etc/containers/certs.d
+RUN chmod 0600 /run/containers/0/auth.json
 
-ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.local/bin:${PATH}" \
+ENV PATH="/usr/local/go/bin:/root/go/bin:/root/bin:/root/.local/bin:${PATH}" \
     GOPATH="/root/go"
 
 WORKDIR /workspace

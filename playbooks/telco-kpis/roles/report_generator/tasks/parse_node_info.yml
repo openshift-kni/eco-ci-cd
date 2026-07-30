@@ -1,0 +1,62 @@
+---
+# Parse node-info.json for cluster and hardware metadata
+
+- name: Check for node-info JSON file
+  ansible.builtin.stat:
+    path: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+  register: node_info_file
+
+- name: Parse node-info JSON
+  when: node_info_file.stat.exists
+  block:
+    - name: Read node-info JSON
+      ansible.builtin.slurp:
+        src: "{{ shared_artifact_dir }}/node-info-{{ spoke_cluster }}.json"
+      register: node_info_content
+
+    - name: Parse node-info data
+      ansible.builtin.set_fact:
+        node_info: "{{ node_info_content.content | b64decode | from_json }}"
+
+    - name: Extract cluster information
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'cluster_info': {
+                'cluster': spoke_cluster,
+                'sw_version': 'N/A',
+                'kernel_version': node_info.kernel_version | default('N/A'),
+                'power_mode': 'N/A',
+                'bios_version': node_info.bios_version | default('N/A'),
+                'microcode_version': node_info.microcode_version | default('N/A')
+              },
+              'hardware_info': {
+                'cpu_type': node_info.cpu_type | default('N/A'),
+                'cpu_family': node_info.cpu_family | default('N/A'),
+                'cpu_model': node_info.cpu_model_number | default('N/A'),
+                'architecture': node_info.bios_settings.arch | default('N/A'),
+                'threads_per_core': node_info.threads_per_core | default('N/A')
+              },
+              'proc_cmdline': node_info.kernel_cmdline | default(''),
+              'performance_profiles_yaml': node_info.performance_profiles_yaml | default('')
+            })
+          }}
+
+- name: Set default cluster info when node-info not found
+  when: not node_info_file.stat.exists
+  ansible.builtin.set_fact:
+    report_data: >-
+      {{
+        report_data | combine({
+          'cluster_info': {
+            'cluster': spoke_cluster,
+            'sw_version': 'N/A',
+            'kernel_version': 'N/A',
+            'power_mode': 'N/A',
+            'bios_version': 'N/A',
+            'microcode_version': 'N/A'
+          },
+          'hardware_info': {}
+        })
+      }}

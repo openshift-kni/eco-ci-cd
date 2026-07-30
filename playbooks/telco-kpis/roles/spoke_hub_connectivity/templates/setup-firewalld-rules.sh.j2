@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+# Firewalld rich rules for spoke-hub connectivity.
+#
+# Uses flock(1) to serialize concurrent firewalld operations across
+# independent Prow jobs targeting the same hypervisor. The
+# ansible.posix.firewalld module cannot be used here because it
+# reads, modifies, and writes the zone XML file non-atomically —
+# when two Ansible processes run concurrently on the same host,
+# the second write overwrites the first's changes, silently
+# dropping rich rules. flock(1) provides kernel-level mutual
+# exclusion with automatic release on process exit or crash.
+
+LOCK_FILE="/var/lock/spoke-hub-firewalld.lock"
+LOCK_TIMEOUT=60
+
+flock --exclusive --timeout "${LOCK_TIMEOUT}" "${LOCK_FILE}" bash -c '
+{% for port in spoke_hub_connectivity_bmc_ports %}
+  firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address={{ spoke_hub_connectivity_spoke_bmc_ip_range }} destination address={{ spoke_hub_connectivity_hv_corporate_ip }}/32 forward-port port={{ port }} protocol=tcp to-port={{ spoke_hub_connectivity_port_dest_mapping[port] | default(port) }} to-addr={{ spoke_hub_connectivity_hub_cluster_ip }}" 2>/dev/null || true
+{% endfor %}
+{% for port in spoke_hub_connectivity_cluster_ports %}
+  firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address={{ spoke_hub_connectivity_spoke_cluster_ip_range }} destination address={{ spoke_hub_connectivity_hv_corporate_ip }}/32 forward-port port={{ port }} protocol=tcp to-port={{ spoke_hub_connectivity_port_dest_mapping[port] | default(port) }} to-addr={{ spoke_hub_connectivity_hub_cluster_ip }}" 2>/dev/null || true
+{% endfor %}
+{% for port in spoke_hub_connectivity_cluster_registry_ports %}
+  firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address={{ spoke_hub_connectivity_spoke_cluster_ip_range }} destination address={{ spoke_hub_connectivity_hv_corporate_ip }}/32 forward-port port={{ port }} protocol=tcp to-port={{ port }} to-addr={{ spoke_hub_connectivity_hub_bastion_ip }}" 2>/dev/null || true
+{% endfor %}
+  firewall-cmd --reload
+'

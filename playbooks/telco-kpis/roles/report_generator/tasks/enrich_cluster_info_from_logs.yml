@@ -1,0 +1,48 @@
+---
+# Enrich cluster info with OCP version and power mode from test logs (ranmetrics)
+# These are exported in tests like OSLAT, CYCLICTEST, PTP
+
+- name: Find first test log with ranmetrics
+  ansible.builtin.find:
+    paths: "{{ shared_artifact_dir }}"
+    patterns: "podman-run.log"
+    recurse: true
+  register: podman_logs
+
+- name: Extract OCP version and power mode from ranmetrics
+  when: podman_logs.files | length > 0
+  block:
+    - name: Read first podman log
+      ansible.builtin.slurp:
+        src: "{{ podman_logs.files[0].path }}"
+      register: first_log
+
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        log_text: "{{ first_log.content | b64decode }}"
+
+    - name: Extract SW version from ranmetrics
+      ansible.builtin.set_fact:
+        sw_version_match: "{{
+            log_text |
+            regex_search('RAN_METRICS_SW_VERSION=\"([^\"]+)\"', '\\1')
+          }}"
+
+    - name: Extract power mode from ranmetrics
+      ansible.builtin.set_fact:
+        power_mode_match: "{{
+            log_text |
+            regex_search('RAN_METRICS_POWER_MODE=\"([^\"]+)\"', '\\1')
+          }}"
+
+    - name: Update cluster_info with extracted values
+      ansible.builtin.set_fact:
+        report_data: >-
+          {{
+            report_data | combine({
+              'cluster_info': report_data.cluster_info | combine({
+                'sw_version': (sw_version_match | default(['N/A'], true) | first),
+                'power_mode': (power_mode_match | default(['N/A'], true) | first)
+              })
+            })
+          }}

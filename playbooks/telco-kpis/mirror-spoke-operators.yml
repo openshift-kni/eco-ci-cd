@@ -201,6 +201,43 @@
         # (already set at play level based on ocp_operator_mirror_generate_lockdown)
       no_log: "{{ ansible_verbosity < 3 }}"
 
+    - name: Clean up digest-based CatalogSources from hub
+      block:
+        - name: List all CatalogSources in openshift-marketplace
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            namespace: openshift-marketplace
+          register: _hub_catalogsources
+
+        - name: Identify digest-based CatalogSources (sha256 in name)
+          ansible.builtin.set_fact:
+            _sha256_catalogsources: >-
+              {{
+                _hub_catalogsources.resources
+                | map(attribute='metadata')
+                | selectattr('name', 'search', '-sha256-')
+                | map(attribute='name')
+                | list
+              }}
+
+        - name: Remove digest-based CatalogSources from hub
+          when: _sha256_catalogsources | length > 0
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: operators.coreos.com/v1alpha1
+            kind: CatalogSource
+            namespace: openshift-marketplace
+            name: "{{ item }}"
+            state: absent
+          loop: "{{ _sha256_catalogsources }}"
+
+        - name: Report removed CatalogSources
+          ansible.builtin.debug:
+            msg: "Removed {{ _sha256_catalogsources | length }} digest-based CatalogSource(s): {{ _sha256_catalogsources | join(', ') }}"
+          when: _sha256_catalogsources | length > 0
+
     - name: Generate lockdown JSON from accumulated metadata
       when: ocp_operator_mirror_generate_lockdown | bool
       ansible.builtin.include_role:

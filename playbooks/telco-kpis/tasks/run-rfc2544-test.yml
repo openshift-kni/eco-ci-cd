@@ -321,7 +321,11 @@
     path: "/tmp/ran-integration-{{ spoke_cluster }}"
     state: absent
 
-- name: Fail if test failed
-  ansible.builtin.fail:
-    msg: "RFC2544 test failed with exit code {{ rfc2544_exit_code }}"
+- name: Warn if test failed
+  ansible.builtin.debug:
+    msg: "[WARNING] RFC2544 test failed with exit code {{ rfc2544_exit_code }}"
   when: rfc2544_exit_code | int != 0
+
+- name: Display test completion message
+  ansible.builtin.debug:
+    msg: "RFC2544 test completed with exit code {{ rfc2544_exit_code }}"

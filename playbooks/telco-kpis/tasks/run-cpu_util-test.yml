@@ -15,6 +15,7 @@
       repositories, sets up the test environment, executes the test, and
       captures results.
     test_default_duration: "{{ telco_kpis_default_duration_cpu_util }}"
+    test_pre_command: 'export RAN_METRICS_FORMAL_TEST="true"'
     test_command: "bash scripts/test_cpu_util.sh cpu_util={{ duration | default(telco_kpis_default_duration_cpu_util) }}"
     test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_cpu_util) }})"
     test_additional_repos:

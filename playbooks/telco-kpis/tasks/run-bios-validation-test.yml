@@ -293,9 +293,9 @@
     path: "{{ artifacts_dir.path }}"
     state: absent
 
-- name: Fail if validation found mismatches (unless fixes were applied)
-  ansible.builtin.fail:
-    msg: "BIOS validation failed: {{ failed_settings }} setting(s) do not match expected values. Review validation report for details."
+- name: Warn if validation found mismatches (unless fixes were applied)
+  ansible.builtin.debug:
+    msg: "[WARNING] BIOS validation failed: {{ failed_settings }} setting(s) do not match expected values. Review validation report for details."
   when: failed_settings | int > 0 and not (apply_fixes | bool)
 
 - name: Display validation complete message

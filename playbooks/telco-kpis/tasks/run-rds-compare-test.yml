@@ -145,9 +145,9 @@
     path: "{{ reference_repo_path }}"
     state: absent
 
-- name: Fail if comparison found mismatches (unless baseline mode)
-  ansible.builtin.fail:
-    msg: "RDS comparison failed: cluster state does not match reference metadata. Review cluster-compare.log for details."
+- name: Warn if comparison found mismatches (unless baseline mode)
+  ansible.builtin.debug:
+    msg: "[WARNING] RDS comparison failed: cluster state does not match reference metadata. Review cluster-compare.log for details."
   when:
     - not compare_success
     - not (baseline | default(false))

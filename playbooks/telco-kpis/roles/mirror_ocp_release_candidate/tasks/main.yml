@@ -32,17 +32,24 @@
     _mirror_rc_digest: >-
       {{ mirror_rc_release_image | regex_search('sha256:[a-f0-9]+') }}
 
+- name: Derive art-dev repository name from OCP version
+  ansible.builtin.set_fact:
+    _mirror_rc_ocp_major: "{{ (mirror_rc_ocp_version | default('4.0', true)).split('.')[0] }}"
+    _mirror_rc_artdev_repo: >-
+      ocp-v{{ (mirror_rc_ocp_version | default('4.0', true)).split('.')[0] }}.0-art-dev
+
 - name: Display release image to check
   ansible.builtin.debug:
     msg:
       - "Release image: {{ mirror_rc_release_image }}"
       - "Repository:    {{ _mirror_rc_image_repo }}"
       - "Digest:        {{ _mirror_rc_digest }}"
+      - "Art-dev repo:  {{ _mirror_rc_artdev_repo | trim }}"
 
 # -- Determine the mirror repo path from registries.conf ------------------
 # The assisted-service resolves image mirrors via its registries.conf
 # (from the mirror-registry-ca ConfigMap), NOT the cluster IDMS.
-# We find a mirror path common to both ocp-release and ocp-v4.0-art-dev
+# We find a mirror path common to both ocp-release and ocp-v{major}.0-art-dev
 # so the assisted-service can locate all mirrored images during ignition
 # generation.  Falls back to IDMS, then to a configurable default.
 
@@ -65,6 +72,20 @@
       vars:
         _conf: "{{ _mirror_rc_registries_cm.resources[0].data['registries.conf'] }}"
         _prefix: "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}"
+        _artdev_escaped: "{{ _mirror_rc_artdev_repo | trim | regex_replace('\\.', '\\.') }}"
+      ansible.builtin.set_fact:
+        _mirror_rc_artdev_mirrors: >-
+          {{ _conf
+             | regex_findall('(?s)location\s*=\s*"quay\.io/openshift-release-dev/' ~ _artdev_escaped ~ '".*?(?=\n\[\[registry\]\]|\Z)')
+             | first | default('')
+             | regex_findall('\[\[registry\.mirror\]\][^[]*location\s*=\s*"([^"]+)"')
+             | select('match', '^' ~ _prefix)
+             | list }}
+
+    - name: Fall back to ocp-v4.0-art-dev mirrors if versioned entry not found
+      vars:
+        _conf: "{{ _mirror_rc_registries_cm.resources[0].data['registries.conf'] }}"
+        _prefix: "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}"
       ansible.builtin.set_fact:
         _mirror_rc_artdev_mirrors: >-
           {{ _conf
@@ -73,6 +94,9 @@
              | regex_findall('\[\[registry\.mirror\]\][^[]*location\s*=\s*"([^"]+)"')
              | select('match', '^' ~ _prefix)
              | list }}
+      when:
+        - _mirror_rc_artdev_mirrors | default([]) | length == 0
+        - _mirror_rc_ocp_major != '4'
 
     - name: Extract release mirror paths from registries.conf
       vars:
@@ -240,7 +264,8 @@
 # tag rather than relying on the mirror status.
 - name: Mirror sigstore .sig tags for release images (OCP 4.21+)
   when:
-    - (mirror_rc_ocp_version | default('0.0', true)).split('.')[1] | int >= 21
+    - _mirror_rc_ocp_major | int >= 5
+      or (mirror_rc_ocp_version | default('0.0', true)).split('.')[1] | int >= 21
   block:
     - name: Check if release image .sig tag exists in disconnected registry
       vars:
@@ -329,7 +354,7 @@
           ansible.builtin.command: >-
             oc image mirror --insecure=true
             -a {{ mirror_rc_pull_secret_path }}
-            "quay.io/openshift-release-dev/ocp-v4.0-art-dev:{{ _sig_tag }}"
+            "quay.io/openshift-release-dev/{{ _mirror_rc_artdev_repo | trim }}:{{ _sig_tag }}"
             "{{ mirror_rc_registry_url }}:{{ mirror_rc_registry_port }}/{{ _mirror_rc_mirror_repo | trim }}:{{ _sig_tag }}"
           loop: "{{ _mirror_rc_art_dev_digests }}"
           loop_control:
@@ -344,6 +369,126 @@
             _failed: "{{ _mirror_rc_sig_artdev_results.results | rejectattr('rc', 'equalto', 0) | list | length }}"
           ansible.builtin.debug:
             msg: "Art-dev .sig mirroring: {{ _succeeded }}/{{ _mirror_rc_art_dev_digests | length }} succeeded, {{ _failed }} skipped"
+
+# -- Ensure mirror config includes the versioned art-dev repository ----------
+# When the OCP major version differs from 4 (e.g. 5.0), the assisted-service
+# needs registries.conf and IDMS entries for ocp-v{major}.0-art-dev pointing
+# to the same mirror paths used by ocp-v4.0-art-dev.
+- name: Add versioned art-dev mirror entries
+  when:
+    - _mirror_rc_ocp_major != '4'
+  block:
+    - name: Re-read registries.conf ConfigMap for update
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: "{{ mirror_rc_configmap_name }}"
+        namespace: "{{ mirror_rc_configmap_namespace }}"
+        kubeconfig: "{{ mirror_rc_kubeconfig }}"
+      register: _mirror_rc_cm_current
+
+    - name: Check if registries.conf already has versioned art-dev entry
+      vars:
+        _conf: "{{ _mirror_rc_cm_current.resources[0].data['registries.conf'] }}"
+        _artdev_escaped: "{{ _mirror_rc_artdev_repo | trim | regex_replace('\\.', '\\.') }}"
+      ansible.builtin.set_fact:
+        _mirror_rc_conf_has_versioned: >-
+          {{ _conf | regex_search('quay\.io/openshift-release-dev/' ~ _artdev_escaped) is not none }}
+
+    - name: Append versioned art-dev registry block to registries.conf
+      when: not (_mirror_rc_conf_has_versioned | bool)
+      block:
+        - name: Extract mirror paths from existing ocp-v4.0-art-dev entry
+          vars:
+            _conf: "{{ _mirror_rc_cm_current.resources[0].data['registries.conf'] }}"
+          ansible.builtin.set_fact:
+            _mirror_rc_v4_mirror_locs: >-
+              {{ _conf
+                 | regex_findall('(?s)location\s*=\s*"quay\.io/openshift-release-dev/ocp-v4\.0-art-dev".*?(?=\n\[\[registry\]\]|\Z)')
+                 | first | default('')
+                 | regex_findall('\[\[registry\.mirror\]\][^[]*location\s*=\s*"([^"]+)"') }}
+
+        - name: Build new registry block for versioned art-dev
+          ansible.builtin.set_fact:
+            _mirror_rc_new_block: |
+
+              [[registry]]
+                prefix = ""
+                location = "quay.io/openshift-release-dev/{{ _mirror_rc_artdev_repo | trim }}"
+                mirror-by-digest-only = true
+              {% for mirror_loc in _mirror_rc_v4_mirror_locs %}
+
+                [[registry.mirror]]
+                  location = "{{ mirror_loc }}"
+              {% endfor %}
+          when: _mirror_rc_v4_mirror_locs | length > 0
+
+        - name: Patch registries.conf ConfigMap with versioned art-dev entry
+          kubernetes.core.k8s_json_patch:
+            api_version: v1
+            kind: ConfigMap
+            name: "{{ mirror_rc_configmap_name }}"
+            namespace: "{{ mirror_rc_configmap_namespace }}"
+            kubeconfig: "{{ mirror_rc_kubeconfig }}"
+            patch:
+              - op: replace
+                path: /data/registries.conf
+                value: >-
+                  {{ _mirror_rc_cm_current.resources[0].data['registries.conf']
+                     ~ _mirror_rc_new_block }}
+          when: _mirror_rc_new_block is defined
+
+        - name: Display registries.conf update result
+          ansible.builtin.debug:
+            msg: >-
+              Added {{ _mirror_rc_artdev_repo | trim }} registry block to
+              {{ mirror_rc_configmap_name }} ConfigMap in
+              {{ mirror_rc_configmap_namespace }} namespace.
+          when: _mirror_rc_new_block is defined
+
+    - name: Ensure IDMS has versioned art-dev entry
+      block:
+        - name: Read ocp-art-mirror IDMS
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: ImageDigestMirrorSet
+            name: ocp-art-mirror
+            kubeconfig: "{{ mirror_rc_kubeconfig }}"
+          register: _mirror_rc_idms_artmirror
+          ignore_errors: true
+
+        - name: Patch IDMS with versioned art-dev entry
+          vars:
+            _artdev_source: "quay.io/openshift-release-dev/{{ _mirror_rc_artdev_repo | trim }}"
+            _existing_sources: >-
+              {{ (_mirror_rc_idms_artmirror.resources | default([]) | first | default({}))
+                 .spec.imageDigestMirrors | default([])
+                 | map(attribute='source') | list }}
+            _v4_mirrors: >-
+              {{ (_mirror_rc_idms_artmirror.resources | default([]) | first | default({}))
+                 .spec.imageDigestMirrors | default([])
+                 | selectattr('source', 'equalto', 'quay.io/openshift-release-dev/ocp-v4.0-art-dev')
+                 | map(attribute='mirrors') | flatten | list }}
+          kubernetes.core.k8s_json_patch:
+            api_version: config.openshift.io/v1
+            kind: ImageDigestMirrorSet
+            name: ocp-art-mirror
+            kubeconfig: "{{ mirror_rc_kubeconfig }}"
+            patch:
+              - op: add
+                path: /spec/imageDigestMirrors/-
+                value:
+                  mirrors: "{{ _v4_mirrors }}"
+                  source: "{{ _artdev_source }}"
+          when:
+            - _mirror_rc_idms_artmirror.resources | default([]) | length > 0
+            - _artdev_source not in _existing_sources
+
+        - name: Display IDMS update result
+          ansible.builtin.debug:
+            msg: >-
+              Ensured ocp-art-mirror IDMS has entry for
+              quay.io/openshift-release-dev/{{ _mirror_rc_artdev_repo | trim }}.
 
 - name: Set output fact
   ansible.builtin.set_fact:

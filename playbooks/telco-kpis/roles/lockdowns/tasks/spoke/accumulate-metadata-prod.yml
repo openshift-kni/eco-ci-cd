@@ -165,9 +165,13 @@
             | list
           }}
 
+        # Prefer the input lockdown's pinned bundle digest when available.
+        # Falls back to oc-mirror's [0] match only for fresh lockdown generation.
         _lockdown_bundle_image: >-
           {{
-            _lockdown_matching_bundles[0] if _lockdown_matching_bundles | length > 0 else ''
+            operator.bundle
+            if (operator.bundle | default('') | length > 0)
+            else (_lockdown_matching_bundles[0] if _lockdown_matching_bundles | length > 0 else '')
           }}
 
         # Use existing nsname if not empty, otherwise look up in map

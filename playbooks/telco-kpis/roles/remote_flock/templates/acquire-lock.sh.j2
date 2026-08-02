@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+LOCK_DIR="{{ remote_flock_lock_dir }}/remote_flock_{{ remote_flock_name }}.lock"
+POLL_INTERVAL={{ remote_flock_poll_interval }}
+STALE_TIMEOUT={{ remote_flock_timeout }}
+ACQUIRE_TIMEOUT={{ remote_flock_acquire_timeout }}
+
+if command -v uuidgen &>/dev/null; then
+    UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+else
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+fi
+
+DEADLINE=$(($(date +%s) + ACQUIRE_TIMEOUT))
+
+while true; do
+    NOW=$(date +%s)
+    if [ "${NOW}" -ge "${DEADLINE}" ]; then
+        echo "ERROR: Timed out acquiring lock '{{ remote_flock_name }}' after ${ACQUIRE_TIMEOUT}s" >&2
+        exit 1
+    fi
+
+    if [ -d "${LOCK_DIR}" ] && [ -f "${LOCK_DIR}/info" ]; then
+        LOCK_TIME=$(grep '^TIMESTAMP=' "${LOCK_DIR}/info" 2>/dev/null | cut -d= -f2 || echo "")
+        if [ -n "${LOCK_TIME}" ]; then
+            AGE=$((NOW - LOCK_TIME))
+            if [ "${AGE}" -ge "${STALE_TIMEOUT}" ]; then
+                STALE_DIR="${LOCK_DIR}.stale.$$"
+                if mv "${LOCK_DIR}" "${STALE_DIR}" 2>/dev/null; then
+                    rm -rf "${STALE_DIR}"
+                    echo "Broke stale lock '{{ remote_flock_name }}' (age: ${AGE}s, timeout: ${STALE_TIMEOUT}s)" >&2
+                fi
+            fi
+        fi
+    fi
+
+    if mkdir "${LOCK_DIR}" 2>/dev/null; then
+        cat > "${LOCK_DIR}/info" <<LOCK_INFO
+UUID=${UUID}
+TIMESTAMP=$(date +%s)
+LOCK_INFO
+        echo "${UUID}"
+        exit 0
+    fi
+
+    echo "Lock '{{ remote_flock_name }}' is held, retrying in ${POLL_INTERVAL}s..." >&2
+    sleep "${POLL_INTERVAL}"
+done

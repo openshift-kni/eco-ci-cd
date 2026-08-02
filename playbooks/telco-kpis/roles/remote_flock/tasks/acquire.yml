@@ -1,0 +1,43 @@
+---
+- name: Validate remote_flock_name is defined
+  ansible.builtin.assert:
+    that:
+      - remote_flock_name is defined
+      - remote_flock_name | length > 0
+    fail_msg: "remote_flock_name must be defined and non-empty"
+
+- name: Ensure lock base directory exists
+  ansible.builtin.file:
+    path: "{{ remote_flock_lock_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Create temporary acquire script
+  ansible.builtin.tempfile:
+    suffix: "_remote_flock_acquire.sh"
+  register: _remote_flock_acquire_script
+
+- name: Acquire lock '{{ remote_flock_name }}'
+  block:
+    - name: Render acquire-lock script
+      ansible.builtin.template:
+        src: acquire-lock.sh.j2
+        dest: "{{ _remote_flock_acquire_script.path }}"
+        mode: "0755"
+
+    - name: Execute acquire-lock script
+      ansible.builtin.command:
+        cmd: "{{ _remote_flock_acquire_script.path }}"
+      register: _remote_flock_acquire_result
+      changed_when: true
+
+    - name: Store lock UUID
+      ansible.builtin.set_fact:
+        remote_flock_uuid: "{{ _remote_flock_acquire_result.stdout | trim }}"
+
+  always:
+    - name: Cleanup acquire script
+      ansible.builtin.file:
+        path: "{{ _remote_flock_acquire_script.path }}"
+        state: absent
+      when: _remote_flock_acquire_script.path is defined

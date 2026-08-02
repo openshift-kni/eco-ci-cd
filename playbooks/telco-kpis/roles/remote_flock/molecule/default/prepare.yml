@@ -1,0 +1,31 @@
+---
+- name: Prepare test environment for remote_flock role
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Remove previous test artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/molecule-remote-flock
+        - /tmp/remote_flock_molecule_test_acquire.sh
+        - /tmp/remote_flock_molecule_test_release.sh
+
+    - name: Remove any leftover lock directories
+      ansible.builtin.shell:
+        cmd: rm -rf /var/lock/remote_flock_molecule_test.lock*
+      changed_when: true
+
+    - name: Create test artifacts directory
+      ansible.builtin.file:
+        path: /tmp/molecule-remote-flock
+        state: directory
+        mode: "0755"
+
+    - name: Create empty output file for concurrent workers
+      ansible.builtin.file:
+        path: /tmp/molecule-remote-flock/output.txt
+        state: touch
+        mode: "0666"

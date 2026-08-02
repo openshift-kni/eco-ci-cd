@@ -1,0 +1,155 @@
+---
+- name: Converge - Test basic acquire/release and concurrent access
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    lock_name: molecule_test
+    worker_count: 5
+    test_output_file: /tmp/molecule-remote-flock/output.txt
+
+  tasks:
+    # --- Phase 1: Basic acquire/release ---
+
+    - name: "Basic test - Acquire lock"
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: acquire.yml
+      vars:
+        remote_flock_name: "{{ lock_name }}"
+        remote_flock_poll_interval: 2
+        remote_flock_timeout: 30
+
+    - name: "Basic test - Store UUID"
+      ansible.builtin.set_fact:
+        basic_test_uuid: "{{ remote_flock_uuid }}"
+
+    - name: "Basic test - Verify lock directory exists"
+      ansible.builtin.stat:
+        path: "/var/lock/remote_flock_{{ lock_name }}.lock"
+      register: lock_dir_stat
+
+    - name: "Basic test - Assert lock was created"
+      ansible.builtin.assert:
+        that:
+          - lock_dir_stat.stat.exists
+          - lock_dir_stat.stat.isdir
+          - basic_test_uuid | length > 0
+        fail_msg: "Lock directory was not created"
+
+    - name: "Basic test - Verify lock info contains our UUID"
+      ansible.builtin.slurp:
+        src: "/var/lock/remote_flock_{{ lock_name }}.lock/info"
+      register: lock_info
+
+    - name: "Basic test - Assert UUID in lock info"
+      ansible.builtin.assert:
+        that:
+          - basic_test_uuid in (lock_info.content | b64decode)
+        fail_msg: "Lock info does not contain expected UUID"
+
+    - name: "Basic test - Release lock"
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: release.yml
+      vars:
+        remote_flock_name: "{{ lock_name }}"
+        remote_flock_uuid: "{{ basic_test_uuid }}"
+
+    - name: "Basic test - Verify lock directory removed"
+      ansible.builtin.stat:
+        path: "/var/lock/remote_flock_{{ lock_name }}.lock"
+      register: lock_dir_after
+
+    - name: "Basic test - Assert lock was released"
+      ansible.builtin.assert:
+        that:
+          - not lock_dir_after.stat.exists
+        fail_msg: "Lock directory was not removed after release"
+
+    - name: "Basic test - PASSED"
+      ansible.builtin.debug:
+        msg: "Basic acquire/release test passed (UUID={{ basic_test_uuid }})"
+
+    # --- Phase 2: Concurrent access ---
+    # Template scripts once to a shared test location for concurrent workers.
+    # Each worker generates its own UUID via the acquire script.
+
+    - name: "Concurrent test - Acquire to template scripts"
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: acquire.yml
+      vars:
+        remote_flock_name: "{{ lock_name }}"
+        remote_flock_poll_interval: 1
+        remote_flock_timeout: 30
+        remote_flock_acquire_timeout: 120
+
+    - name: "Concurrent test - Store setup UUID"
+      ansible.builtin.set_fact:
+        setup_uuid: "{{ remote_flock_uuid }}"
+
+    - name: "Concurrent test - Template scripts to test directory"
+      ansible.builtin.template:
+        src: "{{ lookup('first_found', search) }}"
+        dest: "/tmp/molecule-remote-flock/{{ item.dest }}"
+        mode: "0755"
+      vars:
+        search:
+          files:
+            - "{{ item.src }}"
+          paths:
+            - "{{ lookup('env', 'ANSIBLE_ROLES_PATH') }}/remote_flock/templates"
+        remote_flock_name: "{{ lock_name }}"
+        remote_flock_lock_dir: /var/lock
+        remote_flock_poll_interval: 1
+        remote_flock_timeout: 30
+        remote_flock_acquire_timeout: 120
+      loop:
+        - { src: acquire-lock.sh.j2, dest: acquire.sh }
+        - { src: release-lock.sh.j2, dest: release.sh }
+
+    - name: "Concurrent test - Release setup lock"
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: release.yml
+      vars:
+        remote_flock_name: "{{ lock_name }}"
+        remote_flock_uuid: "{{ setup_uuid }}"
+
+    - name: "Concurrent test - Copy worker script"
+      ansible.builtin.copy:
+        src: files/worker.sh
+        dest: /tmp/molecule-remote-flock/worker.sh
+        mode: "0755"
+
+    - name: "Concurrent test - Launch workers: {{ worker_count }}"
+      ansible.builtin.command:
+        cmd: >-
+          /tmp/molecule-remote-flock/worker.sh
+          /tmp/molecule-remote-flock/acquire.sh
+          /tmp/molecule-remote-flock/release.sh
+          {{ test_output_file }}
+      async: 120
+      poll: 0
+      register: worker_jobs
+      loop: "{{ range(1, worker_count + 1) | list }}"
+
+    - name: "Concurrent test - Wait for all workers to complete"
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: worker_results
+      until: worker_results.finished
+      retries: 60
+      delay: 2
+      loop: "{{ worker_jobs.results }}"
+
+    - name: "Concurrent test - Assert all workers succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "Worker failed: {{ item.stderr | default('unknown error') }}"
+      loop: "{{ worker_results.results }}"
+      loop_control:
+        label: "worker {{ idx }}"
+        index_var: idx

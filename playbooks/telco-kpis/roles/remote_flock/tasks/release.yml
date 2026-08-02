@@ -1,0 +1,34 @@
+---
+- name: Validate release parameters
+  ansible.builtin.assert:
+    that:
+      - remote_flock_name is defined
+      - remote_flock_name | length > 0
+      - remote_flock_uuid is defined
+      - remote_flock_uuid | length > 0
+    fail_msg: "remote_flock_name and remote_flock_uuid must be defined"
+
+- name: Create temporary release script
+  ansible.builtin.tempfile:
+    suffix: "_remote_flock_release.sh"
+  register: _remote_flock_release_script
+
+- name: Release lock '{{ remote_flock_name }}'
+  block:
+    - name: Render release-lock script
+      ansible.builtin.template:
+        src: release-lock.sh.j2
+        dest: "{{ _remote_flock_release_script.path }}"
+        mode: "0755"
+
+    - name: Execute release-lock script
+      ansible.builtin.command:
+        cmd: "{{ _remote_flock_release_script.path }} {{ remote_flock_uuid }}"
+      changed_when: true
+
+  always:
+    - name: Cleanup release script
+      ansible.builtin.file:
+        path: "{{ _remote_flock_release_script.path }}"
+        state: absent
+      when: _remote_flock_release_script.path is defined

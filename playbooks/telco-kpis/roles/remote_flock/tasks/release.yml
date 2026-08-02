@@ -22,6 +22,7 @@
         mode: "0755"
 
     - name: Execute release-lock script
+      become: "{{ remote_flock_become }}"
       ansible.builtin.command:
         cmd: "{{ _remote_flock_release_script.path }} {{ remote_flock_uuid }}"
       changed_when: true

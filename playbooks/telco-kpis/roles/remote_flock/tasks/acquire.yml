@@ -7,6 +7,7 @@
     fail_msg: "remote_flock_name must be defined and non-empty"
 
 - name: Ensure lock base directory exists
+  become: "{{ remote_flock_become }}"
   ansible.builtin.file:
     path: "{{ remote_flock_lock_dir }}"
     state: directory
@@ -26,6 +27,7 @@
         mode: "0755"
 
     - name: Execute acquire-lock script
+      become: "{{ remote_flock_become }}"
       ansible.builtin.command:
         cmd: "{{ _remote_flock_acquire_script.path }}"
       register: _remote_flock_acquire_result

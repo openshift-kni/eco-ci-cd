@@ -93,6 +93,22 @@
           ansible.builtin.set_fact:
             reboot_status: "{{ reboot_status_match[0] if reboot_status_match else 'N/A' }}"
 
+    - name: Read deployment-timeline.json for milestone data
+      ansible.builtin.slurp:
+        src: "{{ current_test.dir_path }}/deployment-timeline.json"
+      register: ztp_timeline_json_content
+      failed_when: false
+
+    - name: Parse milestones from deployment-timeline.json
+      when: ztp_timeline_json_content.content is defined
+      ansible.builtin.set_fact:
+        ztp_milestones: "{{ ztp_timeline_json_content.content | b64decode | from_json }}"
+
+    - name: Set empty milestones when no JSON file
+      when: ztp_timeline_json_content.content is not defined
+      ansible.builtin.set_fact:
+        ztp_milestones: []
+
     - name: Set defaults when no timeline file
       when: ztp_timeline_content.content is not defined
       ansible.builtin.set_fact:
@@ -134,6 +150,8 @@
                   'failed': ztp_result.failed,
                   'skipped': ztp_result.skipped,
                   'deployment_time_human': ztp_result.deployment_time_human,
+                  'deployment_time_seconds': deployment_time_seconds | float,
+                  'milestones': ztp_milestones | default([]),
                   'reboot_count': ztp_result.reboot_count,
                   'reboot_status': ztp_result.reboot_status,
                   'reboot_analysis': ztp_result.reboot_analysis,

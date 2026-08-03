@@ -1,0 +1,14 @@
+---
+# Map reboot report_data fields to legacy Splunk event schema
+# Legacy sends TWO events per test: one for soft_reboot, one for power_cycle
+# Each contains an Iterations array with per-iteration stage timings
+
+- name: Set reboot multi-events (soft_reboot + power_cycle)
+  ansible.builtin.set_fact:
+    _skr_multi_events:
+      - test_type: "reboot"
+        reboot_type: "soft_reboot"
+        Iterations: "{{ _skr_test_item.value.soft_reboot_iterations | default([]) | to_json | from_json }}"
+      - test_type: "reboot"
+        reboot_type: "power_cycle"
+        Iterations: "{{ _skr_test_item.value.power_cycle_iterations | default([]) | to_json | from_json }}"

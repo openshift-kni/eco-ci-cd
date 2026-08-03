@@ -1,0 +1,9 @@
+---
+# Map rds_compare report_data fields to legacy Splunk event schema
+
+- name: Set rds_compare-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      crs_with_diffs: "{{ _skr_test_item.value.crs_with_diffs | default(0) }}"
+      total_crs: "{{ _skr_test_item.value.total_crs | default(0) }}"
+      missing_crs: "{{ _skr_test_item.value.missing_crs | default(0) }}"

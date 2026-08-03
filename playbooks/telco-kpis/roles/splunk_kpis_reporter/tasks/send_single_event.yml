@@ -1,0 +1,83 @@
+---
+# Build and send a single Splunk HEC event
+
+- name: Map report status to legacy JUnit status values
+  ansible.builtin.set_fact:
+    _skr_legacy_status: >-
+      {{ {'PASS': 'passed', 'FAIL': 'failed', 'N/A': 'skipped'}[_skr_test_item.value.status | default('')]
+         | default(_skr_test_item.value.status | default('') | lower) }}
+
+- name: Build HEC event payload
+  ansible.builtin.set_fact:
+    _skr_hec_event:
+      host: "{{ skr_splunk_url }}"
+      sourcetype: "_json"
+      event: >-
+        {{ _skr_common | combine({
+          'test_type': _skr_event_fields.test_type | default(_skr_test_type),
+          'status': _skr_legacy_status | trim,
+          'cluster_artifacts': _skr_cluster_artifacts
+        }) | combine(_skr_event_fields) }}
+
+- name: Generate event filename
+  ansible.builtin.set_fact:
+    _skr_event_path: >-
+      {{ skr_output_dir }}/event-{{ _skr_event_fields.test_type
+         | default(_skr_test_type) }}-{{ _skr_test_item.key
+         | hash('md5') | truncate(8, True, '') }}-{{ _skr_event_idx }}.json
+
+- name: Write event to file
+  ansible.builtin.copy:
+    content: "{{ _skr_hec_event | to_nice_json }}"
+    dest: "{{ _skr_event_path }}"
+    mode: '0644'
+
+- name: Display event payload
+  when: skr_debug | bool
+  ansible.builtin.debug:
+    msg: "{{ _skr_hec_event }}"
+
+- name: Show event data types for nested arrays
+  when: skr_debug | bool
+  ansible.builtin.debug:
+    msg: >-
+      Event type={{ _skr_event_fields.test_type | default(_skr_test_type) }},
+      event.event type={{ _skr_hec_event.event | type_debug }},
+      {% if _skr_hec_event.event.Iterations is defined %}
+      Iterations type={{ _skr_hec_event.event.Iterations | type_debug }},
+      Iterations[0] type={{ (_skr_hec_event.event.Iterations[0] | default({})) | type_debug }},
+      total_minutes type={{ (_skr_hec_event.event.Iterations[0].total_minutes | default('N/A')) | type_debug }}
+      {% elif _skr_hec_event.event.scenarios is defined %}
+      scenarios type={{ _skr_hec_event.event.scenarios | type_debug }},
+      scenarios[0] type={{ (_skr_hec_event.event.scenarios[0] | default({})) | type_debug }}
+      {% else %}
+      (no nested arrays)
+      {% endif %}
+
+- name: POST to Splunk HEC (with retries)
+  ansible.builtin.uri:
+    url: "{{ skr_splunk_url }}?index={{ skr_splunk_index }}"
+    method: POST
+    headers:
+      Authorization: "Splunk {{ skr_splunk_token }}"
+    body: "{{ _skr_hec_event }}"
+    body_format: json
+    validate_certs: false
+    timeout: "{{ skr_request_timeout }}"
+    status_code: [200, 201, 202]
+  register: _skr_send_result
+  until: _skr_send_result is not failed
+  retries: "{{ skr_retries }}"
+  delay: "{{ skr_retry_delay }}"
+  when: skr_do_send | bool
+  no_log: "{{ not (skr_debug | bool) }}"
+
+- name: Confirm event sent
+  ansible.builtin.debug:
+    msg: >-
+      Splunk event sent: type={{ _skr_event_fields.test_type | default(_skr_test_type) }}
+      {{ '(reboot_type=' ~ _skr_event_fields.reboot_type ~ ')' if _skr_event_fields.reboot_type is defined else '' }}
+      status={{ _skr_legacy_status | trim }}
+      HTTP={{ _skr_send_result.status | default('dry-run') }}
+      file={{ _skr_event_path | trim }}
+  when: skr_do_send | bool

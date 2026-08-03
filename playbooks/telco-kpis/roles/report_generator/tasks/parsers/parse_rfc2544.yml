@@ -248,6 +248,7 @@
                 'frame_size': frame_size_measured,
                 'latency_distribution_percent': latency_distribution_percent,
                 'latency_distribution_nines': latency_distribution_nines,
+                'histogram_raw': histogram_line | default(''),
                 'rds_criteria_met': rds_criteria_met,
                 'tolerance_criteria_met': tolerance_criteria_met,
                 'pass_criteria': pass_criteria,

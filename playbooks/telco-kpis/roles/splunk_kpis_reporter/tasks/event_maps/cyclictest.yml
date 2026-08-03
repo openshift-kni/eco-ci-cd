@@ -1,0 +1,27 @@
+---
+# Map cyclictest report_data fields to legacy Splunk event schema
+
+- name: Build cyclictest test_units from thread_results
+  ansible.builtin.set_fact:
+    _skr_cyclictest_units: >-
+      {{ _skr_cyclictest_units | default([]) + [{
+        'index': item.thread | string,
+        'max_latency': item.max | default(0),
+        'min_latency': item.min | default(0),
+        'avg_latency': item.avg | default(0),
+        'availability': item.availability | default(100.0),
+        'number_of_nines': item.number_of_nines | default(100)
+      }] }}
+  loop: "{{ _skr_test_item.value.thread_results | default([]) }}"
+  loop_control:
+    label: "thread {{ item.thread | default('?') }}"
+
+- name: Set cyclictest-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      duration: "{{ _skr_test_item.value.test_duration | default('') }}"
+      test_units: "{{ _skr_cyclictest_units | default([]) }}"
+      max_overall: "{{ _skr_test_item.value.max_overall | default(0) }}"
+      availability_overall: "{{ _skr_test_item.value.availability_overall | default(100.0) }}"
+      number_of_nines_overall: "{{ _skr_test_item.value.number_of_nines_overall | default(100) }}"
+      threads: "{{ _skr_test_item.value.threads | default(0) }}"

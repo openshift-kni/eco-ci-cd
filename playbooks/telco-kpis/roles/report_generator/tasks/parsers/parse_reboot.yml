@@ -126,6 +126,61 @@
           reboot_count: "{{ reboot_count }}"
           test_cases: "{{ reboot_filtered_test_cases | default([]) }}"
 
+    - name: Extract reboot ranmetrics from log
+      when: reboot_log is defined
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -E '^\s*ranmetrics_(soft_reboot|power_cycle)_' | \
+        python3 -c "
+        import sys, json
+        iterations = {'soft_reboot': [], 'power_cycle': []}
+        current = {'soft_reboot': {}, 'power_cycle': {}}
+        for line in sys.stdin:
+            line = line.strip()
+            if not line.startswith('ranmetrics_'):
+                continue
+            parts = line.split(': ', 1)
+            if len(parts) != 2:
+                continue
+            key, val = parts
+            key = key.replace('ranmetrics_', '')
+            for rtype in ['soft_reboot', 'power_cycle']:
+                if not key.startswith(rtype + '_'):
+                    continue
+                field = key[len(rtype)+1:]
+                if field == 'total':
+                    current[rtype]['total_minutes'] = round(float(val) / 60.0, 2)
+                    current[rtype]['iteration'] = len(iterations[rtype])
+                    iterations[rtype].append(dict(current[rtype]))
+                    current[rtype] = {}
+                else:
+                    fparts = field.split('_', 1)
+                    if len(fparts) == 2 and fparts[0].isdigit():
+                        field_name = fparts[1]
+                    else:
+                        field_name = field
+                    current[rtype][field_name] = float(val)
+        print(json.dumps(iterations))
+        "
+      args:
+        stdin: "{{ reboot_log }}"
+        executable: /bin/bash
+      register: reboot_ranmetrics_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse reboot ranmetrics
+      ansible.builtin.set_fact:
+        reboot_iterations: "{{ reboot_ranmetrics_result.stdout | default('{}') | from_json }}"
+      when: reboot_ranmetrics_result.stdout is defined and reboot_ranmetrics_result.stdout | length > 2
+
+    - name: Set empty reboot iterations when no ranmetrics found
+      ansible.builtin.set_fact:
+        reboot_iterations:
+          soft_reboot: []
+          power_cycle: []
+      when: reboot_iterations is not defined
+
     - name: Store reboot result in report data
       ansible.builtin.set_fact:
         report_data: >-
@@ -142,6 +197,8 @@
                   'skipped': reboot_result.skipped,
                   'reboot_count': reboot_result.reboot_count,
                   'test_cases': reboot_result.test_cases,
+                  'soft_reboot_iterations': reboot_iterations.soft_reboot | default([]),
+                  'power_cycle_iterations': reboot_iterations.power_cycle | default([]),
                   'raw_log_excerpt': reboot_log_excerpt | default('No log available'),
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

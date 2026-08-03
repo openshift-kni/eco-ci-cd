@@ -1,0 +1,16 @@
+---
+- name: Acquire remote flock on hypervisor
+  hosts: hypervisor
+  gather_facts: false
+  tasks:
+    - name: Acquire lock
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: acquire
+
+    - name: Save lock UUID to local file
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ remote_flock_uuid }}"
+        dest: "{{ remote_flock_uuid_file }}"
+        mode: "0600"

@@ -1,0 +1,6 @@
+---
+remote_flock_lock_dir: /var/lock
+remote_flock_poll_interval: 60
+remote_flock_timeout: 1800
+remote_flock_acquire_timeout: 3600
+remote_flock_become: false

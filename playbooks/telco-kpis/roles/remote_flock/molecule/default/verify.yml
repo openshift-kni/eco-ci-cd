@@ -1,0 +1,88 @@
+---
+- name: Verify - Validate remote_flock concurrent access
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_output_file: /tmp/molecule-remote-flock/output.txt
+    worker_count: 5
+
+  tasks:
+    - name: Check output file exists
+      ansible.builtin.stat:
+        path: "{{ test_output_file }}"
+      register: output_stat
+
+    - name: Assert output file was created
+      ansible.builtin.assert:
+        that:
+          - output_stat.stat.exists
+        fail_msg: "Output file was not created at {{ test_output_file }}"
+
+    - name: Read output file content
+      ansible.builtin.slurp:
+        src: "{{ test_output_file }}"
+      register: output_content
+
+    - name: Parse output lines
+      ansible.builtin.set_fact:
+        output_lines: "{{ (output_content.content | b64decode).strip().splitlines() | select() | list }}"
+
+    - name: Assert correct number of UUIDs were written
+      ansible.builtin.assert:
+        that:
+          - output_lines | length == worker_count
+        fail_msg: >-
+          Expected {{ worker_count }} UUIDs, got {{ output_lines | length }}:
+          {{ output_lines }}
+
+    - name: Assert each line is a valid UUID (no interleaving)
+      ansible.builtin.assert:
+        that:
+          - item is regex('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        fail_msg: >-
+          Invalid UUID detected (characters were interleaved): '{{ item }}'
+      loop: "{{ output_lines }}"
+      loop_control:
+        label: "uuid {{ idx }}"
+        index_var: idx
+
+    - name: Assert all UUIDs are unique
+      ansible.builtin.assert:
+        that:
+          - output_lines | unique | length == output_lines | length
+        fail_msg: >-
+          Duplicate UUIDs found — lock did not provide mutual exclusion:
+          {{ output_lines }}
+
+    - name: Assert lock directory was cleaned up
+      ansible.builtin.stat:
+        path: /var/lock/remote_flock_molecule_test.lock
+      register: lock_cleanup_stat
+
+    - name: Assert no lock remains after all workers finished
+      ansible.builtin.assert:
+        that:
+          - not lock_cleanup_stat.stat.exists
+        fail_msg: "Lock directory was not cleaned up after all workers finished"
+
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "remote_flock Role - All Tests PASSED"
+          - "=========================================="
+          - "Basic acquire/release: PASSED"
+          - "Concurrent workers: {{ worker_count }}"
+          - "UUIDs written (all valid, no interleaving):"
+          - "{{ output_lines }}"
+          - "=========================================="
+
+    - name: Cleanup test artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/molecule-remote-flock
+        - /tmp/remote_flock_molecule_test_acquire.sh
+        - /tmp/remote_flock_molecule_test_release.sh

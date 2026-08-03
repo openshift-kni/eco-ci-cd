@@ -1,0 +1,9 @@
+---
+- name: Release remote flock on hypervisor
+  hosts: hypervisor
+  gather_facts: false
+  tasks:
+    - name: Release lock
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: release

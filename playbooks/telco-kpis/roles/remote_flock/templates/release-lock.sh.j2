@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+UUID="${1:?UUID required as first argument}"
+LOCK_DIR="{{ remote_flock_lock_dir }}/remote_flock_{{ remote_flock_name }}.lock"
+
+if [ ! -d "${LOCK_DIR}" ]; then
+    echo "WARNING: Lock '{{ remote_flock_name }}' does not exist, nothing to release" >&2
+    exit 0
+fi
+
+if [ -f "${LOCK_DIR}/info" ]; then
+    STORED_UUID=$(grep '^UUID=' "${LOCK_DIR}/info" | cut -d= -f2)
+    if [ "${STORED_UUID}" != "${UUID}" ]; then
+        echo "ERROR: Lock '{{ remote_flock_name }}' is held by UUID=${STORED_UUID}, not ${UUID}" >&2
+        exit 1
+    fi
+fi
+
+rm -rf "${LOCK_DIR}"
+echo "Released lock '{{ remote_flock_name }}' (UUID=${UUID})" >&2

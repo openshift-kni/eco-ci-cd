@@ -45,7 +45,6 @@
 #   system_rpm_sha256: 'deadbeef...'            # sha256 of the artifact at system_rpm_link
 #   ca_update_link: https://example/ca.crt      # URL to the CA certificate to trust
 #   ca_update_sha256: 'deadbeef...'             # sha256 of the artifact at ca_update_link
-#   oc_mirror_sha256: 'deadbeef...'             # sha256 of the resolved oc-mirror.rhel*.tar.gz
 
 # hypervisor:
 #   ansible_host: 10.1.1.1                      # IP address or hostname of the hypervisor
@@ -268,7 +267,8 @@
       ansible.builtin.dnf:
         name: "{{ system_rpm_path }}"
         state: present
-        disable_gpg_check: false
+        # This RPM is not signed
+        disable_gpg_check: true
 
     - name: Activate OS
       ansible.builtin.command:
@@ -473,6 +473,7 @@
           - kubernetes==33.1.0
         state: present
 
+    # Do not check the checksum here, doing so breaks the ability to change OCP versions
     - name: Download oc-mirror archive
       vars:
         _oc_mirror_url: >-
@@ -482,7 +483,6 @@
       ansible.builtin.get_url:
         url: "{{ _oc_mirror_url }}"
         dest: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
-        checksum: "sha256:{{ oc_mirror_sha256 }}"
         mode: '0644'
 
     - name: Extract oc-mirror archive

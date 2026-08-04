@@ -172,7 +172,8 @@
       ansible.builtin.dnf:
         name: "{{ system_rpm_path }}"
         state: present
-        disable_gpg_check: false
+        # This RPM is not signed
+        disable_gpg_check: true
 
     - name: Activate OS
       ansible.builtin.command:

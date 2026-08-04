@@ -143,11 +143,19 @@
 | **Cores** | {{ result.cores }} |
 
 {% if result.core_results %}
+{% if result.core_results[0].min is defined %}
+| Core | Min (µs) | Avg (µs) | Max (µs) | Availability | Nines | Result |
+|------|----------|----------|----------|-------------|-------|--------|
+{%   for core in result.core_results %}
+| {{ core.core }} | {{ core.min }} | {{ core.avg }} | {{ core.max }} | {{ core.availability | default('-') }}{% if core.availability is defined and core.availability != '-' %}%{% endif %} | {{ core.number_of_nines | default('-') }} | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% else %}
 | Core | Max | Result |
 |------|-----|--------|
 {%   for core in result.core_results %}
 | {{ core.core }} | {{ core.max }} µs | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
 {%   endfor %}
+{% endif %}
 {% endif %}
 
 {{ non_passing_tests_detail(result.test_cases | default([]), 'oslat') }}
@@ -192,13 +200,24 @@
 
 **Threads**: {{ result.threads }}
 **Max Latency**: {{ result.max_overall }} µs
+{% if result.availability_overall is defined %}
+**Overall Availability**: {{ result.availability_overall }}% ({{ result.number_of_nines_overall | default('-') }} nines)
+{% endif %}
 
 {% if result.thread_results %}
+{% if result.thread_results[0].availability is defined %}
+| Thread | Min (µs) | Avg (µs) | Max (µs) | Availability | Nines | Result |
+|--------|----------|----------|----------|-------------|-------|--------|
+{%   for thread in result.thread_results %}
+| {{ thread.thread }} | {{ thread.min }} | {{ thread.avg }} | {{ thread.max }} | {{ thread.availability | default('-') }}{% if thread.availability is defined and thread.availability != '-' %}%{% endif %} | {{ thread.number_of_nines | default('-') }} | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
+{%   endfor %}
+{% else %}
 | Thread | Min | Avg | Max | Result |
 |--------|-----|-----|-----|--------|
 {%   for thread in result.thread_results %}
 | {{ thread.thread }} | {{ thread.min }} µs | {{ thread.avg }} µs | {{ thread.max }} µs | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
 {%   endfor %}
+{% endif %}
 {% endif %}
 
 {{ non_passing_tests_detail(result.test_cases | default([]), 'cyclictest') }}
@@ -220,6 +239,69 @@
 **Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
 **Suite time**: {{ result.suite_time }}
 
+{% if result.scenarios is defined and result.scenarios | length > 0 %}
+
+#### CPU Usage by Scenario
+
+| Scenario | Max CPU (Total) | Max CPU (OS Daemon) | Max CPU (Infra Pods) |
+|----------|----------------|--------------------|--------------------|
+{% for scenario in result.scenarios %}
+{%   set s_name = scenario.scenario_name | default(scenario.name | default('unknown')) %}
+{%   if scenario.types is defined %}
+{%     set total_t = scenario.types | selectattr('type_name', 'equalto', 'total') | first | default({}) %}
+{%     set os_t = scenario.types | selectattr('type_name', 'equalto', 'os_daemon') | first | default({}) %}
+{%     set infra_t = scenario.types | selectattr('type_name', 'equalto', 'infra_pods') | first | default({}) %}
+| {{ s_name }} | {{ total_t.max_cpu | default('-') }} | {{ os_t.max_cpu | default('-') }} | {{ infra_t.max_cpu | default('-') }} |
+{%   else %}
+| {{ s_name }} | {{ scenario.max_cpu | default('-') }} | - | - |
+{%   endif %}
+{% endfor %}
+
+{% set sw = result.scenarios | selectattr('scenario_name', 'defined') | selectattr('scenario_name', 'equalto', 'steadyworkload') | first | default(none) %}
+{% if sw is none %}
+{%   set sw = result.scenarios | selectattr('name', 'defined') | selectattr('name', 'equalto', 'steadyworkload') | first | default(none) %}
+{% endif %}
+{% if sw is not none and sw.avg_cpu_total is defined %}
+
+**Steady Workload Avg CPU Total**: {{ sw.avg_cpu_total | round(3) }} CPUs
+
+{% if sw.components_os_daemon is defined and sw.components_os_daemon | length > 0 %}
+<details>
+<summary><b>Steady Workload Component Breakdown</b></summary>
+
+##### Top OS Daemon Components (avg CPU > 0.005)
+
+{% set high_os = sw.components_os_daemon | selectattr('avg_cpu', 'gt', 0.005) | sort(attribute='avg_cpu', reverse=true) | list %}
+{% if high_os | length > 0 %}
+| Group | Avg CPU |
+|-------|---------|
+{% for c in high_os %}
+| {{ c.group_name | default(c.id | default('unknown')) }} | {{ c.avg_cpu | round(6) }} |
+{% endfor %}
+{% else %}
+All OS daemon components below 0.005 CPU threshold.
+{% endif %}
+
+{% if sw.components_infra_pods is defined and sw.components_infra_pods | length > 0 %}
+##### Top Infra Pod Components (avg CPU > 0.005)
+
+{% set high_pods = sw.components_infra_pods | selectattr('avg_cpu', 'gt', 0.005) | sort(attribute='avg_cpu', reverse=true) | list %}
+{% if high_pods | length > 0 %}
+| Namespace | Pod | Avg CPU |
+|-----------|-----|---------|
+{% for c in high_pods %}
+| {{ c.namespace | default('-') }} | {{ c.pod | default('-') }} | {{ c.avg_cpu | round(6) }} |
+{% endfor %}
+{% else %}
+All infra pod components below 0.005 CPU threshold.
+{% endif %}
+{% endif %}
+
+</details>
+{% endif %}
+{% endif %}
+{% endif %}
+
 {{ non_passing_tests_detail(result.test_cases, 'cpu_util') }}
 
 {% elif result.test_type == 'reboot' and result.reboot_count is defined %}
@@ -232,6 +314,91 @@
 
 **Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
 **Reboot count**: {{ result.reboot_count }}
+
+{% if result.soft_reboot_iterations is defined and result.soft_reboot_iterations | length > 0 %}
+
+#### Reboot Recovery Analysis
+
+##### Soft Reboot
+{% set sr_totals = result.soft_reboot_iterations | map(attribute='total_minutes') | list %}
+
+| Metric | Value |
+|--------|-------|
+| **Iterations** | {{ sr_totals | length }} |
+| **Avg Total** | {{ (sr_totals | sum / sr_totals | length) | round(2) }} min |
+| **Max Total** | {{ sr_totals | max | round(2) }} min |
+| **Min Total** | {{ sr_totals | min | round(2) }} min |
+
+<details>
+<summary><b>Per-Iteration Breakdown (Soft Reboot)</b></summary>
+
+| Iter | Total (min) | OS Recovery (s) | OCP Reachable (s) | Workload Recovery (s) | Cluster Recovery (s) |
+|------|-------------|----------------|--------------------|-----------------------|---------------------|
+{% for it in result.soft_reboot_iterations %}
+| {{ it.iteration }} | {{ it.total_minutes }} | {{ it.os_recovery | default('-') }} | {{ it.openshift_reachable | default('-') }} | {{ it.workload_recovery | default('-') }} | {{ it.cluster_recovery | default('-') }} |
+{% endfor %}
+
+{% set sr_os = result.soft_reboot_iterations | map(attribute='os_recovery') | select('number') | list %}
+{% set sr_ocp = result.soft_reboot_iterations | map(attribute='openshift_reachable') | select('number') | list %}
+{% set sr_wl = result.soft_reboot_iterations | map(attribute='workload_recovery') | select('number') | list %}
+{% set sr_cl = result.soft_reboot_iterations | map(attribute='cluster_recovery') | select('number') | list %}
+{% if sr_os | length > 0 %}
+
+| Stage | Avg (s) | Max (s) | Min (s) |
+|-------|---------|---------|---------|
+| OS Recovery | {{ (sr_os | sum / sr_os | length) | round(1) }} | {{ sr_os | max | round(1) }} | {{ sr_os | min | round(1) }} |
+{% if sr_ocp | length > 0 %}| OCP Reachable | {{ (sr_ocp | sum / sr_ocp | length) | round(1) }} | {{ sr_ocp | max | round(1) }} | {{ sr_ocp | min | round(1) }} |
+{% endif %}
+{% if sr_wl | length > 0 %}| Workload Recovery | {{ (sr_wl | sum / sr_wl | length) | round(1) }} | {{ sr_wl | max | round(1) }} | {{ sr_wl | min | round(1) }} |
+{% endif %}
+{% if sr_cl | length > 0 %}| Cluster Recovery | {{ (sr_cl | sum / sr_cl | length) | round(1) }} | {{ sr_cl | max | round(1) }} | {{ sr_cl | min | round(1) }} |
+{% endif %}
+{% endif %}
+
+</details>
+
+{% endif %}
+{% if result.power_cycle_iterations is defined and result.power_cycle_iterations | length > 0 %}
+
+##### Power Cycle
+{% set pc_totals = result.power_cycle_iterations | map(attribute='total_minutes') | list %}
+
+| Metric | Value |
+|--------|-------|
+| **Iterations** | {{ pc_totals | length }} |
+| **Avg Total** | {{ (pc_totals | sum / pc_totals | length) | round(2) }} min |
+| **Max Total** | {{ pc_totals | max | round(2) }} min |
+| **Min Total** | {{ pc_totals | min | round(2) }} min |
+
+<details>
+<summary><b>Per-Iteration Breakdown (Power Cycle)</b></summary>
+
+| Iter | Total (min) | OS Recovery (s) | OCP Reachable (s) | Workload Recovery (s) | Cluster Recovery (s) |
+|------|-------------|----------------|--------------------|-----------------------|---------------------|
+{% for it in result.power_cycle_iterations %}
+| {{ it.iteration }} | {{ it.total_minutes }} | {{ it.os_recovery | default('-') }} | {{ it.openshift_reachable | default('-') }} | {{ it.workload_recovery | default('-') }} | {{ it.cluster_recovery | default('-') }} |
+{% endfor %}
+
+{% set pc_os = result.power_cycle_iterations | map(attribute='os_recovery') | select('number') | list %}
+{% set pc_ocp = result.power_cycle_iterations | map(attribute='openshift_reachable') | select('number') | list %}
+{% set pc_wl = result.power_cycle_iterations | map(attribute='workload_recovery') | select('number') | list %}
+{% set pc_cl = result.power_cycle_iterations | map(attribute='cluster_recovery') | select('number') | list %}
+{% if pc_os | length > 0 %}
+
+| Stage | Avg (s) | Max (s) | Min (s) |
+|-------|---------|---------|---------|
+| OS Recovery | {{ (pc_os | sum / pc_os | length) | round(1) }} | {{ pc_os | max | round(1) }} | {{ pc_os | min | round(1) }} |
+{% if pc_ocp | length > 0 %}| OCP Reachable | {{ (pc_ocp | sum / pc_ocp | length) | round(1) }} | {{ pc_ocp | max | round(1) }} | {{ pc_ocp | min | round(1) }} |
+{% endif %}
+{% if pc_wl | length > 0 %}| Workload Recovery | {{ (pc_wl | sum / pc_wl | length) | round(1) }} | {{ pc_wl | max | round(1) }} | {{ pc_wl | min | round(1) }} |
+{% endif %}
+{% if pc_cl | length > 0 %}| Cluster Recovery | {{ (pc_cl | sum / pc_cl | length) | round(1) }} | {{ pc_cl | max | round(1) }} | {{ pc_cl | min | round(1) }} |
+{% endif %}
+{% endif %}
+
+</details>
+
+{% endif %}
 
 {{ non_passing_tests_detail(result.test_cases, 'reboot') }}
 
@@ -250,6 +417,24 @@
 |-------------------|-------------------|
 | {{ result.deployment_time_human }} | {{ result.reboot_count | default('N/A') }} ({{ result.reboot_status | default('N/A') }}) |
 
+{% if result.milestones is defined and result.milestones | length >= 3 %}
+{% set start_evt = result.milestones | selectattr('event', 'equalto', 'ZTP.ClusterInstanceCreated') | first | default(none) %}
+{% set install_evt = result.milestones | selectattr('event', 'equalto', 'AgentClusterInstall.Condition.Completed') | first | default(none) %}
+{% set end_evt = result.milestones | selectattr('event', 'equalto', 'TALM.CGU.Completed') | first | default(none) %}
+{% if start_evt is not none and install_evt is not none and end_evt is not none %}
+{% set deploy_secs = ((install_evt.timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (start_evt.timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int %}
+{% set policy_secs = ((end_evt.timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (install_evt.timestamp | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int %}
+
+#### Deployment Stage Breakdown
+
+| Stage | Duration | Start | End |
+|-------|----------|-------|-----|
+| **Deploy Node** (ClusterInstance → Install) | {{ (deploy_secs // 3600) }}h {{ ((deploy_secs % 3600) // 60) }}m {{ (deploy_secs % 60) }}s | {{ start_evt.timestamp }} | {{ install_evt.timestamp }} |
+| **Apply Policies** (Install → CGU Complete) | {{ (policy_secs // 3600) }}h {{ ((policy_secs % 3600) // 60) }}m {{ (policy_secs % 60) }}s | {{ install_evt.timestamp }} | {{ end_evt.timestamp }} |
+| **Total** | {{ result.deployment_time_human }} | | |
+
+{% endif %}
+{% endif %}
 This section shows the complete ZTP/ACM deployment timeline for the spoke cluster,
 including all deployment phases from GitOps sync to workload readiness.
 
@@ -305,7 +490,8 @@ including all deployment phases from GitOps sync to workload readiness.
 | **Throughput** | {{ result.throughput_percent }}% | ≥ {{ result.thresholds.throughput }}% | {{ '✅' if (result.throughput_percent | float) >= (result.thresholds.throughput | float) else '❌' }} |
 | **Max Latency** | {{ result.max_latency }}μs | < {{ result.thresholds.max_latency }}μs | {{ '✅' if (result.max_latency | float) < (result.thresholds.max_latency | float) else '❌' }} |
 | **Avg Latency** | {{ result.avg_latency }}μs | - | - |
-| **Frame Size** | {{ result.frame_size | int }} bytes | - | - |
+{% if result.min_latency is defined %}| **Min Latency** | {{ result.min_latency }}μs | - | - |
+{% endif %}| **Frame Size** | {{ result.frame_size | int }} bytes | - | - |
 | **Line Rate** | {{ result.actual_rate }}% | 80% | - |
 
 ### Pass/Fail Criteria

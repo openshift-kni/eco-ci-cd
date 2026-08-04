@@ -563,7 +563,7 @@
             src: "{{ pull_secret_file }}"
             remote_src: true
             dest: "$XDG_RUNTIME_DIR/containers/auth.json"
-            mode: "0644"
+            mode: "0600"
 
         - name: Mirror OpenShift release (disconnected)
           vars:

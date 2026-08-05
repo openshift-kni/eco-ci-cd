@@ -1,0 +1,118 @@
+---
+# Map rfc2544 report_data fields to legacy Splunk event schema
+# Transforms raw histogram string into structured arrays for dashboard charts
+
+- name: Transform histogram data for Splunk (legacy format)
+  ansible.builtin.shell: |
+    python3 << 'PYEOF'
+    import os, re, json
+
+    hist_str = os.environ.get('HIST_RAW', '')
+    max_delay = float(os.environ.get('MAX_DELAY', '0'))
+
+    if not hist_str.strip():
+        print(json.dumps({'histogram': [], 'under_30_nines': [100, 100]}))
+        raise SystemExit(0)
+
+    entries = [e.strip() for e in hist_str.split(';') if e.strip()]
+    histogram = []
+    total_fwd = 0
+    total_bwd = 0
+    under30_fwd = 0
+    under30_bwd = 0
+
+    for entry in entries:
+        bin_match = re.search(r'\{([^{}]*)\}', entry)
+        if not bin_match:
+            continue
+        bin_desc = bin_match.group(1)
+        parts = entry.split(',')
+        fwd_str = parts[1].strip() if len(parts) > 1 else '0'
+        bwd_str = parts[2].strip() if len(parts) > 2 else '0'
+        fwd = int(fwd_str)
+        bwd = int(bwd_str)
+        total_fwd += fwd
+        total_bwd += bwd
+
+        nums = [float(v) for v in re.findall(r'\d+\.\d+', bin_desc)]
+        if '>=' in bin_desc:
+            mid = str(nums[0]) + '+' if nums else '0+'
+            is_under_30 = False
+        else:
+            if len(nums) >= 2:
+                mid = round(sum(nums) / len(nums), 2)
+            elif len(nums) == 1:
+                mid = nums[0]
+            else:
+                mid = 0
+            is_under_30 = (nums[-1] if nums else 0) < 30.0
+
+        if is_under_30:
+            under30_fwd += fwd
+            under30_bwd += bwd
+
+        histogram.append({
+            'bin': mid,
+            'values': [
+                {'val': fwd_str, 'direction': 'forward'},
+                {'val': bwd_str, 'direction': 'back'}
+            ]
+        })
+
+    def calc_nines(total, under):
+        if total == 0:
+            return 100
+        pct = (under / total) * 100
+        if pct == 100:
+            return 100
+        pct_str = f'{pct:.10f}'
+        decimal = pct_str.split('.')[1] if '.' in pct_str else ''
+        count = 0
+        for c in decimal:
+            if c == '9':
+                count += 1
+            else:
+                break
+        return count
+
+    if max_delay < 30.0:
+        under_30_nines = [100, 100]
+    else:
+        under_30_nines = [
+            calc_nines(total_fwd, under30_fwd),
+            calc_nines(total_bwd, under30_bwd)
+        ]
+
+    print(json.dumps({'histogram': histogram, 'under_30_nines': under_30_nines}))
+    PYEOF
+  environment:
+    HIST_RAW: "{{ _skr_test_item.value.histogram_raw | default('') }}"
+    MAX_DELAY: "{{ _skr_test_item.value.max_latency | default(0) | string }}"
+  register: _skr_hist_result
+  changed_when: false
+  failed_when: false
+
+- name: Parse histogram transformation result
+  ansible.builtin.set_fact:
+    _skr_hist_data: >-
+      {{ _skr_hist_result.stdout | from_json
+         if (_skr_hist_result.rc | default(1) == 0
+             and _skr_hist_result.stdout | default('') | length > 0)
+         else {'histogram': [], 'under_30_nines': [100, 100]} }}
+
+- name: Set rfc2544-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific: >-
+      {{ {
+        'test_type': 'rfc-2544',
+        'max_throughput': _skr_test_item.value.throughput_percent | default(0) | float,
+        'max_delay': _skr_test_item.value.max_latency | default(0) | float,
+        'avg_delay': _skr_test_item.value.avg_latency | default(0) | float,
+        'min_delay': _skr_test_item.value.min_latency | default(0) | float,
+        'frame_size': _skr_test_item.value.frame_size | default(0) | float,
+        'duration': _skr_test_item.value.config.lat_duration | default('') | string,
+        'test_throughput': _skr_test_item.value.actual_rate | default(0) | float,
+        'nic': _skr_test_item.value.config.port1 | default(''),
+        'histogram': _skr_hist_data.histogram | default([]),
+        'under_30_nines': _skr_hist_data.under_30_nines | default([100, 100])
+      } }}

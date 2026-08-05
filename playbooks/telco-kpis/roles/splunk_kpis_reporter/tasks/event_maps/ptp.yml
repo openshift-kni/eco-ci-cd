@@ -1,0 +1,14 @@
+---
+# Map PTP report_data fields to legacy Splunk event schema
+
+- name: Set ptp-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      ptp4l_max_offset: "{{ _skr_test_item.value.ptp4l_max | default(0) | regex_replace('^N/A$', '0') | float }}"
+      ptp4l_min_offset: "{{ _skr_test_item.value.ptp4l_min | default(0) | regex_replace('^N/A$', '0') | float }}"
+      ptp4l_avg_offset: "{{ _skr_test_item.value.ptp4l_avg | default(0) | regex_replace('^N/A$', '0') | float }}"
+      phc2sys_max_offset: "{{ _skr_test_item.value.phc2sys_max | default(0) | regex_replace('^N/A$', '0') | float }}"
+      phc2sys_min_offset: "{{ _skr_test_item.value.phc2sys_min | default(0) | regex_replace('^N/A$', '0') | float }}"
+      phc2sys_avg_offset: "{{ _skr_test_item.value.phc2sys_avg | default(0) | regex_replace('^N/A$', '0') | float }}"
+      duration: "{{ _skr_test_item.value.duration | default('') }}"
+      ptp4l_restarts: "{{ _skr_test_item.value.ptp4l_restarts | default(0) | regex_replace('^N/A$', '0') | int }}"

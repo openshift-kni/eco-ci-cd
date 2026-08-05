@@ -1,0 +1,51 @@
+---
+# Map ztp_ai_deployment_time report_data fields to legacy Splunk event schema
+# Legacy sends two stages: deploy_sno_du_node (start→install) and wait_for_du_profile (install→CGU)
+
+- name: Find milestone timestamps for stage split
+  ansible.builtin.set_fact:
+    _skr_deploy_start_ts: >-
+      {{ (_skr_test_item.value.milestones | default([])
+          | selectattr('event', 'equalto', 'ZTP.ClusterInstanceCreated')
+          | map(attribute='timestamp') | first | default('')) }}
+    _skr_deploy_install_ts: >-
+      {{ (_skr_test_item.value.milestones | default([])
+          | selectattr('event', 'equalto', 'AgentClusterInstall.Condition.Completed')
+          | map(attribute='timestamp') | first | default('')) }}
+    _skr_deploy_end_ts: >-
+      {{ (_skr_test_item.value.milestones | default([])
+          | selectattr('event', 'equalto', 'TALM.CGU.Completed')
+          | map(attribute='timestamp') | first | default('')) }}
+
+- name: Compute stage times from milestone timestamps
+  when:
+    - _skr_deploy_start_ts | trim | length > 0
+    - _skr_deploy_install_ts | trim | length > 0
+    - _skr_deploy_end_ts | trim | length > 0
+  ansible.builtin.set_fact:
+    _skr_deploy_sno_seconds: >-
+      {{ ((_skr_deploy_install_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+        - (_skr_deploy_start_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}
+    _skr_wait_du_seconds: >-
+      {{ ((_skr_deploy_end_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+        - (_skr_deploy_install_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}
+
+- name: Fall back to total time when milestones unavailable
+  when: _skr_deploy_sno_seconds is not defined
+  ansible.builtin.set_fact:
+    _skr_deploy_sno_seconds: "{{ _skr_test_item.value.deployment_time_seconds | default(0) | float | round | int }}"
+    _skr_wait_du_seconds: null
+
+- name: Set deployment-specific fields (legacy schema)
+  ansible.builtin.set_fact:
+    _skr_test_specific: >-
+      {{ {
+        'test_type': 'deployment',
+        'iteration': 1,
+        'total_minutes': ((_skr_test_item.value.deployment_time_seconds | default(0) | float) / 60) | round(2),
+        'reboot_count': (_skr_test_item.value.reboot_count | default(0) | string | regex_replace('^N/A$', '0')) | int,
+        'stages': [
+          {'stage_name': 'deploy_sno_du_node', 'time': _skr_deploy_sno_seconds | default(0) | int},
+          {'stage_name': 'wait_for_du_profile', 'time': (_skr_wait_du_seconds | default(0)) | int}
+        ]
+      } }}

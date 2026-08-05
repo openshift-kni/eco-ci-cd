@@ -1,0 +1,141 @@
+---
+# Molecule prepare - creates mock report_data simulating report_generator output
+# Covers all 7 test types: oslat, cyclictest, ptp, reboot, cpu_util,
+# ztp_ai_deployment_time (maps to deployment), rfc2544 (maps to rfc-2544)
+- name: Prepare
+  hosts: localhost
+  gather_facts: true
+
+  vars:
+    test_output_dir: /tmp/molecule-splunk-reporter
+
+  tasks:
+    - name: Clean previous test artifacts
+      ansible.builtin.file:
+        path: "{{ test_output_dir }}"
+        state: absent
+
+    - name: Create test output directory
+      ansible.builtin.file:
+        path: "{{ test_output_dir }}"
+        state: directory
+        mode: '0755'
+
+    # yamllint disable rule:line-length
+    - name: Build mock report_data fact
+      ansible.builtin.set_fact:
+        report_data:
+          cluster_info:
+            sw_version: "4.22.0"
+            hub_version: "4.22.0"
+            kernel_version: "5.14.0-687.11.1.el9_8.x86_64+rt"
+            tuned_profile: "openshift-node-performance-profile"
+          hardware_info:
+            cpu_type: "Intel(R) Xeon(R) Gold 6330N CPU @ 2.20GHz"
+            cpu_model: "Intel(R) Xeon(R) Gold 6330N"
+            bios_version: "1.6.1"
+            microcode: "0xd0003b9"
+            architecture: "x86_64"
+          test_results:
+            # --- Oslat ---
+            oslat-spree-02-20260804-120000:
+              test_type: oslat
+              status: PASS
+              test_duration_seconds: 600
+              max_latency: 6
+              availability: "100.0"
+              cores: "3, 5"
+              core_results:
+                - {core: "3", max: 5, min: 0, avg: 1.0, availability: 100.0, number_of_nines: 100}
+                - {core: "5", max: 6, min: 0, avg: 1.0, availability: 100.0, number_of_nines: 100}
+            # --- Cyclictest ---
+            cyclictest-spree-02-20260804-130000:
+              test_type: cyclictest
+              status: PASS
+              test_duration: "10m"
+              max_overall: 14
+              threads: 2
+              availability_overall: 100.0
+              number_of_nines_overall: 100
+              thread_results:
+                - {thread: "0", min: 2, avg: 4, max: 14, availability: 100.0, number_of_nines: 100}
+                - {thread: "1", min: 2, avg: 3, max: 12, availability: 100.0, number_of_nines: 100}
+            # --- PTP ---
+            ptp-spree-02-20260804-140000:
+              test_type: ptp
+              status: PASS
+              ptp4l_max: 24
+              ptp4l_min: 1
+              ptp4l_avg: 3.448
+              phc2sys_max: 55
+              phc2sys_min: 2
+              phc2sys_avg: 5.204
+              ptp4l_restarts: 0
+            # --- Reboot (generates 2 events: soft_reboot + power_cycle) ---
+            reboot-spree-02-20260804-150000:
+              test_type: reboot
+              status: PASS
+              soft_reboot_iterations:
+                - {iteration: 1, total_minutes: 9.0, os_recovery: 2.1, openshift_reachable: 1.5, workload_recovery: 3.2, cluster_recovery: 2.2}
+                - {iteration: 2, total_minutes: 8.5, os_recovery: 2.0, openshift_reachable: 1.4, workload_recovery: 3.1, cluster_recovery: 2.0}
+              power_cycle_iterations:
+                - {iteration: 1, total_minutes: 8.28, os_recovery: 2.5, openshift_reachable: 1.8, workload_recovery: 2.5, cluster_recovery: 1.48}
+                - {iteration: 2, total_minutes: 6.37, os_recovery: 2.0, openshift_reachable: 1.2, workload_recovery: 2.0, cluster_recovery: 1.17}
+            # --- CPU Util ---
+            cpu_util-spree-02-20260804-160000:
+              test_type: cpu_util
+              status: PASS
+              duration: "8h 30m"
+              duration_breakdown:
+                total_human: "8h 30m"
+              scenarios:
+                - {name: "idle", max_cpu: 0.684, avg_cpu_total: 0.5}
+                - {name: "workloadlaunch", max_cpu: 0.801, avg_cpu_total: 0.6}
+                - {name: "mustgather", max_cpu: 0.788, avg_cpu_total: 0.55}
+                - {name: "promquery", max_cpu: 1.07, avg_cpu_total: 0.8}
+                - {name: "steadyworkload", max_cpu: 0.9, avg_cpu_total: 0.702}
+            # --- ZTP AI Deployment Time (maps to test_type: deployment) ---
+            ztp_ai_deployment_time-spree-02-20260804-170000:
+              test_type: ztp_ai_deployment_time
+              status: PASS
+              deployment_time_seconds: 4461
+              deployment_time_human: "1h 14m 21s"
+              reboot_count: 2
+              milestones:
+                - {event: "ZTP.ClusterInstanceCreated", timestamp: "2026-08-04T10:00:00Z"}
+                - {event: "AgentClusterInstall.Condition.Completed", timestamp: "2026-08-04T10:59:35Z"}
+                - {event: "TALM.CGU.Completed", timestamp: "2026-08-04T11:14:21Z"}
+            # --- RFC2544 (maps to test_type: rfc-2544) ---
+            rfc2544-spree-02-20260804-180000:
+              test_type: rfc2544
+              status: PASS
+              throughput_percent: 100.0
+              min_latency: 5.798
+              avg_latency: 6.909
+              max_latency: 26.51
+              actual_rate: 80.0
+              frame_size: 512.0
+              histogram_raw: "{x<1.28},0,0;{1.28<=x<2.56},0,0;{2.56<=x<3.84},0,0;{3.84<=x<5.12},12345,12340;{5.12<=x<6.40},16399016378,510635306;{6.40<=x<7.68},640535,223088;{7.68<=x<8.96},35804,5802;{8.96<=x<10.24},2065,425;{10.24<=x<11.52},228,228;{11.52<=x<12.80},228,228;{12.80<=x<14.08},228,228;{14.08<=x<15.36},228,228;{15.36<=x<16.64},228,228;{16.64<=x<17.92},228,228;{17.92<=x<32.92},413,33;{x>=32.92},228,228"
+              config:
+                lat_duration: "3600"
+                frame_size: "512"
+                lat_rate: "80"
+                port1: "1/1"
+                port2: "1/2"
+                testcfg: "rfc2544_config.tcc"
+                chassis: "spirent-chassis"
+                stcweb: "stcweb.example.com"
+                cluster: "spree-02"
+    # yamllint enable rule:line-length
+
+    - name: Display preparation summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Test Environment Prepared"
+          - "=========================================="
+          - "Mock report_data created with {{ report_data.test_results | length }} test results"
+          - "Test types: {{ report_data.test_results | dict2items | map(attribute='value.test_type') | list | join(', ') }}"
+          - "Output directory: {{ test_output_dir }}"
+          - "Expected events: 8 (reboot generates 2)"
+          - "=========================================="

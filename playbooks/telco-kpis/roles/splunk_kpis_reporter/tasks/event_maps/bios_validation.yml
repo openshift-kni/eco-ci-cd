@@ -1,0 +1,9 @@
+---
+# Map bios_validation report_data fields to legacy Splunk event schema
+
+- name: Set bios_validation-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      passed: "{{ _skr_test_item.value.passed | default(0) }}"
+      failed: "{{ _skr_test_item.value.failed | default(0) }}"
+      skipped: "{{ _skr_test_item.value.skipped | default(0) }}"

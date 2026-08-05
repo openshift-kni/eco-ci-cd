@@ -1,0 +1,565 @@
+---
+# Molecule verify - validates generated Splunk HEC events match legacy schema
+# Covers: event count, common fields, test-specific fields, type safety
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_output_dir: /tmp/molecule-splunk-reporter
+
+  tasks:
+    # ================================================================
+    # Phase 1: Event discovery and parsing
+    # ================================================================
+
+    - name: Find all generated event files
+      ansible.builtin.find:
+        paths: "{{ test_output_dir }}"
+        patterns: "event-*.json"
+      register: event_files
+
+    - name: Verify correct number of events generated
+      ansible.builtin.assert:
+        that:
+          - event_files.files | length == 8
+        fail_msg: >-
+          Expected 8 event files (7 test types, reboot generates 2),
+          found {{ event_files.files | length }}.
+          Files: {{ event_files.files | map(attribute='path') | list }}
+        success_msg: "Correct: 8 event files generated"
+
+    - name: Read all event files
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ event_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: event_contents
+
+    # Build three structures in a single pass:
+    #   all_events     - flat list of all parsed events
+    #   events_by_type - dict keyed by test_type (reboot gets overwritten, handled separately)
+    #   reboot_events  - list of reboot events only
+    - name: Parse and classify all events
+      ansible.builtin.set_fact:
+        all_events: "{{ all_events | default([]) + [_evt] }}"
+        events_by_type: "{{ events_by_type | default({}) | combine({_evt.event.test_type: _evt}) }}"
+        reboot_events: "{{ reboot_events | default([]) + ([_evt] if _evt.event.test_type == 'reboot' else []) }}"
+      vars:
+        _evt: "{{ item.content | b64decode | from_json }}"
+      loop: "{{ event_contents.results }}"
+      loop_control:
+        label: "{{ (item.content | b64decode | from_json).event.test_type }}"
+
+    # ================================================================
+    # Phase 2: Verify expected test types are present
+    # ================================================================
+
+    - name: Verify all expected test types present
+      ansible.builtin.assert:
+        that:
+          - "'oslat' in events_by_type"
+          - "'cyclictest' in events_by_type"
+          - "'ptp' in events_by_type"
+          - "'reboot' in events_by_type"
+          - "'cpu_util' in events_by_type"
+          - "'deployment' in events_by_type"
+          - "'rfc-2544' in events_by_type"
+        fail_msg: "Missing test types. Found: {{ events_by_type.keys() | list }}"
+        success_msg: "All 7 expected test types present (including mapped deployment and rfc-2544)"
+
+    - name: Verify reboot generates exactly 2 events
+      ansible.builtin.assert:
+        that:
+          - reboot_events | length == 2
+        fail_msg: "Expected 2 reboot events, found {{ reboot_events | length }}"
+        success_msg: "Reboot generated exactly 2 events"
+
+    # ================================================================
+    # Phase 3: Common field validation for ALL events
+    # ================================================================
+
+    - name: Verify sourcetype is _json for all events
+      ansible.builtin.assert:
+        that:
+          - item.sourcetype == '_json'
+        fail_msg: >-
+          {{ item.event.test_type }}: sourcetype is '{{ item.sourcetype }}', expected '_json'
+        success_msg: "{{ item.event.test_type }}: sourcetype correct"
+      loop: "{{ all_events }}"
+      loop_control:
+        label: "{{ item.event.test_type }}"
+
+    - name: Verify data is directly in event (NOT in event.test)
+      ansible.builtin.assert:
+        that:
+          - item.event.test is not defined
+          - item.event.test_type is defined
+        fail_msg: >-
+          {{ item.event.test_type }}: Data wrapped in event.test -- must be directly in event.{fields}
+      loop: "{{ all_events }}"
+      loop_control:
+        label: "{{ item.event.test_type }}"
+
+    # yamllint disable rule:line-length
+    - name: Verify common fields present in all events
+      ansible.builtin.assert:
+        that:
+          - item.event.ocp_version == '4.22.0'
+          - item.event.ocp_build == '4.22.0'
+          - item.event.node_name == 'spree-02'
+          - item.event.formal | bool == true
+          - "'Xeon' in (item.event.cpu | string)"
+          - "'5.14.0' in (item.event.kernel | string)"
+          - item.event.status is defined
+          - item.event.cluster_artifacts is defined
+        fail_msg: "{{ item.event.test_type }}: Missing or incorrect common fields"
+        success_msg: "{{ item.event.test_type }}: Common fields valid"
+      loop: "{{ all_events }}"
+      loop_control:
+        label: "{{ item.event.test_type }}"
+
+    - name: Verify cluster_artifacts has ocp.ocp_version_spoke
+      ansible.builtin.assert:
+        that:
+          - item.event.cluster_artifacts.ocp is defined
+          - item.event.cluster_artifacts.ocp.ocp_version_spoke == '4.22.0'
+          - item.event.cluster_artifacts.openshift_version == '4.22.0'
+          - item.event.cluster_artifacts.cluster_name == 'spree-02'
+        fail_msg: >-
+          {{ item.event.test_type }}: cluster_artifacts structure incorrect.
+          Got: {{ item.event.cluster_artifacts | to_json }}
+        success_msg: "{{ item.event.test_type }}: cluster_artifacts correct"
+      loop: "{{ all_events }}"
+      loop_control:
+        label: "{{ item.event.test_type }}"
+
+    # ================================================================
+    # Phase 4: Oslat-specific assertions
+    # ================================================================
+
+    - name: "OSLAT: Verify test_units array with legacy fields"
+      vars:
+        oslat: "{{ events_by_type.oslat.event }}"
+      ansible.builtin.assert:
+        that:
+          - oslat.test_type == 'oslat'
+          - oslat.test_units is defined
+          - oslat.test_units | length == 2
+          - oslat.test_units[0].index is defined
+          - oslat.test_units[0].max_latency is defined
+          - oslat.test_units[0].min_latency is defined
+          - oslat.test_units[0].avg_latency is defined
+          - oslat.test_units[0].availability is defined
+          - oslat.test_units[0].number_of_nines is defined
+          - oslat.duration is defined
+        fail_msg: "Oslat event missing test_units with 6 legacy fields (index, max_latency, min_latency, avg_latency, availability, number_of_nines)"
+        success_msg: "Oslat: test_units with 6 legacy fields per core -- correct"
+
+    - name: "OSLAT: Verify test_units values for core 3"
+      vars:
+        unit: "{{ events_by_type.oslat.event.test_units[0] }}"
+      ansible.builtin.assert:
+        that:
+          - unit.index == '3'
+          - unit.max_latency == 5
+          - unit.min_latency == 0
+          - unit.avg_latency == 1.0
+          - unit.availability == 100.0
+          - unit.number_of_nines == 100
+        fail_msg: "Oslat test_units[0] values incorrect: {{ unit }}"
+        success_msg: "Oslat: core 3 values correct"
+
+    - name: "OSLAT: Verify test_units values for core 5"
+      vars:
+        unit: "{{ events_by_type.oslat.event.test_units[1] }}"
+      ansible.builtin.assert:
+        that:
+          - unit.index == '5'
+          - unit.max_latency == 6
+          - unit.min_latency == 0
+          - unit.avg_latency == 1.0
+        fail_msg: "Oslat test_units[1] values incorrect: {{ unit }}"
+        success_msg: "Oslat: core 5 values correct"
+
+    - name: "OSLAT: Verify duration field"
+      ansible.builtin.assert:
+        that:
+          - events_by_type.oslat.event.duration | string == '600'
+        fail_msg: "Oslat duration should be 600, got {{ events_by_type.oslat.event.duration }}"
+        success_msg: "Oslat: duration correct"
+
+    # ================================================================
+    # Phase 5: Cyclictest-specific assertions
+    # ================================================================
+
+    - name: "CYCLICTEST: Verify test_units array with legacy fields"
+      vars:
+        cyclic: "{{ events_by_type.cyclictest.event }}"
+      ansible.builtin.assert:
+        that:
+          - cyclic.test_type == 'cyclictest'
+          - cyclic.test_units is defined
+          - cyclic.test_units | length == 2
+          - cyclic.test_units[0].index is defined
+          - cyclic.test_units[0].max_latency is defined
+          - cyclic.test_units[0].min_latency is defined
+          - cyclic.test_units[0].avg_latency is defined
+          - cyclic.test_units[0].availability is defined
+          - cyclic.test_units[0].number_of_nines is defined
+        fail_msg: "Cyclictest event missing test_units with 6 legacy fields"
+        success_msg: "Cyclictest: test_units with 6 legacy fields per thread -- correct"
+
+    - name: "CYCLICTEST: Verify test_units values for thread 0"
+      vars:
+        unit: "{{ events_by_type.cyclictest.event.test_units[0] }}"
+      ansible.builtin.assert:
+        that:
+          - unit.index == '0'
+          - unit.max_latency == 14
+          - unit.min_latency == 2
+          - unit.avg_latency == 4
+        fail_msg: "Cyclictest test_units[0] values incorrect: {{ unit }}"
+        success_msg: "Cyclictest: thread 0 values correct"
+
+    - name: "CYCLICTEST: Verify overall availability and number_of_nines"
+      vars:
+        cyclic: "{{ events_by_type.cyclictest.event }}"
+      ansible.builtin.assert:
+        that:
+          - cyclic.availability_overall is defined
+          - cyclic.number_of_nines_overall is defined
+        fail_msg: "Cyclictest missing overall availability/number_of_nines at event level"
+        success_msg: "Cyclictest: overall availability and number_of_nines present"
+
+    # ================================================================
+    # Phase 6: PTP-specific assertions
+    # ================================================================
+
+    - name: "PTP: Verify flat metric fields"
+      vars:
+        ptp: "{{ events_by_type.ptp.event }}"
+      ansible.builtin.assert:
+        that:
+          - ptp.test_type == 'ptp'
+          - ptp.ptp4l_max_offset is defined
+          - ptp.ptp4l_min_offset is defined
+          - ptp.ptp4l_avg_offset is defined
+          - ptp.phc2sys_max_offset is defined
+          - ptp.phc2sys_min_offset is defined
+          - ptp.phc2sys_avg_offset is defined
+          - ptp.ptp4l_restarts is defined
+        fail_msg: "PTP event missing required metric fields"
+        success_msg: "PTP: all metric fields present"
+
+    - name: "PTP: Verify metric values"
+      vars:
+        ptp: "{{ events_by_type.ptp.event }}"
+      ansible.builtin.assert:
+        that:
+          - ptp.ptp4l_max_offset | float == 24.0
+          - ptp.ptp4l_avg_offset | float == 3.448
+          - ptp.phc2sys_max_offset | float == 55.0
+          - ptp.phc2sys_avg_offset | float == 5.204
+          - ptp.ptp4l_restarts | int == 0
+        fail_msg: "PTP metric values incorrect"
+        success_msg: "PTP: metric values correct"
+
+    # ================================================================
+    # Phase 7: Reboot-specific assertions (2 events)
+    # ================================================================
+
+    - name: "REBOOT: Identify soft_reboot event"
+      ansible.builtin.set_fact:
+        soft_reboot_evt: "{{ item }}"
+      when: item.event.reboot_type == 'soft_reboot'
+      loop: "{{ reboot_events }}"
+      loop_control:
+        label: "{{ item.event.reboot_type }}"
+
+    - name: "REBOOT: Identify power_cycle event"
+      ansible.builtin.set_fact:
+        power_cycle_evt: "{{ item }}"
+      when: item.event.reboot_type == 'power_cycle'
+      loop: "{{ reboot_events }}"
+      loop_control:
+        label: "{{ item.event.reboot_type }}"
+
+    - name: "REBOOT: Verify both reboot_type values present"
+      ansible.builtin.assert:
+        that:
+          - soft_reboot_evt is defined
+          - power_cycle_evt is defined
+          - soft_reboot_evt.event.reboot_type == 'soft_reboot'
+          - power_cycle_evt.event.reboot_type == 'power_cycle'
+        fail_msg: "Expected reboot events with reboot_type soft_reboot and power_cycle"
+        success_msg: "Reboot: both reboot_type values (soft_reboot, power_cycle) present"
+
+    - name: "REBOOT: Verify soft_reboot has Iterations array"
+      ansible.builtin.assert:
+        that:
+          - soft_reboot_evt.event.Iterations is defined
+          - soft_reboot_evt.event.Iterations | length == 2
+          - soft_reboot_evt.event.Iterations[0].total_minutes is defined
+        fail_msg: "Soft reboot event missing Iterations array or total_minutes field"
+        success_msg: "Reboot soft_reboot: Iterations array with total_minutes present"
+
+    - name: "REBOOT: Verify soft_reboot total_minutes is numeric (not string)"
+      ansible.builtin.assert:
+        that:
+          - soft_reboot_evt.event.Iterations[0].total_minutes | type_debug in ['float', 'int']
+          - soft_reboot_evt.event.Iterations[0].total_minutes == 9.0
+        fail_msg: >-
+          Soft reboot Iterations[0].total_minutes must be numeric 9.0, got
+          {{ soft_reboot_evt.event.Iterations[0].total_minutes }}
+          (type: {{ soft_reboot_evt.event.Iterations[0].total_minutes | type_debug }})
+        success_msg: "Reboot soft_reboot: total_minutes is numeric"
+
+    - name: "REBOOT: Verify power_cycle has Iterations array"
+      ansible.builtin.assert:
+        that:
+          - power_cycle_evt.event.Iterations is defined
+          - power_cycle_evt.event.Iterations | length == 2
+          - power_cycle_evt.event.Iterations[0].total_minutes is defined
+        fail_msg: "Power cycle event missing Iterations array"
+        success_msg: "Reboot power_cycle: Iterations array with total_minutes present"
+
+    - name: "REBOOT: Verify power_cycle total_minutes is numeric (not string)"
+      ansible.builtin.assert:
+        that:
+          - power_cycle_evt.event.Iterations[0].total_minutes | type_debug in ['float', 'int']
+          - power_cycle_evt.event.Iterations[0].total_minutes == 8.28
+        fail_msg: >-
+          Power cycle Iterations[0].total_minutes must be numeric 8.28, got
+          {{ power_cycle_evt.event.Iterations[0].total_minutes }}
+          (type: {{ power_cycle_evt.event.Iterations[0].total_minutes | type_debug }})
+        success_msg: "Reboot power_cycle: total_minutes is numeric"
+
+    # ================================================================
+    # Phase 8: CPU Util-specific assertions
+    # ================================================================
+
+    - name: "CPU_UTIL: Verify scenarios array with duration"
+      vars:
+        cpu: "{{ events_by_type.cpu_util.event }}"
+      ansible.builtin.assert:
+        that:
+          - cpu.test_type == 'cpu_util'
+          - cpu.scenarios is defined
+          - cpu.scenarios | length == 5
+          - cpu.scenarios[0].name is defined
+          - cpu.scenarios[0].duration is defined
+          - cpu.scenarios[0].duration == '8h 30m'
+        fail_msg: "CPU util event missing scenarios array or duration field. Got: {{ cpu.scenarios | default('undefined') }}"
+        success_msg: "CPU util: scenarios array with duration field correct"
+
+    - name: "CPU_UTIL: Verify all scenarios have duration field"
+      ansible.builtin.assert:
+        that:
+          - item.duration is defined
+          - item.duration | length > 0
+        fail_msg: "CPU util scenario '{{ item.name }}' missing duration field"
+      loop: "{{ events_by_type.cpu_util.event.scenarios }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ================================================================
+    # Phase 9: Deployment (ZTP) specific assertions
+    # ================================================================
+
+    - name: "DEPLOYMENT: Verify required fields present"
+      vars:
+        deploy: "{{ events_by_type.deployment.event }}"
+      ansible.builtin.assert:
+        that:
+          - deploy.test_type == 'deployment'
+          - deploy.total_minutes is defined
+          - deploy.reboot_count is defined
+          - deploy.iteration is defined
+          - deploy.stages is defined
+          - deploy.stages | length == 2
+          - deploy.stages[0].stage_name is defined
+          - deploy.stages[0].time is defined
+          - deploy.stages[1].stage_name is defined
+          - deploy.stages[1].time is defined
+        fail_msg: "Deployment event missing required fields: {{ deploy | to_json }}"
+        success_msg: "Deployment: all required fields present"
+
+    - name: "DEPLOYMENT: Verify total_minutes is float (not string)"
+      ansible.builtin.assert:
+        that:
+          - events_by_type.deployment.event.total_minutes | type_debug in ['float', 'int']
+          - events_by_type.deployment.event.total_minutes | float == 74.35
+        fail_msg: >-
+          Deployment total_minutes must be numeric 74.35, got
+          {{ events_by_type.deployment.event.total_minutes }}
+          (type: {{ events_by_type.deployment.event.total_minutes | type_debug }})
+        success_msg: "Deployment: total_minutes is numeric 74.35"
+
+    - name: "DEPLOYMENT: Verify reboot_count is integer (not string)"
+      ansible.builtin.assert:
+        that:
+          - events_by_type.deployment.event.reboot_count | type_debug == 'int'
+          - events_by_type.deployment.event.reboot_count == 2
+        fail_msg: >-
+          Deployment reboot_count must be integer 2, got
+          {{ events_by_type.deployment.event.reboot_count }}
+          (type: {{ events_by_type.deployment.event.reboot_count | type_debug }})
+        success_msg: "Deployment: reboot_count is integer 2"
+
+    - name: "DEPLOYMENT: Verify iteration is integer (not string)"
+      ansible.builtin.assert:
+        that:
+          - events_by_type.deployment.event.iteration | type_debug == 'int'
+          - events_by_type.deployment.event.iteration == 1
+        fail_msg: >-
+          Deployment iteration must be integer 1, got
+          {{ events_by_type.deployment.event.iteration }}
+          (type: {{ events_by_type.deployment.event.iteration | type_debug }})
+        success_msg: "Deployment: iteration is integer 1"
+
+    - name: "DEPLOYMENT: Verify stages[].time are integers"
+      ansible.builtin.assert:
+        that:
+          - item.time | type_debug == 'int'
+          - item.time | int > 0
+        fail_msg: >-
+          Deployment stage '{{ item.stage_name }}' time must be integer, got
+          {{ item.time }} (type: {{ item.time | type_debug }})
+        success_msg: "Deployment stage {{ item.stage_name }}: time is integer {{ item.time }}"
+      loop: "{{ events_by_type.deployment.event.stages }}"
+      loop_control:
+        label: "{{ item.stage_name }}"
+
+    - name: "DEPLOYMENT: Verify stage names and computed times"
+      vars:
+        stages: "{{ events_by_type.deployment.event.stages }}"
+      ansible.builtin.assert:
+        that:
+          # stage 1: ClusterInstance -> Install = 10:59:35 - 10:00:00 = 3575s
+          - stages[0].stage_name == 'deploy_sno_du_node'
+          - stages[0].time == 3575
+          # stage 2: Install -> CGU = 11:14:21 - 10:59:35 = 886s
+          - stages[1].stage_name == 'wait_for_du_profile'
+          - stages[1].time == 886
+        fail_msg: "Deployment stage times incorrect. Expected deploy_sno_du_node=3575, wait_for_du_profile=886. Got: {{ stages }}"
+        success_msg: "Deployment: stage times computed correctly from milestones"
+
+    # ================================================================
+    # Phase 10: RFC2544-specific assertions
+    # ================================================================
+
+    - name: "RFC2544: Verify required fields present"
+      vars:
+        rfc: "{{ events_by_type['rfc-2544'].event }}"
+      ansible.builtin.assert:
+        that:
+          - rfc.test_type == 'rfc-2544'
+          - rfc.max_throughput is defined
+          - rfc.max_delay is defined
+          - rfc.avg_delay is defined
+          - rfc.min_delay is defined
+          - rfc.frame_size is defined
+          - rfc.test_throughput is defined
+          - rfc.duration is defined
+          - rfc.histogram is defined
+          - rfc.under_30_nines is defined
+        fail_msg: "RFC2544 event missing required fields"
+        success_msg: "RFC2544: all required fields present"
+
+    - name: "RFC2544: Verify numeric fields are floats (not strings)"
+      ansible.builtin.assert:
+        that:
+          - events_by_type['rfc-2544'].event.max_throughput | type_debug in ['float', 'int']
+          - events_by_type['rfc-2544'].event.max_delay | type_debug in ['float', 'int']
+          - events_by_type['rfc-2544'].event.avg_delay | type_debug in ['float', 'int']
+          - events_by_type['rfc-2544'].event.min_delay | type_debug in ['float', 'int']
+          - events_by_type['rfc-2544'].event.frame_size | type_debug in ['float', 'int']
+          - events_by_type['rfc-2544'].event.test_throughput | type_debug in ['float', 'int']
+        fail_msg: >-
+          RFC2544 numeric fields must be floats, not strings.
+          Types: max_throughput={{ events_by_type['rfc-2544'].event.max_throughput | type_debug }},
+          max_delay={{ events_by_type['rfc-2544'].event.max_delay | type_debug }},
+          avg_delay={{ events_by_type['rfc-2544'].event.avg_delay | type_debug }},
+          min_delay={{ events_by_type['rfc-2544'].event.min_delay | type_debug }},
+          frame_size={{ events_by_type['rfc-2544'].event.frame_size | type_debug }},
+          test_throughput={{ events_by_type['rfc-2544'].event.test_throughput | type_debug }}
+        success_msg: "RFC2544: all numeric fields are proper numeric types"
+
+    - name: "RFC2544: Verify numeric values"
+      vars:
+        rfc: "{{ events_by_type['rfc-2544'].event }}"
+      ansible.builtin.assert:
+        that:
+          - rfc.max_throughput | float == 100.0
+          - rfc.max_delay | float == 26.51
+          - rfc.avg_delay | float == 6.909
+          - rfc.min_delay | float == 5.798
+          - rfc.frame_size | float == 512.0
+          - rfc.test_throughput | float == 80.0
+        fail_msg: "RFC2544 numeric values incorrect"
+        success_msg: "RFC2544: numeric values correct"
+
+    - name: "RFC2544: Verify histogram is non-empty array"
+      ansible.builtin.assert:
+        that:
+          - events_by_type['rfc-2544'].event.histogram | length > 0
+        fail_msg: "RFC2544 histogram should be non-empty array"
+        success_msg: "RFC2544: histogram is non-empty ({{ events_by_type['rfc-2544'].event.histogram | length }} entries)"
+
+    - name: "RFC2544: Verify under_30_nines is array of 2 elements"
+      ansible.builtin.assert:
+        that:
+          - events_by_type['rfc-2544'].event.under_30_nines | length == 2
+        fail_msg: "RFC2544 under_30_nines should be array of 2 elements, got {{ events_by_type['rfc-2544'].event.under_30_nines }}"
+        success_msg: "RFC2544: under_30_nines array correct"
+
+    - name: "RFC2544: Verify duration field present"
+      ansible.builtin.assert:
+        that:
+          - events_by_type['rfc-2544'].event.duration | string | length > 0
+        fail_msg: "RFC2544 duration field missing or empty"
+        success_msg: "RFC2544: duration field present"
+    # yamllint enable rule:line-length
+
+    # ================================================================
+    # Phase 11: Cleanup and summary
+    # ================================================================
+
+    - name: Clean up test artifacts
+      ansible.builtin.file:
+        path: "{{ test_output_dir }}"
+        state: absent
+
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "All verification checks passed!"
+          - "=========================================="
+          - "Events validated: {{ all_events | length }}"
+          - ""
+          - "Schema compliance:"
+          - "  - sourcetype: _json (all events)"
+          - "  - Data directly in event.{fields} (no event.test wrapper)"
+          - "  - Common fields: ocp_version, ocp_build, node_name, formal, cpu, kernel, status"
+          - "  - cluster_artifacts.ocp.ocp_version_spoke: present (all events)"
+          - ""
+          - "Test-type validations:"
+          - "  - oslat: test_units[2] with 6 legacy fields per core, duration"
+          - "  - cyclictest: test_units[2] with 6 legacy fields per thread, availability_overall"
+          - "  - ptp: offset metric fields with correct values"
+          - "  - reboot: 2 events (soft_reboot + power_cycle), Iterations with numeric total_minutes"
+          - "  - cpu_util: scenarios[5] with duration field"
+          - "  - deployment: total_minutes(float), reboot_count(int), iteration(int), stages[].time(int)"
+          - "  - rfc-2544: max_throughput, delays, frame_size (all floats), histogram, under_30_nines"
+          - ""
+          - "Type safety verified:"
+          - "  - Deployment total_minutes: numeric (not string)"
+          - "  - Deployment reboot_count: integer (not string)"
+          - "  - Deployment iteration: integer (not string)"
+          - "  - Deployment stages[].time: integers (not strings)"
+          - "  - RFC2544 throughput/latency: floats (not strings)"
+          - "  - Reboot Iterations[].total_minutes: numeric (not string)"
+          - "=========================================="

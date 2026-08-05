@@ -1,0 +1,12 @@
+---
+# Map cpu_util report_data fields to legacy Splunk event schema
+
+- name: Set cpu_util-specific fields
+  vars:
+    _skr_cpu_duration: "{{ _skr_test_item.value.duration_breakdown.total_human | default(_skr_test_item.value.duration | default('')) }}"
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      scenarios: >-
+        {{ _skr_test_item.value.scenarios | default([])
+           | map('combine', {'duration': _skr_cpu_duration})
+           | list | to_json | from_json }}

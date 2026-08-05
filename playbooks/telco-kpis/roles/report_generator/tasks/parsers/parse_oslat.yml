@@ -30,6 +30,14 @@
       ansible.builtin.set_fact:
         oslat_max_line: "{{ oslat_log_text | regex_search('Maximum:\\s+(.+)\\(us\\)', '\\1') }}"
 
+    - name: Extract minimum latencies line
+      ansible.builtin.set_fact:
+        oslat_min_line: "{{ oslat_log_text | regex_search('Minimum:\\s+(.+)\\(us\\)', '\\1') }}"
+
+    - name: Extract average latencies line
+      ansible.builtin.set_fact:
+        oslat_avg_line: "{{ oslat_log_text | regex_search('Average:\\s+(.+)\\(us\\)', '\\1') }}"
+
     - name: Extract duration line
       ansible.builtin.set_fact:
         oslat_duration_line: "{{ oslat_log_text | regex_search('Duration:\\s+(.+)\\(sec\\)', '\\1') }}"
@@ -46,6 +54,14 @@
       ansible.builtin.set_fact:
         oslat_max_values: "{{ (oslat_max_line | default([''], true) | first).split() }}"
 
+    - name: Parse min latencies into list
+      ansible.builtin.set_fact:
+        oslat_min_values: "{{ (oslat_min_line | default([''], true) | first).split() }}"
+
+    - name: Parse avg latencies into list
+      ansible.builtin.set_fact:
+        oslat_avg_values: "{{ (oslat_avg_line | default([''], true) | first).split() }}"
+
     - name: Parse durations into list
       ansible.builtin.set_fact:
         oslat_durations: "{{ (oslat_duration_line | default([''], true) | first).split() }}"
@@ -58,13 +74,72 @@
       ansible.builtin.set_fact:
         oslat_test_duration: "{{ oslat_durations[0] | default('N/A') }}"
 
-    - name: Calculate availability (100% if all cores under threshold)
+    - name: Compute per-core availability from histogram
+      ansible.builtin.shell: |
+        python3 -c "
+        import json, re, sys
+        log = sys.stdin.read()
+        threshold = {{ oslat_availability_threshold | default(20) }}
+        num_cores = {{ oslat_cores | length }}
+        histogram = {}
+        for m in re.finditer(r'^\s+(\d+)\s+\(us\):\s+(.+?)(?:\s+\(including overflows\))?$', log, re.MULTILINE):
+            bucket = int(m.group(1))
+            counts = m.group(2).split()
+            for i, c in enumerate(counts[:num_cores]):
+                histogram.setdefault(i, {})[bucket] = int(c)
+        results = []
+        for i in range(num_cores):
+            h = histogram.get(i, {})
+            total = sum(h.values())
+            above = sum(v for k, v in h.items() if k > threshold)
+            if total > 0:
+                avail = (total - above) / total * 100.0
+            else:
+                avail = 100.0
+            avail_str = f'{avail:.10f}'
+            nines = 0
+            dot_seen = False
+            for ch in avail_str:
+                if ch == '.':
+                    dot_seen = True
+                    continue
+                if not dot_seen:
+                    continue
+                if ch == '9':
+                    nines += 1
+                else:
+                    break
+            if avail == 100.0:
+                nines = 100
+            results.append({'availability': round(avail, 10), 'number_of_nines': nines})
+        print(json.dumps(results))
+        "
+      args:
+        stdin: "{{ oslat_log_text }}"
+      register: oslat_availability_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse availability results
       ansible.builtin.set_fact:
-        oslat_availability: "100.0"
+        oslat_availability_data: "{{ oslat_availability_result.stdout | default('[]') | from_json }}"
+
+    - name: Calculate overall availability
+      ansible.builtin.set_fact:
+        oslat_availability: >-
+          {{ (oslat_availability_data | map(attribute='availability') | min | default(100.0)) | string }}
 
     - name: Build per-core results
       ansible.builtin.set_fact:
-        oslat_core_results: "{{ oslat_core_results | default([]) + [{'core': oslat_cores[item], 'max': oslat_max_values[item] | int}] }}"
+        oslat_core_results: >-
+          {{ oslat_core_results | default([]) + [{
+            'core': oslat_cores[item],
+            'max': oslat_max_values[item] | int,
+            'min': (oslat_min_values[item] | default('0')) | int,
+            'avg': (oslat_avg_values[item] | default('0')) | float,
+            'availability': (oslat_availability_data[item] | default({'availability': 100.0})).availability,
+            'number_of_nines': (oslat_availability_data[item] | default({'number_of_nines': 100})).number_of_nines
+          }] }}
       loop: "{{ range(0, oslat_cores | length) | list }}"
       when: oslat_cores | length > 0 and oslat_max_values | length > 0
 
@@ -114,6 +189,7 @@
                   'test_duration': oslat_result.duration,
                   'cores': oslat_result.cores,
                   'core_results': oslat_result.core_results,
+                  'test_duration_seconds': oslat_runtime | int,
                   'raw_log_excerpt': oslat_log_excerpt,
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

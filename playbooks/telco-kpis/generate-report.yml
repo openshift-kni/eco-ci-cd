@@ -351,6 +351,36 @@
         path: "{{ temp_output_dir.path }}"
         state: absent
 
+    - name: Push test results to Splunk
+      when:
+        - splunk_push_enabled | default(false) | bool
+        - splunk_hec_url | default('') | length > 0
+        - splunk_hec_token | default('') | length > 0
+        - report_data.test_results | default({}) | length > 0
+      block:
+        - name: Include splunk_kpis_reporter role
+          ansible.builtin.include_role:
+            name: splunk_kpis_reporter
+          vars:
+            skr_report_data: "{{ report_data }}"
+            skr_splunk_url: "{{ splunk_hec_url }}"
+            skr_splunk_token: "{{ splunk_hec_token }}"
+            skr_spoke_name: "{{ spoke_cluster }}"
+            skr_cluster_name: "{{ spoke_cluster }}"
+            skr_formal_test: "{{ formal_test | default(false) }}"
+            skr_do_send: true
+            skr_debug: false
+            skr_ci_metadata:
+              ci_type: "{{ splunk_ci_type | default('') }}"
+              job_name: "{{ splunk_ci_job_name | default('') }}"
+              build_number: "{{ splunk_ci_build_number | default('') }}"
+      rescue:
+        - name: Log Splunk push failure (non-fatal)
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: Splunk push failed but report generation succeeded.
+              Error: {{ ansible_failed_result.msg | default('unknown') }}
+
     - name: Check if deployment timeline was included
       ansible.builtin.set_fact:
         deployment_timeline_included: >-

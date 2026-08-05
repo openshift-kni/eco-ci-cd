@@ -1,0 +1,34 @@
+---
+# Build Splunk HEC event(s) for one test result and optionally send them
+# Event maps can set _skr_multi_events (list) for multiple events per test result
+
+- name: Set test type
+  ansible.builtin.set_fact:
+    _skr_test_type: "{{ _skr_test_item.value.test_type }}"
+
+- name: Initialize test-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific: {}
+    _skr_multi_events: []
+
+- name: Check if event map exists for {{ _skr_test_type }}
+  ansible.builtin.stat:
+    path: "{{ role_path }}/tasks/event_maps/{{ _skr_test_type }}.yml"
+  register: _skr_event_map_stat
+  delegate_to: localhost
+
+- name: Load test-type-specific field mapping
+  when: _skr_event_map_stat.stat.exists
+  ansible.builtin.include_tasks: "event_maps/{{ _skr_test_type }}.yml"
+
+- name: Normalize to events list
+  ansible.builtin.set_fact:
+    _skr_events_to_send: "{{ _skr_multi_events if (_skr_multi_events | length > 0) else [_skr_test_specific] }}"
+
+- name: Process each event
+  ansible.builtin.include_tasks: send_single_event.yml
+  loop: "{{ _skr_events_to_send }}"
+  loop_control:
+    loop_var: _skr_event_fields
+    index_var: _skr_event_idx
+    label: "{{ _skr_event_fields.test_type | default(_skr_test_type) }}-{{ _skr_event_idx }}"

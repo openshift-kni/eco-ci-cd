@@ -1,0 +1,93 @@
+---
+# Main entry point for splunk_kpis_reporter role
+# Builds Splunk HEC events matching legacy fork-ran-integration schema
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - skr_report_data | length > 0
+      - skr_report_data.test_results is defined
+      - skr_spoke_name | length > 0
+    fail_msg: "Missing required parameters: skr_report_data (with test_results) and skr_spoke_name"
+
+- name: Validate Splunk credentials when sending is enabled
+  when: skr_do_send | bool
+  ansible.builtin.assert:
+    that:
+      - skr_splunk_url | length > 0
+      - skr_splunk_token | length > 0
+    fail_msg: "skr_do_send is true but skr_splunk_url or skr_splunk_token is empty"
+
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ skr_output_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Build common fields for all events
+  ansible.builtin.set_fact:
+    _skr_common:
+      ocp_version: "{{ skr_report_data.cluster_info.sw_version | default('') }}"
+      ocp_build: "{{ skr_report_data.cluster_info.sw_version | default('') }}"
+      node_name: "{{ skr_spoke_name }}"
+      formal: "{{ skr_formal_test }}"
+      cpu: "{{ skr_report_data.hardware_info.cpu_type | default(skr_report_data.hardware_info.cpu_model | default('')) }}"
+      kernel: "{{ skr_report_data.cluster_info.kernel_version | default('') }}"
+      sideloaded: "{{ '.rt' not in (skr_report_data.cluster_info.kernel_version | default('')) }}"
+
+- name: Build cluster_artifacts dict
+  ansible.builtin.set_fact:
+    _skr_cluster_artifacts:
+      ocp:
+        ocp_version_spoke: "{{ skr_report_data.cluster_info.sw_version | default('') }}"
+        ocp_version_hub: "{{ skr_report_data.cluster_info.hub_version | default('') }}"
+      openshift_version: "{{ skr_report_data.cluster_info.sw_version | default('') }}"
+      kernel_version: "{{ skr_report_data.cluster_info.kernel_version | default('') }}"
+      cpu_model: "{{ skr_report_data.hardware_info.cpu_type | default(skr_report_data.hardware_info.cpu_model | default('')) }}"
+      bios_version: "{{ skr_report_data.hardware_info.bios_version | default('') }}"
+      microcode: "{{ skr_report_data.hardware_info.microcode | default('') }}"
+      architecture: "{{ skr_report_data.hardware_info.architecture | default('') }}"
+      tuned_profile: "{{ skr_report_data.cluster_info.tuned_profile | default('') }}"
+      cluster_name: "{{ skr_cluster_name }}"
+
+- name: Process each test result
+  ansible.builtin.include_tasks: build_and_send.yml
+  loop: "{{ skr_report_data.test_results | dict2items }}"
+  loop_control:
+    loop_var: _skr_test_item
+    label: "{{ _skr_test_item.key }}"
+
+- name: Splunk push summary
+  vars:
+    _skr_search_host: "{{ skr_splunk_url | regex_replace('https?://([^:/]+).*', '\\1') | regex_replace('^splunk-hec\\.', 'splunk.') }}"
+    _skr_test_types: >-
+      {{ skr_report_data.test_results | dict2items
+         | map(attribute='value') | map(attribute='test_type', default='unknown')
+         | list | join(', ') }}
+    _skr_search_query: "index={{ skr_splunk_index }} node_name={{ skr_spoke_name }} | head 20"
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Splunk Push Summary"
+      - "=========================================="
+      - "Events sent:  {{ skr_report_data.test_results | length }}"
+      - "Test types:   {{ _skr_test_types }}"
+      - "Index:        {{ skr_splunk_index }}"
+      - "Node:         {{ skr_spoke_name }}"
+      - "Formal:       {{ skr_formal_test }}"
+      - "OCP version:  {{ _skr_common.ocp_version | default('') }}"
+      - "Send enabled: {{ skr_do_send }}"
+      - "=========================================="
+      - "Verify Upload"
+      - "=========================================="
+      - "Splunk Web UI search:"
+      - "  https://{{ _skr_search_host }}/en-US/app/search/search?q={{ _skr_search_query | urlencode }}&earliest=-1h"
+      - ""
+      - "CLI verification (run from bastion):"
+      - "  curl -sk -H 'Authorization: Splunk <TOKEN>'"
+      - "    'https://{{ _skr_search_host }}:8089/services/search/jobs/export'"
+      - "    --data-urlencode 'search=search {{ _skr_search_query }}'"
+      - "    -d output_mode=json -d earliest_time=-1h"
+      - ""
+      - "Event JSON files: {{ skr_output_dir }}/"
+      - "=========================================="

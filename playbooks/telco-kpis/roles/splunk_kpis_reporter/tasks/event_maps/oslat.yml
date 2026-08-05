@@ -1,0 +1,26 @@
+---
+# Map oslat report_data fields to legacy Splunk event schema
+
+- name: Build oslat test_units from core_results
+  ansible.builtin.set_fact:
+    _skr_oslat_units: >-
+      {{ _skr_oslat_units | default([]) + [{
+        'index': item.core | string,
+        'max_latency': item.max | default(0),
+        'min_latency': item.min | default(0),
+        'avg_latency': item.avg | default(0),
+        'availability': item.availability | default(100.0),
+        'number_of_nines': item.number_of_nines | default(100)
+      }] }}
+  loop: "{{ _skr_test_item.value.core_results | default([]) }}"
+  loop_control:
+    label: "core {{ item.core | default('?') }}"
+
+- name: Set oslat-specific fields
+  ansible.builtin.set_fact:
+    _skr_test_specific:
+      duration: "{{ _skr_test_item.value.test_duration_seconds | default('') }}"
+      test_units: "{{ _skr_oslat_units | default([]) }}"
+      max_latency: "{{ _skr_test_item.value.max_latency | default(0) }}"
+      availability: "{{ _skr_test_item.value.availability | default('100.0') }}"
+      cores: "{{ _skr_test_item.value.cores | default('') }}"

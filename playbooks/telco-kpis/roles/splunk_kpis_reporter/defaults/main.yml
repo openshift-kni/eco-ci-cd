@@ -1,0 +1,35 @@
+---
+# Defaults for splunk_kpis_reporter role
+
+# Input: report_data fact from report_generator role
+skr_report_data: {}
+
+# Cluster identification
+skr_spoke_name: ""
+skr_cluster_name: ""
+skr_formal_test: false
+
+# Splunk HEC configuration
+skr_splunk_url: ""
+skr_splunk_token: ""
+skr_splunk_index: "ecosystem-telco"
+
+# Retry configuration for transient failures
+skr_retries: 3
+skr_retry_delay: 10
+skr_request_timeout: 30
+
+# Upload control — disabled by default; callers must opt in
+skr_do_send: false
+
+# Debug mode — when true, logs event payloads
+skr_debug: false
+
+# Output directory for generated event JSON files
+skr_output_dir: "/tmp/splunk-kpis-reporter"
+
+# CI metadata (optional, for provenance tracking)
+skr_ci_metadata: {}
+
+# Availability threshold in microseconds (for oslat/cyclictest)
+skr_availability_threshold: 20

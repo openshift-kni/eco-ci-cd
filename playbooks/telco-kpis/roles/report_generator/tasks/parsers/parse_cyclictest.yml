@@ -43,6 +43,85 @@
           ansible.builtin.set_fact:
             max_overall: "{{ max_values | max }}"
 
+        - name: Compute per-thread availability from histogram
+          ansible.builtin.shell: |
+            python3 -c "
+            import json, re, sys
+            log = sys.stdin.read()
+            threshold = {{ cyclictest_availability_threshold | default(20) }}
+            num_threads = {{ max_values | length }}
+            histogram = {}
+            for m in re.finditer(r'^(\d{6})\s+(.+)$', log, re.MULTILINE):
+                bucket = int(m.group(1))
+                counts = m.group(2).split()
+                for i, c in enumerate(counts[:num_threads]):
+                    histogram.setdefault(i, {})[bucket] = int(c)
+            results = []
+            for i in range(num_threads):
+                h = histogram.get(i, {})
+                total = sum(h.values())
+                above = sum(v for k, v in h.items() if k > threshold)
+                if total > 0:
+                    avail = (total - above) / total * 100.0
+                else:
+                    avail = 100.0
+                avail_str = f'{avail:.10f}'
+                nines = 0
+                dot_seen = False
+                for ch in avail_str:
+                    if ch == '.':
+                        dot_seen = True
+                        continue
+                    if not dot_seen:
+                        continue
+                    if ch == '9':
+                        nines += 1
+                    else:
+                        break
+                if avail == 100.0:
+                    nines = 100
+                results.append({'availability': round(avail, 10), 'number_of_nines': nines})
+            # Overall: sum all threads' histograms
+            total_all = sum(sum(histogram.get(i, {}).values()) for i in range(num_threads))
+            above_all = sum(sum(v for k, v in histogram.get(i, {}).items() if k > threshold) for i in range(num_threads))
+            if total_all > 0:
+                overall_avail = (total_all - above_all) / total_all * 100.0
+            else:
+                overall_avail = 100.0
+            overall_str = f'{overall_avail:.10f}'
+            overall_nines = 0
+            dot_seen = False
+            for ch in overall_str:
+                if ch == '.':
+                    dot_seen = True
+                    continue
+                if not dot_seen:
+                    continue
+                if ch == '9':
+                    overall_nines += 1
+                else:
+                    break
+            if overall_avail == 100.0:
+                overall_nines = 100
+            print(json.dumps({
+                'per_thread': results,
+                'overall_availability': round(overall_avail, 10),
+                'overall_number_of_nines': overall_nines
+            }))
+            "
+          args:
+            stdin: "{{ cyclictest_log }}"
+          register: cyclictest_availability_result
+          changed_when: false
+          failed_when: false
+
+        - name: Parse availability results
+          ansible.builtin.set_fact:
+            cyclictest_avail_data: >-
+              {{ cyclictest_availability_result.stdout |
+                 default('{"per_thread":[],"overall_availability":100.0,"overall_number_of_nines":100}') |
+                 from_json }}
+
         - name: Build per-thread results
           ansible.builtin.set_fact:
             thread_results: >-
@@ -50,7 +129,9 @@
                 'thread': item,
                 'min': min_values[item],
                 'avg': avg_values[item],
-                'max': max_values[item]
+                'max': max_values[item],
+                'availability': (cyclictest_avail_data.per_thread[item] | default({'availability': 100.0})).availability,
+                'number_of_nines': (cyclictest_avail_data.per_thread[item] | default({'number_of_nines': 100})).number_of_nines
               }] }}
           loop: "{{ range(0, max_values | length) | list }}"
 
@@ -59,6 +140,10 @@
       ansible.builtin.set_fact:
         max_overall: 0
         thread_results: []
+        cyclictest_avail_data:
+          per_thread: []
+          overall_availability: 100.0
+          overall_number_of_nines: 100
 
     - name: Determine test status (passed if max < 20us threshold)
       ansible.builtin.set_fact:
@@ -113,6 +198,9 @@
                   'max_overall': max_overall,
                   'threads': thread_results | length if thread_results is defined else 0,
                   'thread_results': thread_results | default([]),
+                  'test_duration': cyclictest_duration,
+                  'availability_overall': cyclictest_avail_data.overall_availability | default(100.0),
+                  'number_of_nines_overall': cyclictest_avail_data.overall_number_of_nines | default(100),
                   'raw_log_excerpt': cyclictest_log_excerpt,
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

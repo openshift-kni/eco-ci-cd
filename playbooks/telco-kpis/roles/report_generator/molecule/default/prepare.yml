@@ -280,8 +280,8 @@
       ansible.builtin.copy:
         content: |
           Comparing clusters...
-          Found 22 CRs with diffs out of 76
-          Found 1 missing CRs
+          CRs with diffs: 22/76
+          1 missing CRs
           Comparison complete
         dest: "{{ shared_artifact_dir }}/rds_compare-{{ spoke_cluster }}-20260706-130300/cluster-compare.log"
         mode: '0644'
@@ -393,6 +393,26 @@
             </testcase>
           </testsuite>
         dest: "{{ shared_artifact_dir }}/bios_validation-{{ spoke_cluster }}-20260706-130500/bios_suite_test.xml"
+        mode: '0644'
+
+    - name: Create mock BIOS Validation JSON report
+      ansible.builtin.copy:
+        content: |
+          {
+            "bios_profile_url": "https://example.com/bios-profile.txt",
+            "results": [
+              {"key": "HyperThreading", "value": "Enabled", "current_value": "Enabled", "status": "PASS"},
+              {"key": "TurboMode", "value": "Disabled", "current_value": "Enabled", "status": "FAIL"},
+              {"key": "VTd", "value": "Enabled", "current_value": "Enabled", "status": "PASS"},
+              {"key": "VTx", "value": "Enabled", "current_value": "Enabled", "status": "PASS"},
+              {"key": "SR-IOV", "value": "Enabled", "current_value": "Enabled", "status": "PASS"},
+              {"key": "C-States", "value": "Disabled", "current_value": "Disabled", "status": "PASS"},
+              {"key": "PackageCStates", "value": "Disabled", "current_value": "Disabled", "status": "PASS"},
+              {"key": "WorkloadProfile", "value": "NUMA", "current_value": "NUMA", "status": "PASS"},
+              {"key": "BootMode", "value": "UEFI", "current_value": "UEFI", "status": "PASS"}
+            ]
+          }
+        dest: "{{ shared_artifact_dir }}/bios_validation-{{ spoke_cluster }}-20260706-130500/bios-validation-report.json"
         mode: '0644'
 
     - name: Create mock ZTP Deployment test directory

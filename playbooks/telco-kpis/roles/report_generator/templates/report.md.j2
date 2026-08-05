@@ -50,6 +50,20 @@
 {% endif %}
 {%- endmacro -%}
 
+{%- macro splunk_data_link(test_type) -%}
+{%- if (splunk_report_links | default({})).enabled | default(false) and
+       report_generator_splunk_dashboards[test_type] is defined -%}
+{%- set cfg = report_generator_splunk_dashboards[test_type] -%}
+{%- set t_earliest = splunk_report_links.time_earliest | regex_replace(':', '%3A') -%}
+{%- set t_latest = splunk_report_links.time_latest | regex_replace(':', '%3A') -%}
+{%- set ver = report_data.cluster_info.sw_version | default('') -%}
+{%- set kern = report_data.cluster_info.kernel_version | default('') | regex_replace('\\+', '%2B') -%}
+{%- set extra = cfg.params | default('') | replace('{ver}', ver) | replace('{node}', spoke_cluster) | replace('{kernel}', kern) -%}
+{%- set ocp_build_param = '' if 'form.ocp_build=' in extra else '&form.ocp_build=' ~ ver -%}
+ | [Splunk Data]({{ report_generator_splunk_base_url }}/en-US/app/search/{{ cfg.name }}?form.global_time.earliest={{ t_earliest }}&form.global_time.latest={{ t_latest }}&form.ocp_version={{ ver }}{{ ocp_build_param }}&form.node_name={{ spoke_cluster }}&form.general_statistics={{ ver }}&form.formal_tag=*&{{ extra }})
+{%- endif -%}
+{%- endmacro -%}
+
 # {{ report_generator_title }} - {{ report_data.cluster_info.cluster }}
 
 **Generated:** {{ report_timestamp }}
@@ -119,13 +133,13 @@
 
 {% if output_filename %}
 {%   if result.test_type == 'ztp_ai_deployment_time' %}
-[Deployment Timeline Summary]({{ test_name }}/deployment-timeline-summary.txt) | [Timeline JSON]({{ test_name }}/deployment-timeline.json) | [All artifacts]({{ test_name }}/)
+[Deployment Timeline Summary]({{ test_name }}/deployment-timeline-summary.txt) | [Timeline JSON]({{ test_name }}/deployment-timeline.json){{ splunk_data_link(result.test_type) }} | [All artifacts]({{ test_name }}/)
 {%   elif result.test_type == 'rds_compare' %}
-[Compare Log]({{ test_name }}/cluster-compare.log) | [All artifacts]({{ test_name }}/)
+[Compare Log]({{ test_name }}/cluster-compare.log){{ splunk_data_link(result.test_type) }} | [All artifacts]({{ test_name }}/)
 {%   elif result.test_type == 'bios_validation' %}
-[BIOS Profile]({{ test_name }}/bios-profile.txt) | [Validation Report]({{ test_name }}/bios-validation-report.json) | [All artifacts]({{ test_name }}/)
+[BIOS Profile]({{ test_name }}/bios-profile.txt) | [Validation Report]({{ test_name }}/bios-validation-report.json){{ splunk_data_link(result.test_type) }} | [All artifacts]({{ test_name }}/)
 {%   else %}
-[Raw Log]({{ test_name }}/podman-run.log) | [All artifacts]({{ test_name }}/)
+[Raw Log]({{ test_name }}/podman-run.log){{ splunk_data_link(result.test_type) }} | [All artifacts]({{ test_name }}/)
 {%   endif %}
 {% endif %}
 

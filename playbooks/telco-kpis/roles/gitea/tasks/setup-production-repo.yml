@@ -1,0 +1,97 @@
+---
+# Setup production/external git repository for report publishing
+# Validates credentials, constructs authenticated URL, and verifies accessibility
+#
+# This task file is used when development_mode is off and report_repo_url is set.
+# It sets the same facts (gitea_repo_http_url, gitea_repo_web_url) that
+# create-repository.yml sets for development mode, so publish-report.yml works
+# identically for both modes.
+
+- name: Display production repository configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Production Repository Configuration"
+      - "=========================================="
+      - "Repository URL: {{ report_repo_url }}"
+      - "Branch: {{ report_repo_branch | default('main') }}"
+      - "Auth method: {{ 'Token' if (report_repo_token | default('') | length > 0) else 'Password' }}"
+      - "Username: {{ report_repo_user | default('(not set)') }}"
+      - "=========================================="
+
+- name: Validate production repository URL
+  ansible.builtin.assert:
+    that:
+      - report_repo_url | length > 0
+      - report_repo_url is match('^https?://')
+    fail_msg: |
+      Production repository URL is not set or invalid.
+      Expected: HTTPS URL (e.g., https://github.com/org/repo.git)
+      Got: {{ report_repo_url | default('(empty)') }}
+
+- name: Validate authentication credentials
+  ansible.builtin.assert:
+    that:
+      - (report_repo_token | default('') | length > 0) or
+        (report_repo_user | default('') | length > 0 and
+         report_repo_password | default('') | length > 0)
+    fail_msg: |
+      Production repository authentication not configured.
+
+      Provide either:
+        - report_repo_token (preferred)
+        - report_repo_user + report_repo_password (fallback workaround)
+
+      These values should come from vault.
+
+- name: Construct authenticated clone URL (token auth)
+  ansible.builtin.set_fact:
+    gitea_repo_http_url: >-
+      {{ report_repo_url.split('://')[0] }}://{{
+      report_repo_user | default('oauth2', true) }}:{{
+      report_repo_token }}@{{
+      report_repo_url.split('://')[1] }}
+  when: report_repo_token | default('') | length > 0
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Construct authenticated clone URL (password auth fallback)
+  ansible.builtin.set_fact:
+    gitea_repo_http_url: >-
+      {{ report_repo_url.split('://')[0] }}://{{
+      report_repo_user | default('oauth2', true) }}:{{
+      report_repo_password }}@{{
+      report_repo_url.split('://')[1] }}
+  when: report_repo_token | default('') | length == 0
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Set production repository metadata
+  ansible.builtin.set_fact:
+    gitea_repo_web_url: "{{ report_repo_url | regex_replace('\\.git$', '') }}"
+    report_publish_branch: "{{ report_repo_branch | default('main') }}"
+    gitea_admin_email: "{{ report_repo_user | default('telco-kpis-automation', true) }}@telco-kpis-ci.redhat.com"
+
+- name: Verify production repository is accessible
+  ansible.builtin.git:
+    repo: "{{ gitea_repo_http_url }}"
+    dest: "/tmp/report-repo-verify-{{ ansible_date_time.epoch }}"
+    version: "{{ report_publish_branch }}"
+    depth: 1
+  register: _repo_verify
+  environment:
+    GIT_TERMINAL_PROMPT: "0"
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Cleanup verification clone
+  ansible.builtin.file:
+    path: "/tmp/report-repo-verify-{{ ansible_date_time.epoch }}"
+    state: absent
+
+- name: Display production repository verification
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Production Repository Verified"
+      - "=========================================="
+      - "Web URL: {{ gitea_repo_web_url }}"
+      - "Branch: {{ report_publish_branch }}"
+      - "=========================================="

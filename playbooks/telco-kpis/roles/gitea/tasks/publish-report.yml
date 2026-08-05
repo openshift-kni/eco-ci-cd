@@ -33,10 +33,11 @@
   ansible.builtin.git:
     repo: "{{ gitea_repo_http_url }}"
     dest: "{{ git_work_dir }}"
-    version: main
+    version: "{{ report_publish_branch | default('main') }}"
     force: true
   environment:
     GIT_TERMINAL_PROMPT: "0"
+  no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Handle report update (remove existing report for today)
   when: report_action | default('update') == 'update'
@@ -240,10 +241,10 @@
   ansible.builtin.set_fact:
     report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', git_work_dir + '/reports/', '') | list }}"
 
-- name: Update top-level README.md
+- name: Update reports index README.md
   ansible.builtin.template:
     src: README.md.j2
-    dest: "{{ git_work_dir }}/README.md"
+    dest: "{{ git_work_dir }}/reports/README.md"
     mode: '0644'
 
 - name: Configure git user  # noqa: command-instead-of-module
@@ -277,8 +278,8 @@
   when: git_diff.rc != 0
   changed_when: true
 
-- name: Push to Gitea  # noqa: command-instead-of-module
-  ansible.builtin.command: git push origin main
+- name: Push to repository  # noqa: command-instead-of-module
+  ansible.builtin.command: git push origin {{ report_publish_branch | default('main') }}
   args:
     chdir: "{{ git_work_dir }}"
   when: git_diff.rc != 0
@@ -299,5 +300,10 @@
       - "=========================================="
       - "Spoke: {{ spoke_cluster }}"
       - "Report: {{ report_file }}"
-      - "Web URL: {{ gitea_repo_web_url }}/src/branch/main/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+      - >-
+        Web URL: {{ gitea_repo_web_url }}{{
+        '/-/tree/' if not (development_mode | default(false) | bool)
+        else '/src/branch/' }}{{
+        report_publish_branch | default('main') }}/reports/{{
+        report_dir_name }}/{{ spoke_cluster }}
       - "=========================================="

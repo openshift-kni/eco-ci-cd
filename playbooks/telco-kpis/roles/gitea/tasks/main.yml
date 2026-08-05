@@ -1,7 +1,10 @@
 ---
 # Main entry point for Gitea role
-# Handles deployment, initialization, and report publishing
+# Supports two publishing modes:
+#   - Development mode (development_mode=true): Deploy local Gitea instance
+#   - Production mode (report_repo_url is set): Publish to external git repo
 
+# === Development mode (local Gitea) - takes precedence ===
 - name: Validate credentials from vault
   ansible.builtin.include_tasks: validate-credentials.yml
   when: development_mode | default(false) | bool
@@ -18,9 +21,18 @@
   ansible.builtin.include_tasks: create-repository.yml
   when: development_mode | default(false) | bool
 
+# === Production mode (external repository) ===
+- name: Setup production repository
+  ansible.builtin.include_tasks: setup-production-repo.yml
+  when:
+    - not (development_mode | default(false) | bool)
+    - report_repo_url | default('') | length > 0
+
+# === Publish report (shared logic for both modes) ===
 - name: Include report publishing tasks
   ansible.builtin.include_tasks: publish-report.yml
   when:
-    - development_mode | default(false) | bool
+    - (development_mode | default(false) | bool) or
+      (report_repo_url | default('') | length > 0)
     - report_file is defined
     - report_tarball is defined

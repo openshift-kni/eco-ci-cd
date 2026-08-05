@@ -11,14 +11,14 @@ This repository contains automated test reports from Telco KPIs verification job
 {%     set date = parts[0] %}
 {%     set spoke = parts[1] %}
 {%     set filename = parts[2] %}
-{%     set _ = ns.reports.append({'date': date, 'spoke': spoke, 'file': filename, 'path': 'reports/' + report_path}) %}
+{%     set _ = ns.reports.append({'date': date, 'spoke': spoke, 'file': filename, 'path': report_path}) %}
 {%   endif %}
 {% endfor %}
 
 | Date | Spoke Cluster | Report | Artifacts |
 |------|---------------|--------|-----------|
 {% for report in ns.reports %}
-| {{ report.date }} | {{ report.spoke }} | [{{ report.file }}]({{ report.path }}) | [Browse](reports/{{ report.date }}/{{ report.spoke }}/) |
+| {{ report.date }} | {{ report.spoke }} | [{{ report.file }}]({{ report.path }}) | [Browse]({{ report.date }}/{{ report.spoke }}/) |
 {% endfor %}
 
 ## Report Structure

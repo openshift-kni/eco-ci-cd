@@ -1,4 +1,11 @@
 ---
+- name: Filter release streams for nightly when requested
+  when:
+    - ocp_version_facts_dev_version is defined
+    - "'nightly' in (ocp_version_facts_dev_version | string)"
+  ansible.builtin.set_fact:
+    ocp_release_streams: "{{ ocp_release_streams | select('search', 'nightly') | list }}"
+
 - name: Try different release streams
   ansible.builtin.include_tasks: latest_release.yml
   loop: "{{ ocp_release_streams }}"

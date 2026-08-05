@@ -657,6 +657,8 @@
         name: redhatci.ocp.destroy_vms
 
     - name: Create VMs
+      vars:
+        additional_virt_install_options: "--boot cdrom,hd"
       ansible.builtin.import_role:
         name: redhatci.ocp.create_vms
 

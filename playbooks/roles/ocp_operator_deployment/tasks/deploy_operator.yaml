@@ -28,7 +28,8 @@
   kubernetes.core.k8s:
     template: "{{ role_path }}/templates/{{ operator_item.name }}-config.j2"
     state: present
-    force: true
+    server_side_apply:
+      field_manager: ansible
   register: result
   when:
     - operator_item.deploy_default_config is defined

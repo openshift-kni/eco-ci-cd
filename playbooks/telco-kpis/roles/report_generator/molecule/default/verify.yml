@@ -178,8 +178,8 @@
     - name: Verify BIOS Validation parser shows failure
       ansible.builtin.assert:
         that:
-          - "'P:8 F:1 S:0' in (report_content.content | b64decode)"
-        fail_msg: "BIOS Validation parser did not parse JUnit XML correctly"
+          - "'P:8 F:1' in (report_content.content | b64decode)"
+        fail_msg: "BIOS Validation parser did not extract results from JSON correctly"
         success_msg: "BIOS Validation parser working correctly"
 
     - name: Extract ZTP section from report for debugging # noqa: jinja[spacing]

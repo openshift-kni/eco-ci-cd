@@ -51,6 +51,33 @@ report_generator_parsers:
   ztp_ai_deployment_time: parse_ztp_ai_deployment.yml
   bios_validation: parse_bios_validation.yml
 
+# Splunk dashboard link configuration for reports
+# Each entry maps a test_type to its dashboard name and URL query parameters.
+# Parameter values support placeholders: {ver}, {node}, {kernel}
+report_generator_splunk_base_url: "https://rhcorporate.splunkcloud.com"
+report_generator_splunk_dashboards:
+  oslat:
+    name: "oslat_kpis"
+    params: "form.ocp_view=ocp_build&form.selected_duration=*&form.dashboard_kernels={kernel}"
+  ptp:
+    name: "ptp_kpis"
+    params: "form.bubble_chart_legend=ocp_build&form.test_durations=*&form.dashboard_kernels={kernel}"
+  cyclictest:
+    name: "cyclictest_kpis"
+    params: "form.ocp_view=ocp_build&form.selected_duration=*&form.dashboard_kernels={kernel}"
+  cpu_util:
+    name: "cpu_util_kpis"
+    params: "form.high_cpu_treshhold=0.005&form.selected_duration=*&form.dashboard_kernels={kernel}"
+  reboot:
+    name: "reboot_kpis"
+    params: "form.charts_comparison=ocp_build&form.reboot_type=soft_reboot&form.ocp_build=*&form.dashboard_kernels={kernel}"
+  rfc2544:
+    name: "rfc2544_"
+    params: "form.bubble_chart_legend=kernel&form.histogram={ver}&form.test_durations=*&form.dashboard_kernels={kernel}"
+  ztp_ai_deployment_time:
+    name: "deployment_kpis"
+    params: "form.charts_comparison=ocp_build"
+
 # Default test order in report (matches TEST_TYPES from Python script)
 report_generator_test_order:
   - oslat

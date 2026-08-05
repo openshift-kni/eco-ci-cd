@@ -319,6 +319,33 @@
         msg: "Force report regeneration requested - skipping freshness check"
       when: force_report | default(false) | bool
 
+    - name: Compute Splunk report links time window
+      ansible.builtin.shell:
+        cmd: |
+          echo "$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%S.000Z)"
+          echo "$(date -u -d '+15 minutes' +%Y-%m-%dT%H:%M:%S.000Z)"
+        executable: /bin/bash
+      register: _splunk_time_window
+      changed_when: false
+      when: splunk_push_enabled | default(false) | bool
+
+    - name: Configure Splunk report links
+      ansible.builtin.set_fact:
+        splunk_report_links:
+          enabled: true
+          time_earliest: "{{ _splunk_time_window.stdout_lines[0] }}"
+          time_latest: "{{ _splunk_time_window.stdout_lines[1] }}"
+      when:
+        - splunk_push_enabled | default(false) | bool
+        - _splunk_time_window.stdout_lines is defined
+        - _splunk_time_window.stdout_lines | length >= 2
+
+    - name: Disable Splunk report links
+      ansible.builtin.set_fact:
+        splunk_report_links:
+          enabled: false
+      when: not (splunk_push_enabled | default(false) | bool)
+
     - name: Create temporary directory for report output
       ansible.builtin.tempfile:
         state: directory

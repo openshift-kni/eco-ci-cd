@@ -71,6 +71,7 @@
 #   net_prefix: "24"                            # Network prefix (CIDR notation)
 #   vm_bridge_name: br-hlxcl94                  # Hypervisor bridge name (used by deploy-vm-bastion-libvirt.yml)
 #   vm_name: ns2-server                    # VM name on the hypervisor (used by deploy-vm-bastion-libvirt.yml)
+#   ssh_public_key: "ssh-ed25519 AAAA..."       # Optional public SSH key added to bastion's authorized_keys
 #
 # Playbook Variables (defined in vars section):
 #   bind_root: "{{ ansible_user_dir }}/bind"    # Root directory for BIND configuration and data
@@ -133,6 +134,13 @@
     - name: Display bastion information
       ansible.builtin.debug:
         msg: "Configuring DNS on {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Add public SSH key to authorized_keys
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ ssh_public_key }}"
+      when: ssh_public_key is defined
 
     - name: Configure unprivileged port access
       become: true

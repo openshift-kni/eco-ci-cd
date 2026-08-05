@@ -25,36 +25,36 @@
     - name: Extract RFC2544_PARAMS line from log
       ansible.builtin.set_fact:
         rfc2544_params_line: "{{
-          (rfc2544_log | regex_search('RFC2544_PARAMS:\\s*(.+)', '\\1'))[0] | default('') }}"
+          (rfc2544_log | regex_search('RFC2544_PARAMS:\\s*(.+)', '\\1') | default([''], true))[0] }}"
 
     - name: Parse RFC2544 test configuration parameters from RFC2544_PARAMS
       ansible.builtin.set_fact:
         config_lat_duration: "{{
-          (rfc2544_params_line | regex_search('LAT_DURATION=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('LAT_DURATION=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_frame_size: "{{
-          (rfc2544_params_line | regex_search('FRAME_SIZE=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('FRAME_SIZE=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_lat_rate: "{{
-          (rfc2544_params_line | regex_search('LAT_RATE=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('LAT_RATE=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_port1: "{{
-          (rfc2544_params_line | regex_search('PORT1=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('PORT1=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_port2: "{{
-          (rfc2544_params_line | regex_search('PORT2=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('PORT2=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_testcfg: "{{
-          (rfc2544_params_line | regex_search('TESTCFG=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('TESTCFG=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_chassis: "{{
-          (rfc2544_params_line | regex_search('CHASSIS=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('CHASSIS=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_stcweb: "{{
-          (rfc2544_params_line | regex_search('STCWEB=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('STCWEB=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
         config_cluster: "{{
-          (rfc2544_params_line | regex_search('CLUSTER=([^;\\n]+)', '\\1'))[0] | default('N/A')
+          (rfc2544_params_line | regex_search('CLUSTER=([^;\\n]+)', '\\1') | default(['N/A'], true))[0]
             if rfc2544_params_line else 'N/A' }}"
 
     - name: Read test duration from test-duration.yml
@@ -106,7 +106,7 @@
     - name: Extract histogram data from RANMETRICS
       ansible.builtin.set_fact:
         histogram_line: "{{
-          rfc2544_log | regex_search(\"RANMETRICS_RFC2544_HISTOGRAM='([^']+)'\", '\\1') | first | default('') }}"
+          (rfc2544_log | regex_search(\"RANMETRICS_RFC2544_HISTOGRAM='([^']+)'\", '\\1') | default([''], true)) | first }}"
 
     - name: Calculate latency distribution nines (samples < 30μs)
       ansible.builtin.shell: |

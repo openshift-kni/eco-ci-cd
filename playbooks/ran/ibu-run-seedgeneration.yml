@@ -2,17 +2,15 @@
 # Run eco-gotests seedgeneration with pull-secret backup/restore.
 #
 # LCA seedgeneration sterilizes openshift-config/pull-secret; in disconnected
-# Prow that degrades master MCP. This playbook:
+# Prow that can leave master MCP degraded and SeedGenerator Failed (MCO
+# timeout during pull-secret sanitize). This playbook:
 #   1. Backs up pull-secret.data['.dockerconfigjson'] (already base64)
 #   2. Runs the pre-generated eco-gotests script
 #   3. Always restores the pull secret and waits for master MCP
 #   4. Verifies SeedGenerator reached SeedGenCompleted=True
+#   5. On failure: delete SeedGenerator and re-run steps 2-4 once
 #
 # Generate the script first with deploy-run-eco-gotests.yaml.
-#
-# Success tracking (after MCP is healthy):
-#   SeedGenerator CR has condition SeedGenCompleted=True (reason Completed).
-#   JUnit under {{ eco_gotest_dir }}/report/ is still collected by Prow.
 #
 # Usage:
 #   ansible-playbook playbooks/ran/ibu-run-seedgeneration.yml \
@@ -94,14 +92,14 @@
           {{ _ibu_seedgen_ps.resources[0].data['.dockerconfigjson'] }}
       no_log: true
 
-    - name: Run seedgeneration and always restore pull secret
-      block:
-        - name: Make eco-gotests script safe without a TTY
-          ansible.builtin.replace:
-            path: "{{ eco_gotest_dir }}/{{ script_name }}"
-            regexp: 'podman run -it'
-            replace: 'podman run -i'
+    - name: Make eco-gotests script safe without a TTY
+      ansible.builtin.replace:
+        path: "{{ eco_gotest_dir }}/{{ script_name }}"
+        regexp: 'podman run -it'
+        replace: 'podman run -i'
 
+    - name: Run seedgeneration with one retry after Failed SeedGenerator
+      block:
         - name: Execute eco-gotests seedgeneration script
           ansible.builtin.command:
             cmd: "./{{ script_name }}"
@@ -112,7 +110,6 @@
           failed_when: false
           changed_when: true
 
-      always:
         - name: Restore spoke openshift-config/pull-secret
           kubernetes.core.k8s:
             kubeconfig: "{{ kubeconfig }}"
@@ -156,45 +153,143 @@
               == (_ibu_seedgen_mcp.resources[0].status.machineCount
                   | default(0) | int)
 
-    - name: Get SeedGenerator status after MCP recovery
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig }}"
-        api_version: lca.openshift.io/v1
-        kind: SeedGenerator
-        name: "{{ ibu_seedgeneration_cr_name }}"
-      register: _ibu_seedgen_cr
+        - name: Get SeedGenerator status after MCP recovery
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: lca.openshift.io/v1
+            kind: SeedGenerator
+            name: "{{ ibu_seedgeneration_cr_name }}"
+          register: _ibu_seedgen_cr
 
-    - name: Assert SeedGenerator CR exists
-      ansible.builtin.assert:
-        that:
-          - _ibu_seedgen_cr.resources | length > 0
-        fail_msg: >-
-          SeedGenerator/{{ ibu_seedgeneration_cr_name }} not found after
-          seedgeneration (eco-gotests rc={{
-            _ibu_seedgen_run.rc | default('unknown')
-          }}).
+        - name: Assert SeedGenerator completed successfully
+          vars:
+            _has_cr: >-
+              {{ _ibu_seedgen_cr.resources | default([]) | length > 0 }}
+            _conds: "{{ _ibu_seedgen_cr.resources[0].status.conditions | default([]) if (_ibu_seedgen_cr.resources | default([]) | length > 0) else [] }}"  # noqa: yaml[line-length]
+          ansible.builtin.assert:
+            that:
+              - _has_cr | bool
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenCompleted')
+                 | map(attribute='status') | first | default('False'))
+                == 'True'
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenCompleted')
+                 | map(attribute='reason') | first | default(''))
+                == 'Completed'
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenInProgress')
+                 | map(attribute='status') | first | default('True'))
+                == 'False'
+            fail_msg: >-
+              SeedGenerator/{{ ibu_seedgeneration_cr_name }} did not complete.
+              Deleting CR and re-running seedgeneration once.
+              conditions={{ _conds | to_json }}
 
-    - name: Set SeedGenerator conditions fact
-      ansible.builtin.set_fact:
-        _ibu_seedgen_conds: "{{ _ibu_seedgen_cr.resources[0].status.conditions | default([]) }}"  # noqa: yaml[line-length]
+      rescue:
+        - name: Delete Failed SeedGenerator
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            api_version: lca.openshift.io/v1
+            kind: SeedGenerator
+            name: "{{ ibu_seedgeneration_cr_name }}"
 
-    - name: Assert SeedGenerator completed successfully
-      ansible.builtin.assert:
-        that:
-          - >-
-            (_ibu_seedgen_conds
-             | selectattr('type', 'equalto', 'SeedGenCompleted')
-             | map(attribute='status') | first | default('False')) == 'True'
-          - >-
-            (_ibu_seedgen_conds
-             | selectattr('type', 'equalto', 'SeedGenCompleted')
-             | map(attribute='reason') | first | default('')) == 'Completed'
-          - >-
-            (_ibu_seedgen_conds
-             | selectattr('type', 'equalto', 'SeedGenInProgress')
-             | map(attribute='status') | first | default('True')) == 'False'
-        fail_msg: >-
-          SeedGenerator/{{ ibu_seedgeneration_cr_name }} did not complete.
-          Expected SeedGenCompleted=True (reason Completed) and
-          SeedGenInProgress=False.
-          conditions={{ _ibu_seedgen_conds | to_json }}
+        - name: Wait until SeedGenerator is gone
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: lca.openshift.io/v1
+            kind: SeedGenerator
+            name: "{{ ibu_seedgeneration_cr_name }}"
+          register: _ibu_seedgen_cr_gone
+          retries: 30
+          delay: 10
+          until: _ibu_seedgen_cr_gone.resources | length == 0
+
+        - name: Re-run eco-gotests seedgeneration script
+          ansible.builtin.command:
+            cmd: "./{{ script_name }}"
+            chdir: "{{ eco_gotest_dir }}"
+          async: "{{ ibu_seedgeneration_async_timeout | int }}"
+          poll: "{{ ibu_seedgeneration_poll_interval | int }}"
+          register: _ibu_seedgen_run
+          failed_when: false
+          changed_when: true
+
+        - name: Restore spoke openshift-config/pull-secret after retry
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: pull-secret
+                namespace: openshift-config
+              type: kubernetes.io/dockerconfigjson
+              data:
+                .dockerconfigjson: "{{ _ibu_seedgen_ps_b64 }}"
+          no_log: true
+
+        - name: Wait for master MCP after retry restore
+          when: ibu_seedgeneration_wait_mcp | bool
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: machineconfiguration.openshift.io/v1
+            kind: MachineConfigPool
+            name: master
+          register: _ibu_seedgen_mcp
+          retries: "{{ ibu_seedgeneration_mcp_retries | int }}"
+          delay: "{{ ibu_seedgeneration_mcp_delay | int }}"
+          until:
+            - _ibu_seedgen_mcp.resources | length > 0
+            - >-
+              (_ibu_seedgen_mcp.resources[0].status.conditions
+               | selectattr('type', 'equalto', 'Updated')
+               | map(attribute='status') | first | default('False'))
+              == 'True'
+            - >-
+              (_ibu_seedgen_mcp.resources[0].status.conditions
+               | selectattr('type', 'equalto', 'Degraded')
+               | map(attribute='status') | first | default('True'))
+              == 'False'
+            - >-
+              (_ibu_seedgen_mcp.resources[0].status.readyMachineCount
+               | default(0) | int)
+              == (_ibu_seedgen_mcp.resources[0].status.machineCount
+                  | default(0) | int)
+
+        - name: Get SeedGenerator status after retry
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: lca.openshift.io/v1
+            kind: SeedGenerator
+            name: "{{ ibu_seedgeneration_cr_name }}"
+          register: _ibu_seedgen_cr
+
+        - name: Assert SeedGenerator completed after retry
+          vars:
+            _has_cr: >-
+              {{ _ibu_seedgen_cr.resources | default([]) | length > 0 }}
+            _conds: "{{ _ibu_seedgen_cr.resources[0].status.conditions | default([]) if (_ibu_seedgen_cr.resources | default([]) | length > 0) else [] }}"  # noqa: yaml[line-length]
+          ansible.builtin.assert:
+            that:
+              - _has_cr | bool
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenCompleted')
+                 | map(attribute='status') | first | default('False'))
+                == 'True'
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenCompleted')
+                 | map(attribute='reason') | first | default(''))
+                == 'Completed'
+              - >-
+                (_conds | selectattr('type', 'equalto', 'SeedGenInProgress')
+                 | map(attribute='status') | first | default('True'))
+                == 'False'
+            fail_msg: >-
+              SeedGenerator/{{ ibu_seedgeneration_cr_name }} still failed
+              after retry (eco-gotests rc={{
+                _ibu_seedgen_run.rc | default('unknown')
+              }}).
+              conditions={{ _conds | to_json }}

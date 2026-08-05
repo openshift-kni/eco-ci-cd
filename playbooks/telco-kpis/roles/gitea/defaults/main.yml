@@ -26,3 +26,16 @@ development_mode: false
 
 # Repository retention policy
 gitea_report_retention_days: 7  # Keep reports for last 7 days
+
+# Report publishing branch (overridden by report_repo_branch for production repos)
+report_publish_branch: "main"
+
+# Production/external repository configuration (from vault)
+# When report_repo_url is set and development_mode is false, reports are published
+# to this external repository instead of the local Gitea instance.
+# development_mode always takes precedence for debug/troubleshooting.
+report_repo_url: ""
+report_repo_branch: "telco-kpis-reports"
+report_repo_token: ""
+report_repo_user: ""
+report_repo_password: ""

@@ -165,23 +165,63 @@
           Run telco-kpis tests with the current environment configuration before generating report.
       when: available_artifacts.files | length == 0
 
-    - name: Check if Gitea repository has existing reports for this spoke
-      block:
-        - name: Set Gitea repository URL (matches gitea role defaults)
-          ansible.builtin.set_fact:
-            gitea_repo_clone_url: "http://{{ ansible_fqdn }}:3000/{{ ansible_user }}/telco-kpis-reports.git"
-            gitea_clone_dir: "/tmp/gitea-freshness-check-{{ spoke_cluster }}-{{ ansible_date_time.epoch }}"
+    - name: Determine report publishing configuration
+      ansible.builtin.set_fact:
+        _report_publish_enabled: "{{ (development_mode | default(false) | bool) or (report_repo_url | default('') | length > 0) }}"
 
-        - name: Clone Gitea repository to check last report timestamp
+    - name: Configure freshness check URL (development mode - Gitea)
+      ansible.builtin.set_fact:
+        _freshness_repo_url: "http://{{ ansible_fqdn }}:3000/{{ ansible_user }}/telco-kpis-reports.git"
+        _freshness_branch: "main"
+      when:
+        - _report_publish_enabled | bool
+        - development_mode | default(false) | bool
+
+    - name: Configure freshness check URL (production repo - token auth)
+      ansible.builtin.set_fact:
+        _freshness_repo_url: >-
+          {{ report_repo_url.split('://')[0] }}://{{
+          report_repo_user | default('oauth2', true) }}:{{
+          report_repo_token }}@{{
+          report_repo_url.split('://')[1] }}
+        _freshness_branch: "{{ report_repo_branch | default('telco-kpis-reports') }}"
+      when:
+        - _report_publish_enabled | bool
+        - not (development_mode | default(false) | bool)
+        - report_repo_token | default('') | length > 0
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Configure freshness check URL (production repo - password auth)
+      ansible.builtin.set_fact:
+        _freshness_repo_url: "{{ report_repo_url.split('://')[0] }}://{{ report_repo_user }}:{{ report_repo_password }}@{{ report_repo_url.split('://')[1] }}"
+        _freshness_branch: "{{ report_repo_branch | default('telco-kpis-reports') }}"
+      when:
+        - _report_publish_enabled | bool
+        - not (development_mode | default(false) | bool)
+        - report_repo_token | default('') | length == 0
+        - report_repo_user | default('') | length > 0
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Check if report repository has existing reports for this spoke
+      when:
+        - _report_publish_enabled | bool
+        - not (force_report | default(false) | bool)
+      block:
+        - name: Set freshness check clone directory
+          ansible.builtin.set_fact:
+            gitea_clone_dir: "/tmp/report-freshness-check-{{ spoke_cluster }}-{{ ansible_date_time.epoch }}"
+
+        - name: Clone report repository to check last report timestamp
           ansible.builtin.git:
-            repo: "{{ gitea_repo_clone_url }}"
+            repo: "{{ _freshness_repo_url }}"
             dest: "{{ gitea_clone_dir }}"
-            version: main
+            version: "{{ _freshness_branch }}"
             depth: 10
           failed_when: false
           register: gitea_clone_result
           environment:
             GIT_TERMINAL_PROMPT: "0"
+          no_log: "{{ ansible_verbosity < 3 }}"
 
         - name: Get last commit timestamp for this spoke's reports
           ansible.builtin.shell: |
@@ -251,7 +291,7 @@
               - "==========================================="
               - "Test Freshness Check"
               - "==========================================="
-              - "Gitea repository: {{ gitea_repo_clone_url }}"
+              - "Report repository: {{ report_repo_url | default('http://' + ansible_fqdn + ':3000/' + ansible_user + '/telco-kpis-reports.git') }}"
               - "Last report generated: {{ last_report_commit_time.stdout | default('Never', true) }}"
               - "Last report UTC timestamp: {{ last_report_utc_ts.stdout | default('N/A', true) }}"
               - >-
@@ -261,7 +301,7 @@
               - "==========================================="
           when: test_freshness_check is defined
 
-        - name: Cleanup temporary Gitea clone
+        - name: Cleanup temporary freshness check clone
           ansible.builtin.file:
             path: "{{ gitea_clone_dir }}"
             state: absent
@@ -273,6 +313,11 @@
             - test_freshness_check.stdout_lines is defined
             - test_freshness_check.stdout_lines | length > 0
             - test_freshness_check.stdout_lines[-1] == "NO_NEW_TESTS"
+
+    - name: Display force regeneration notice
+      ansible.builtin.debug:
+        msg: "Force report regeneration requested - skipping freshness check"
+      when: force_report | default(false) | bool
 
     - name: Create temporary directory for report output
       ansible.builtin.tempfile:
@@ -338,13 +383,13 @@
         - deployment_timeline_stat.stat.exists
       failed_when: false
 
-    - name: Publish report to Gitea (development mode only)
+    - name: Publish report to repository
       ansible.builtin.include_role:
         name: gitea
       vars:
         report_file: "{{ output_filename }}"
         report_tarball: "{{ tarball_name }}"
-      when: development_mode | default(false) | bool
+      when: _report_publish_enabled | bool
 
     - name: Cleanup temporary output directory
       ansible.builtin.file:

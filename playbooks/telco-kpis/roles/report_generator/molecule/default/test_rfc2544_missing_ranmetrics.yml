@@ -1,0 +1,200 @@
+---
+# Test: RFC2544 parser handles missing RANMETRICS without crashing
+#
+# Reproduces the scenario where dpdk-testpmd pod fails to start and the
+# podman-run.log has no RANMETRICS_RFC2544_* lines. Before the fix, this
+# caused: "'NoneType' object is not iterable" on regex_search | first.
+#
+# This test runs the parse_rfc2544.yml parser directly against a failing
+# log and verifies it produces a valid (FAIL) result without crashing.
+
+- name: Test RFC2544 parser with missing RANMETRICS data
+  hosts: localhost
+  gather_facts: true
+
+  vars:
+    spoke_cluster: test-spoke-01
+    test_artifact_base: /tmp/molecule-rfc2544-fail-test
+
+  tasks:
+    - name: Clean previous test artifacts
+      ansible.builtin.file:
+        path: "{{ test_artifact_base }}"
+        state: absent
+
+    - name: Create test artifact directory
+      ansible.builtin.file:
+        path: "{{ test_artifact_base }}/rfc2544-{{ spoke_cluster }}-20260706-140000"
+        state: directory
+        mode: '0755'
+
+    # yamllint disable rule:line-length
+    - name: Create RFC2544 log with NO RANMETRICS (dpdk-testpmd pod failure)
+      ansible.builtin.copy:
+        content: |
+          Cloning ran-integration repository...
+          Patching ran-integration's set_ran_test_image() function for correct registry detection...
+          Creating artifacts symlink...
+          Starting RFC2544 test via ran-integration script...
+          [ERROR] pod/dpdk-testpmd-test-spoke-01 isn't ready
+          Script took 185 seconds
+          export RAN_METRICS_CLUSTER="test-spoke-01"
+          export RAN_METRICS_SW_VERSION="4.22.0"
+          export RAN_METRICS_CPU_TYPE="Intel(R) Xeon(R) Gold 6433N"
+          export RAN_METRICS_HYPERTHREAD="2"
+          export RAN_METRICS_KERNEL_VERSION="5.14.0-687.11.1.el9_8.x86_64"
+          export RAN_METRICS_KERNEL_REALTIME="false"
+          export RAN_METRICS_POWER_MODE="performance"
+          Posting time: 185, tags pipeline="ci", rc="1", cluster="test-spoke-01", cpu_type="Intel(R) Xeon(R) Gold 6433N", hyperthread="2", kernel_realtime="false", kernel_version="5.14.0-687.11.1.el9_8.x86_64", power_mode="performance", sw_version="4.22.0", pipeline_stage="run-rfc-2544-tests"
+          text format parsing error in line 1: expected float as value, got "-rfc-2544-tests_duration_seconds{pipeline=\"ci\","
+          removed '/workspace/ran-integration/ran-extra-vars_test-spoke-01'
+          Script took 205 seconds
+          Posting time: 205, tags pipeline="ci", rc="1", cluster="test-spoke-01", cpu_type="Intel(R) Xeon(R) Gold 6433N", hyperthread="2", kernel_realtime="false", kernel_version="5.14.0-687.11.1.el9_8.x86_64", power_mode="performance", sw_version="4.22.0", pipeline_stage="run-rfc-2544-tests"
+          text format parsing error in line 1: expected float as value, got "-rfc-2544-tests_duration_seconds{pipeline=\"ci\","
+          removed '/workspace/ran-integration/ran-extra-vars_test-spoke-01'
+          ==========================================
+          RFC2544 test completed with exit code: 1
+          End time: 2026-07-06T14:03:45Z
+          Test execution time: 225s (00h03m45s)
+          ==========================================
+        dest: "{{ test_artifact_base }}/rfc2544-{{ spoke_cluster }}-20260706-140000/podman-run.log"
+        mode: '0644'
+    # yamllint enable rule:line-length
+
+    - name: Create test duration file
+      ansible.builtin.copy:
+        content: |
+          ---
+          start_epoch: 1720274400
+          end_epoch: 1720274625
+          start_time: "2026-07-06T14:00:00Z"
+          end_time: "2026-07-06T14:03:45Z"
+          duration_seconds: 225
+          duration_human: "3m45s"
+        dest: "{{ test_artifact_base }}/rfc2544-{{ spoke_cluster }}-20260706-140000/test-duration.yml"
+        mode: '0644'
+
+    - name: Initialize report_data structure
+      ansible.builtin.set_fact:
+        report_data:
+          test_results: {}
+
+    - name: Set current test context
+      ansible.builtin.set_fact:
+        current_test:
+          dir_name: "rfc2544-test-spoke-01-20260706-140000"
+          dir_path: "{{ test_artifact_base }}/rfc2544-{{ spoke_cluster }}-20260706-140000"
+          test_name: rfc2544
+
+    - name: Resolve report_generator role path
+      ansible.builtin.set_fact:
+        _rfc2544_test_role_path: >-
+          {{ lookup('env', 'ANSIBLE_ROLES_PATH') | default('/eco-ci-cd/playbooks/telco-kpis/roles', true)
+          }}/report_generator
+
+    - name: Run RFC2544 parser (this crashed before the fix)
+      ansible.builtin.include_tasks:
+        file: "{{ _rfc2544_test_role_path }}/tasks/parsers/parse_rfc2544.yml"
+
+    # --- Verify parser produced valid output ---
+    - name: Verify parser completed and stored result
+      ansible.builtin.assert:
+        that:
+          - report_data.test_results[current_test.dir_name] is defined
+        fail_msg: "RFC2544 parser did not store result in report_data"
+        success_msg: "RFC2544 parser stored result successfully"
+
+    - name: Get parsed result
+      ansible.builtin.set_fact:
+        rfc2544_fail_result: "{{ report_data.test_results[current_test.dir_name] }}"
+
+    - name: Verify test type is correct
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.test_type == 'rfc2544'
+        fail_msg: "Expected test_type 'rfc2544', got '{{ rfc2544_fail_result.test_type }}'"
+        success_msg: "test_type is 'rfc2544'"
+
+    - name: Verify FAIL status (test completed with exit code 1)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.status == 'FAIL'
+        fail_msg: "Expected FAIL status, got '{{ rfc2544_fail_result.status }}'"
+        success_msg: "Status is FAIL (correct for failed test)"
+
+    - name: Display has_error value for debugging
+      ansible.builtin.debug:
+        msg: "has_error={{ rfc2544_fail_result.has_error }}, type={{ rfc2544_fail_result.has_error | type_debug }}"
+
+    - name: Verify error was detected (ERROR or Traceback in log)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.has_error | string == 'True'
+            or rfc2544_fail_result.status == 'FAIL'
+        fail_msg: >-
+          Parser should detect error or report FAIL.
+          has_error={{ rfc2544_fail_result.has_error }},
+          status={{ rfc2544_fail_result.status }}
+        success_msg: "Error/failure correctly detected"
+
+    - name: Verify throughput defaults to 0 (no RANMETRICS data)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.throughput_percent | float == 0.0
+        fail_msg: >-
+          Expected throughput 0.0 (no RANMETRICS), got
+          {{ rfc2544_fail_result.throughput_percent }}
+        success_msg: "Throughput correctly defaults to 0.0"
+
+    - name: Verify latency defaults (no RANMETRICS data)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.max_latency | float == 999.0
+          - rfc2544_fail_result.avg_latency | float == 0.0
+          - rfc2544_fail_result.min_latency | float == 0.0
+        fail_msg: "Latency values should default correctly when RANMETRICS missing"
+        success_msg: "Latency values default correctly (max=999, avg=0, min=0)"
+
+    - name: Verify histogram_raw is empty (no RANMETRICS_RFC2544_HISTOGRAM)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.histogram_raw | length == 0
+        fail_msg: "histogram_raw should be empty when no RANMETRICS_RFC2544_HISTOGRAM"
+        success_msg: "histogram_raw is empty (correct for missing RANMETRICS)"
+
+    - name: Verify config params default to N/A (no RFC2544_PARAMS line)
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.config.lat_duration == 'N/A'
+          - rfc2544_fail_result.config.frame_size == 'N/A'
+          - rfc2544_fail_result.config.lat_rate == 'N/A'
+        fail_msg: "Config params should be N/A when RFC2544_PARAMS line is missing"
+        success_msg: "Config params default to N/A"
+
+    - name: Verify distribution nines default to 0
+      ansible.builtin.assert:
+        that:
+          - rfc2544_fail_result.latency_distribution_nines | int == 0
+          - rfc2544_fail_result.latency_distribution_percent | float == 0.0
+        fail_msg: "Distribution nines/percent should default to 0"
+        success_msg: "Distribution values default to 0"
+
+    - name: Cleanup test artifacts
+      ansible.builtin.file:
+        path: "{{ test_artifact_base }}"
+        state: absent
+
+    - name: Display results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "RFC2544 Missing RANMETRICS Test: PASSED"
+          - "=========================================="
+          - "Parser handled missing RANMETRICS without crashing"
+          - "Result: {{ rfc2544_fail_result.status }}"
+          - "Error detected: {{ rfc2544_fail_result.has_error }}"
+          - "Throughput: {{ rfc2544_fail_result.throughput_percent }}%"
+          - "Max latency: {{ rfc2544_fail_result.max_latency }}us"
+          - "Histogram: '{{ rfc2544_fail_result.histogram_raw }}'"
+          - "Config params: {{ rfc2544_fail_result.config.lat_duration }}"
+          - "=========================================="

@@ -10,3 +10,6 @@
 
 - name: Verify - Check report output
   import_playbook: verify.yml
+
+- name: Test RFC2544 parser with missing RANMETRICS (regression test)
+  import_playbook: test_rfc2544_missing_ranmetrics.yml

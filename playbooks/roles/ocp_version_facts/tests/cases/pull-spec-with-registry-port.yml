@@ -1,0 +1,16 @@
+---
+# A registry with a port has an extra colon before the repo path. The regex
+# strip ('^.*:') is greedy, so it should still cut at the *last* colon
+# (before the tag) rather than the one after the registry host.
+ocp_version_facts_release: "quay.io:8443/openshift-release-dev/ocp-release:4.17.9-x86_64"
+
+expected_facts:
+  ocp_version_facts_pull_spec: "quay.io:8443/openshift-release-dev/ocp-release:4.17.9-x86_64"
+  ocp_version_facts_parsed_release: "4.17.9"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "9"
+  ocp_version_facts_release_type: "stable"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

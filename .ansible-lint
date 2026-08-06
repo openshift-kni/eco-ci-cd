@@ -6,3 +6,9 @@ skip_list:
 exclude_paths:
   - "tests/dast"
   - "*collections*"
+
+# Role test fixtures are plain vars files (dicts), not playbooks - without this
+# the path-based schema matching in editors/IDEs (e.g. the VS Code Ansible
+# extension) misidentifies them as playbooks since they live under playbooks/.
+kinds:
+  - vars: "**/tests/cases/*.yml"

@@ -24,6 +24,11 @@
       - ocp_version_facts_parsed_release is defined
       - ocp_version_facts_parsed_release | length > 0
       - ocp_version_facts_parsed_release.split('.') | length >= 3
+      # Jinja's `int` filter silently defaults to 0 on non-numeric input, so
+      # without this a garbage version like "a.b.c" would produce major=0,
+      # minor=0 instead of failing - check numeric-ness explicitly here.
+      - ocp_version_facts_parsed_release.split('.')[0] is match('^[0-9]+$')
+      - ocp_version_facts_parsed_release.split('.')[1] is match('^[0-9]+$')
     fail_msg: "Invalid OpenShift version format: {{ ocp_version_facts_parsed_release | default('undefined') }}"
     success_msg: "Version format validation passed"
 
@@ -45,11 +50,12 @@
   ansible.builtin.set_fact:
     ocp_version_facts_release_type: >-
       {%- if ocp_version_facts_dev_version is defined -%}
-        {%- if 'nightly' in ocp_version_facts_dev_version -%}
+        {%- set dev_version_tokens = (ocp_version_facts_dev_version | regex_replace('-', '.')).split('.') -%}
+        {%- if 'nightly' in dev_version_tokens -%}
           nightly
-      {%- elif 'ec' in ocp_version_facts_dev_version -%}
+      {%- elif 'ec' in dev_version_tokens -%}
           engineering-candidate
-      {%- elif 'rc' in ocp_version_facts_dev_version -%}
+      {%- elif 'rc' in dev_version_tokens -%}
           release-candidate
       {%- else -%}
           development

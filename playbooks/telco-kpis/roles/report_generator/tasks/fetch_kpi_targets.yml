@@ -1,0 +1,167 @@
+---
+# Fetch KPI targets from canonical GitLab repository
+# Falls back to hardcoded defaults if GitLab is unreachable
+
+- name: Set KPI targets source configuration
+  ansible.builtin.set_fact:
+    _kpi_targets_api_url: >-
+      https://gitlab.cee.redhat.com/api/v4/projects/telcov10n%2Fkpi/repository/files/kpi_targets.yaml/raw?ref=main
+    _kpi_targets_web_url: >-
+      https://gitlab.cee.redhat.com/telcov10n/kpi/-/blob/main/kpi_targets.yaml
+
+- name: Fetch KPI targets from GitLab
+  block:
+    - name: Validate KPI targets token is available
+      ansible.builtin.assert:
+        that:
+          - kpi_targets_token | default('') | length > 0
+        fail_msg: "No KPI targets token provided — falling back to hardcoded defaults"
+
+    - name: Download kpi_targets.yaml from GitLab API
+      ansible.builtin.uri:
+        url: "{{ _kpi_targets_api_url }}"
+        method: GET
+        headers:
+          PRIVATE-TOKEN: "{{ kpi_targets_token }}"
+        return_content: true
+        timeout: 30
+        validate_certs: false
+      register: _kpi_targets_response
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Parse KPI targets YAML
+      ansible.builtin.set_fact:
+        _kpi_targets_raw: "{{ _kpi_targets_response.content | from_yaml | to_json | from_json }}"
+
+    - name: Select applicable KPI target set (latest valid_from <= today)
+      ansible.builtin.set_fact:
+        _selected_kpi_set: >-
+          {{ _kpi_targets_raw.platform_kpis
+             | selectattr('valid_from', 'defined')
+             | sort(attribute='valid_from')
+             | reverse
+             | first }}
+
+    - name: Set KPI targets and metadata from GitLab
+      ansible.builtin.set_fact:
+        kpi_targets: "{{ _selected_kpi_set.categories }}"
+        kpi_targets_metadata:
+          source_url: "{{ _kpi_targets_web_url }}"
+          valid_from: "{{ _selected_kpi_set.valid_from }}"
+          fetched_at: "{{ ansible_date_time.iso8601 }}"
+          fallback: false
+
+  rescue:
+    - name: Log KPI targets fetch failure
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Could not fetch KPI targets from GitLab
+          ({{ ansible_failed_result.msg | default('unknown error') }}).
+          Falling back to hardcoded defaults.
+
+    - name: Set hardcoded fallback KPI targets
+      ansible.builtin.set_fact:
+        kpi_targets:
+          os_latency:
+            title: "OS Latency"
+            targets:
+              latency_max:
+                type: "<="
+                value: 20
+                unit: "µs"
+          cyclictest:
+            title: "Cyclictest"
+            targets:
+              latency_max:
+                type: "<="
+                value: 20
+                unit: "µs"
+              latency_distribution:
+                ref: "99.9999%"
+                type: "<="
+                value: 10
+                unit: "µs"
+          ptp:
+            title: "PTP"
+            targets:
+              offset_max:
+                type: "<"
+                value: 100
+                unit: "ns"
+          rfc2544:
+            title: "RFC2544"
+            targets:
+              throughput:
+                type: ">"
+                value: 99.9
+                unit: "%"
+              latency_max_80:
+                type: "<"
+                value: 50
+                unit: "µs"
+              latency_max_80p_line_rate:
+                type: "<"
+                value: 30
+                unit: "µs"
+              latency_distribution:
+                ref: "99.9999%"
+                type: "<="
+                value: 30
+                unit: "µs"
+          deployment:
+            title: "Deployment"
+            targets:
+              ai_deployment_reboots:
+                type: "<="
+                value: 2
+              ai_deployment_time:
+                type: "<"
+                value: 120
+                unit: "min"
+          cpu_utilization:
+            title: "CPU Utilization"
+            targets:
+              total_max:
+                type: "<"
+                value: 3000
+                unit: "mc"
+              total_average:
+                type: "<"
+                value: 1000
+                unit: "mc"
+          reboot:
+            title: "Reboot"
+            targets:
+              soft_time_max:
+                type: "<"
+                value: 10
+                unit: "min"
+              soft_time_average:
+                type: "<"
+                value: 8
+                unit: "min"
+              power_cycle_time_max:
+                type: "<"
+                value: 12
+                unit: "min"
+              power_cycle_time_average:
+                type: "<"
+                value: 10
+                unit: "min"
+        kpi_targets_metadata:
+          source_url: "(hardcoded fallback)"
+          valid_from: "N/A"
+          fetched_at: "{{ ansible_date_time.iso8601 }}"
+          fallback: true
+
+- name: Display KPI targets configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "KPI Targets Configuration"
+      - "=========================================="
+      - "Source: {{ kpi_targets_metadata.source_url }}"
+      - "Valid from: {{ kpi_targets_metadata.valid_from }}"
+      - "Fetched at: {{ kpi_targets_metadata.fetched_at }}"
+      - "Using fallback: {{ kpi_targets_metadata.fallback }}"
+      - "=========================================="

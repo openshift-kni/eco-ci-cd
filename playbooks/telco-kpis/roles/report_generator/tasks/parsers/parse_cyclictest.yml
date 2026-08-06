@@ -145,9 +145,16 @@
           overall_availability: 100.0
           overall_number_of_nines: 100
 
-    - name: Determine test status (passed if max < 20us threshold)
+    - name: Set cyclictest latency threshold from KPI targets
       ansible.builtin.set_fact:
-        cyclictest_passed: "{{ (max_overall | int < 20) if max_overall else false }}"
+        _cyclictest_threshold: "{{ kpi_targets.cyclictest.targets.latency_max.value | default(20) | int }}"
+        _cyclictest_threshold_op: "{{ kpi_targets.cyclictest.targets.latency_max.type | default('<=') }}"
+
+    - name: Determine test status against KPI threshold
+      ansible.builtin.set_fact:
+        cyclictest_passed: >-
+          {{ (max_overall | int <= _cyclictest_threshold | int)
+             if max_overall else false }}
 
     - name: Extract duration from command line (e.g., "-D 5m")
       ansible.builtin.set_fact:
@@ -201,6 +208,8 @@
                   'test_duration': cyclictest_duration,
                   'availability_overall': cyclictest_avail_data.overall_availability | default(100.0),
                   'number_of_nines_overall': cyclictest_avail_data.overall_number_of_nines | default(100),
+                  'kpi_threshold': _cyclictest_threshold,
+                  'kpi_threshold_op': _cyclictest_threshold_op,
                   'raw_log_excerpt': cyclictest_log_excerpt,
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

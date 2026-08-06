@@ -8,6 +8,10 @@
     git_work_dir: "/tmp/gitea-publish-{{ ansible_date_time.epoch }}"
     report_dir_name: "{{ ansible_date_time.date }}"
 
+- name: Set report base directory (root for dev, reports/ for prod)
+  ansible.builtin.set_fact:
+    _reports_dir: "{{ git_work_dir }}{{ '' if (development_mode | default(false) | bool) else '/reports' }}"
+
 - name: Display publication info
   ansible.builtin.debug:
     msg:
@@ -44,12 +48,12 @@
   block:
     - name: Check if today's report directory exists
       ansible.builtin.stat:
-        path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+        path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
       register: today_report_dir
 
     - name: Find existing reports for today
       ansible.builtin.find:
-        paths: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+        paths: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
         patterns: "telco-kpis-report-{{ spoke_cluster }}-*.md"
       register: existing_reports
       when: today_report_dir.stat.exists and today_report_dir.stat.isdir
@@ -86,7 +90,7 @@
   block:
     - name: Find all date directories in reports
       ansible.builtin.find:
-        paths: "{{ git_work_dir }}/reports"
+        paths: "{{ _reports_dir }}"
         file_type: directory
         recurse: false
         patterns: "????-??-??"
@@ -110,32 +114,32 @@
 
     - name: Remove old report directories beyond retention period
       ansible.builtin.file:
-        path: "{{ git_work_dir }}/reports/{{ item }}"
+        path: "{{ _reports_dir }}/{{ item }}"
         state: absent
       loop: "{{ dirs_to_delete }}"
       when: dirs_to_delete | length > 0
 
 - name: Create report directory structure
   ansible.builtin.file:
-    path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+    path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
     state: directory
     mode: '0755'
 
 - name: Copy report markdown file
   ansible.builtin.copy:
     src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_file }}"
-    dest: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
+    dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
     mode: '0644'
 
 - name: Extract artifacts tarball
   ansible.builtin.unarchive:
     src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_tarball }}"
-    dest: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/"
+    dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/"
     remote_src: false
 
 - name: Find extracted artifact directories
   ansible.builtin.find:
-    paths: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+    paths: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
     file_type: directory
     patterns: "*-{{ spoke_cluster }}-*"
   register: artifact_dirs
@@ -202,7 +206,7 @@
       ansible.builtin.command:
         cmd: >-
           mv "{{ item.value.basename }}" "{{ item.key }}"
-        chdir: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+        chdir: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
       loop: "{{ latest_artifacts | dict2items }}"
       when: >-
         item.value.basename != item.key
@@ -212,7 +216,7 @@
 
     - name: Remove pre-existing target directories before rename (if rename failed)
       ansible.builtin.file:
-        path: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}/{{ item.key }}"
+        path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/{{ item.key }}"
         state: absent
       loop: "{{ latest_artifacts | dict2items }}"
       when: >-
@@ -223,7 +227,7 @@
       ansible.builtin.command:
         cmd: >-
           mv "{{ item.value.basename }}" "{{ item.key }}"
-        chdir: "{{ git_work_dir }}/reports/{{ report_dir_name }}/{{ spoke_cluster }}"
+        chdir: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
       loop: "{{ latest_artifacts | dict2items }}"
       when: >-
         item.value.basename != item.key and
@@ -232,19 +236,19 @@
 
 - name: Find all report markdown files
   ansible.builtin.find:
-    paths: "{{ git_work_dir }}/reports"
+    paths: "{{ _reports_dir }}"
     patterns: "*.md"
     recurse: true
   register: found_reports
 
 - name: Build report list for README
   ansible.builtin.set_fact:
-    report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', git_work_dir + '/reports/', '') | list }}"
+    report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', _reports_dir + '/', '') | list }}"
 
 - name: Update reports index README.md
   ansible.builtin.template:
     src: README.md.j2
-    dest: "{{ git_work_dir }}/reports/README.md"
+    dest: "{{ _reports_dir }}/README.md"
     mode: '0644'
 
 - name: Configure git user  # noqa: command-instead-of-module
@@ -304,6 +308,7 @@
         Web URL: {{ gitea_repo_web_url }}{{
         '/-/tree/' if not (development_mode | default(false) | bool)
         else '/src/branch/' }}{{
-        report_publish_branch | default('main') }}/reports/{{
+        report_publish_branch | default('main') }}{{
+        '/reports' if not (development_mode | default(false) | bool) else '' }}/{{
         report_dir_name }}/{{ spoke_cluster }}
       - "=========================================="

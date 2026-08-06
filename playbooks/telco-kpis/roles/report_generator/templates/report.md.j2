@@ -67,6 +67,9 @@
 # {{ report_generator_title }} - {{ report_data.cluster_info.cluster }}
 
 **Generated:** {{ report_timestamp }}
+{% if kpi_targets_metadata is defined %}
+**KPI Targets:** {% if kpi_targets_metadata.fallback %}⚠️ Using hardcoded fallback (GitLab unreachable){% else %}[{{ kpi_targets_metadata.valid_from }}]({{ kpi_targets_metadata.source_url }}){% endif %} | Fetched: {{ kpi_targets_metadata.fetched_at }}
+{% endif %}
 
 ---
 
@@ -145,8 +148,10 @@
 
 {% if result.test_type == 'oslat' and result.max_latency is defined %}
 
+{%- set oslat_thr = result.kpi_threshold | default(kpi_targets.os_latency.targets.latency_max.value | default(20)) | int -%}
+{%- set oslat_op = result.kpi_threshold_op | default(kpi_targets.os_latency.targets.latency_max.type | default('<=')) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - OSLAT KPI Result
-{{ test_criteria_note("Maximum latency < 20µs on all cores") }}
+{{ test_criteria_note("Maximum latency " ~ oslat_op ~ " " ~ oslat_thr ~ "µs on all cores") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 | Metric | Value |
@@ -161,13 +166,13 @@
 | Core | Min (µs) | Avg (µs) | Max (µs) | Availability | Nines | Result |
 |------|----------|----------|----------|-------------|-------|--------|
 {%   for core in result.core_results %}
-| {{ core.core }} | {{ core.min }} | {{ core.avg }} | {{ core.max }} | {{ core.availability | default('-') }}{% if core.availability is defined and core.availability != '-' %}%{% endif %} | {{ core.number_of_nines | default('-') }} | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
+| {{ core.core }} | {{ core.min }} | {{ core.avg }} | {{ core.max }} | {{ core.availability | default('-') }}{% if core.availability is defined and core.availability != '-' %}%{% endif %} | {{ core.number_of_nines | default('-') }} | {{ '✅ PASS' if core.max | int <= oslat_thr else '❌ FAIL' }} |
 {%   endfor %}
 {% else %}
 | Core | Max | Result |
 |------|-----|--------|
 {%   for core in result.core_results %}
-| {{ core.core }} | {{ core.max }} µs | {{ '✅ PASS' if core.max | int < 20 else '❌ FAIL' }} |
+| {{ core.core }} | {{ core.max }} µs | {{ '✅ PASS' if core.max | int <= oslat_thr else '❌ FAIL' }} |
 {%   endfor %}
 {% endif %}
 {% endif %}
@@ -182,8 +187,10 @@
 
 {% elif result.test_type == 'ptp' and result.ptp4l_max is defined %}
 
+{%- set ptp_thr = result.kpi_threshold | default(kpi_targets.ptp.targets.offset_max.value | default(100)) | int -%}
+{%- set ptp_op = result.kpi_threshold_op | default(kpi_targets.ptp.targets.offset_max.type | default('<')) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - PTP KPI Result
-{{ test_criteria_note("General offset < 100ns (Mellanox NIC: 100-200ns acceptable)") }}
+{{ test_criteria_note("General offset " ~ ptp_op ~ " " ~ ptp_thr ~ "ns (Mellanox NIC: 100-200ns acceptable)") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 | Metric | Value |
@@ -206,8 +213,10 @@
 
 {% elif result.test_type == 'cyclictest' and result.max_overall is defined %}
 
+{%- set cyc_thr = result.kpi_threshold | default(kpi_targets.cyclictest.targets.latency_max.value | default(20)) | int -%}
+{%- set cyc_op = result.kpi_threshold_op | default(kpi_targets.cyclictest.targets.latency_max.type | default('<=')) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CYCLICTEST KPI Result
-{{ test_criteria_note("Maximum overall latency < 20µs across all threads") }}
+{{ test_criteria_note("Maximum overall latency " ~ cyc_op ~ " " ~ cyc_thr ~ "µs across all threads") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 
@@ -223,13 +232,13 @@
 | Thread | Min (µs) | Avg (µs) | Max (µs) | Availability | Nines | Result |
 |--------|----------|----------|----------|-------------|-------|--------|
 {%   for thread in result.thread_results %}
-| {{ thread.thread }} | {{ thread.min }} | {{ thread.avg }} | {{ thread.max }} | {{ thread.availability | default('-') }}{% if thread.availability is defined and thread.availability != '-' %}%{% endif %} | {{ thread.number_of_nines | default('-') }} | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
+| {{ thread.thread }} | {{ thread.min }} | {{ thread.avg }} | {{ thread.max }} | {{ thread.availability | default('-') }}{% if thread.availability is defined and thread.availability != '-' %}%{% endif %} | {{ thread.number_of_nines | default('-') }} | {{ '✅ PASS' if thread.max | int <= cyc_thr else '❌ FAIL' }} |
 {%   endfor %}
 {% else %}
 | Thread | Min | Avg | Max | Result |
 |--------|-----|-----|-----|--------|
 {%   for thread in result.thread_results %}
-| {{ thread.thread }} | {{ thread.min }} µs | {{ thread.avg }} µs | {{ thread.max }} µs | {{ '✅ PASS' if thread.max | int < 20 else '❌ FAIL' }} |
+| {{ thread.thread }} | {{ thread.min }} µs | {{ thread.avg }} µs | {{ thread.max }} µs | {{ '✅ PASS' if thread.max | int <= cyc_thr else '❌ FAIL' }} |
 {%   endfor %}
 {% endif %}
 {% endif %}
@@ -244,8 +253,12 @@
 
 {% elif result.test_type == 'cpu_util' and result.test_cases is defined %}
 
+{%- set cpu_max_thr = result.kpi_thresholds.total_max | default(kpi_targets.cpu_utilization.targets.total_max.value | default(3000)) -%}
+{%- set cpu_max_op = result.kpi_thresholds.total_max_op | default(kpi_targets.cpu_utilization.targets.total_max.type | default('<')) -%}
+{%- set cpu_avg_thr = result.kpi_thresholds.total_average | default(kpi_targets.cpu_utilization.targets.total_average.value | default(1000)) -%}
+{%- set cpu_avg_op = result.kpi_thresholds.total_average_op | default(kpi_targets.cpu_utilization.targets.total_average.type | default('<')) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - CPU_UTIL KPI Result
-{{ test_criteria_note("No test case failures in SNO core reduction test suite") }}
+{{ test_criteria_note("Total CPU max " ~ cpu_max_op ~ " " ~ cpu_max_thr ~ "mc, avg " ~ cpu_avg_op ~ " " ~ cpu_avg_thr ~ "mc") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 
@@ -320,8 +333,12 @@ All infra pod components below 0.005 CPU threshold.
 
 {% elif result.test_type == 'reboot' and result.reboot_count is defined %}
 
+{%- set rbt_soft_thr = result.kpi_thresholds.soft_time_max_min | default(kpi_targets.reboot.targets.soft_time_max.value | default(10)) -%}
+{%- set rbt_soft_op = result.kpi_thresholds.soft_time_max_op | default(kpi_targets.reboot.targets.soft_time_max.type | default('<')) -%}
+{%- set rbt_pc_thr = result.kpi_thresholds.power_cycle_time_max_min | default(kpi_targets.reboot.targets.power_cycle_time_max.value | default(12)) -%}
+{%- set rbt_pc_op = result.kpi_thresholds.power_cycle_time_max_op | default(kpi_targets.reboot.targets.power_cycle_time_max.type | default('<')) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - REBOOT KPI Result
-{{ test_criteria_note("No test case failures in cluster reboot resilience test suite") }}
+{{ test_criteria_note("Soft reboot " ~ rbt_soft_op ~ " " ~ rbt_soft_thr ~ " min, Power cycle " ~ rbt_pc_op ~ " " ~ rbt_pc_thr ~ " min") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 
@@ -424,8 +441,12 @@ All infra pod components below 0.005 CPU threshold.
 
 {% elif result.test_type == 'ztp_ai_deployment_time' and result.deployment_time_human is defined %}
 
+{%- set dep_time_thr = kpi_targets.deployment.targets.ai_deployment_time.value | default(120) -%}
+{%- set dep_time_op = kpi_targets.deployment.targets.ai_deployment_time.type | default('<') -%}
+{%- set dep_reboot_thr = kpi_targets.deployment.targets.ai_deployment_reboots.value | default(2) -%}
+{%- set dep_reboot_op = kpi_targets.deployment.targets.ai_deployment_reboots.type | default('<=') -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - ZTP Assisted Installer Deployment Timeline
-{{ test_criteria_note("Deployment duration ≤ 2h0m (120 min) AND Reboot count ≤ 2") }}
+{{ test_criteria_note("Deployment duration " ~ dep_time_op ~ " " ~ dep_time_thr ~ " min AND Reboot count " ~ dep_reboot_op ~ " " ~ dep_reboot_thr) }}
 
 | **ZTP Deployment Duration** | **Reboot Count** |
 |-------------------|-------------------|
@@ -477,8 +498,12 @@ including all deployment phases from GitOps sync to workload readiness.
 
 {% elif result.test_type == 'rfc2544' and result.throughput_percent is defined %}
 
+{%- set rfc_tput_thr = result.thresholds.throughput_threshold | default(kpi_targets.rfc2544.targets.throughput.value | default(99.9)) -%}
+{%- set rfc_lat_thr = result.thresholds.max_latency_threshold | default(kpi_targets.rfc2544.targets.latency_max_80p_line_rate.value | default(30)) -%}
+{%- set rfc_abs_lat_thr = result.thresholds.absolute_max_latency | default(kpi_targets.rfc2544.targets.latency_max_80.value | default(50)) -%}
+{%- set rfc_nines_thr = result.thresholds.tolerance_nines | default(6) -%}
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - RFC2544 Network Performance ({{ result.pass_criteria }})
-{{ test_criteria_note("RDS: Throughput ≥99.9% AND Max Latency <30µs, OR Tolerance: ≥6 nines AND Max Latency <50µs") }}
+{{ test_criteria_note("RDS: Throughput ≥" ~ rfc_tput_thr ~ "% AND Max Latency <" ~ rfc_lat_thr ~ "µs, OR Tolerance: ≥" ~ rfc_nines_thr ~ " nines AND Max Latency <" ~ rfc_abs_lat_thr ~ "µs") }}
 
 {{ duration_breakdown_table(result.duration_breakdown) }}
 {% if result.config is defined %}
@@ -589,3 +614,8 @@ including all deployment phases from GitOps sync to workload readiness.
 - **Generated by:** {{ report_generator_script_name }}
 - **Timestamp:** {{ report_timestamp }}
 - **Cluster:** {{ report_data.cluster_info.cluster }}
+{% if kpi_targets_metadata is defined %}
+- **KPI Targets:** {{ 'Hardcoded fallback' if kpi_targets_metadata.fallback else kpi_targets_metadata.source_url }}
+- **KPI Valid From:** {{ kpi_targets_metadata.valid_from }}
+- **KPI Fetched At:** {{ kpi_targets_metadata.fetched_at }}
+{% endif %}

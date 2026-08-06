@@ -165,6 +165,12 @@
           Run telco-kpis tests with the current environment configuration before generating report.
       when: available_artifacts.files | length == 0
 
+    - name: Derive role-specific tokens from vault key (git_repo_token)
+      ansible.builtin.set_fact:
+        report_repo_token: "{{ git_repo_token }}"
+        kpi_targets_token: "{{ git_repo_token }}"
+      when: git_repo_token | default('') | length > 0
+
     - name: Determine report publishing configuration
       ansible.builtin.set_fact:
         _report_publish_enabled: "{{ (development_mode | default(false) | bool) or (report_repo_url | default('') | length > 0) }}"

@@ -199,6 +199,14 @@
                   'test_cases': reboot_result.test_cases,
                   'soft_reboot_iterations': reboot_iterations.soft_reboot | default([]),
                   'power_cycle_iterations': reboot_iterations.power_cycle | default([]),
+                  'kpi_thresholds': {
+                    'soft_time_max_min': kpi_targets.reboot.targets.soft_time_max.value | default(10),
+                    'soft_time_max_op': kpi_targets.reboot.targets.soft_time_max.type | default('<'),
+                    'soft_time_average_min': kpi_targets.reboot.targets.soft_time_average.value | default(8),
+                    'power_cycle_time_max_min': kpi_targets.reboot.targets.power_cycle_time_max.value | default(12),
+                    'power_cycle_time_max_op': kpi_targets.reboot.targets.power_cycle_time_max.type | default('<'),
+                    'power_cycle_time_average_min': kpi_targets.reboot.targets.power_cycle_time_average.value | default(10),
+                  },
                   'raw_log_excerpt': reboot_log_excerpt | default('No log available'),
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

@@ -27,6 +27,10 @@ report_generator_test_type_mapping:
 # Directory pattern for test artifacts: {test_name}-{spoke}-{YYYYMMDD}-{HHMMSS}
 report_generator_dir_pattern: '^(.+)-({{ spoke_cluster }})-(\d{8})-(\d{6})$'
 
+# KPI Targets - GitLab API token for fetching canonical thresholds
+# Derived from vault key: git_repo_token (set in generate-report.yml)
+kpi_targets_token: ""
+
 # Report metadata
 report_generator_title: "Telco KPIs Test Report"
 report_generator_script_name: "Ansible report-generator role"

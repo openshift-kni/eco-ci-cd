@@ -185,6 +185,14 @@
                   'suite_time': cpu_util_result.suite_time,
                   'test_cases': filtered_test_cases | default([]),
                   'scenarios': cpu_util_scenarios | default([]),
+                  'kpi_thresholds': {
+                    'total_max': kpi_targets.cpu_utilization.targets.total_max.value | default(3000),
+                    'total_max_op': kpi_targets.cpu_utilization.targets.total_max.type | default('<'),
+                    'total_max_unit': kpi_targets.cpu_utilization.targets.total_max.unit | default('mc'),
+                    'total_average': kpi_targets.cpu_utilization.targets.total_average.value | default(1000),
+                    'total_average_op': kpi_targets.cpu_utilization.targets.total_average.type | default('<'),
+                    'total_average_unit': kpi_targets.cpu_utilization.targets.total_average.unit | default('mc'),
+                  },
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,
                     'total_human': test_duration_human,

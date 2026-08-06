@@ -42,6 +42,11 @@
         phc2sys_avg: "{{ phc2sys_avg_match[0] if phc2sys_avg_match else 'N/A' }}"
         ptp4l_restarts: "{{ ptp4l_restarts_match[0] if ptp4l_restarts_match else '0' }}"
 
+    - name: Set PTP offset threshold from KPI targets
+      ansible.builtin.set_fact:
+        _ptp_threshold: "{{ kpi_targets.ptp.targets.offset_max.value | default(100) | int }}"
+        _ptp_threshold_op: "{{ kpi_targets.ptp.targets.offset_max.type | default('<') }}"
+
     - name: Determine PTP test status
       ansible.builtin.set_fact:
         ptp_passed: "{{ '[INFO] Test status passed' in ptp_log }}"
@@ -84,6 +89,8 @@
                   'phc2sys_min': phc2sys_min,
                   'phc2sys_avg': phc2sys_avg,
                   'ptp4l_restarts': ptp4l_restarts,
+                  'kpi_threshold': _ptp_threshold,
+                  'kpi_threshold_op': _ptp_threshold_op,
                   'raw_log_excerpt': ptp_log_excerpt,
                   'duration_breakdown': {
                     'total_seconds': actual_test_duration_seconds,

@@ -19,7 +19,11 @@
         state: started
       register: ssh_reachable
       failed_when: false
+      ignore_unreachable: true
       delegate_to: localhost
+      vars:
+        ansible_connection: local
+        ansible_remote_tmp: /tmp/.ansible/tmp
 
     - name: Report node reachability
       ansible.builtin.debug:

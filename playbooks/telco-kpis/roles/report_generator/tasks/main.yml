@@ -27,6 +27,9 @@
 - name: Parse node-info for cluster and hardware metadata
   ansible.builtin.include_tasks: parse_node_info.yml
 
+- name: Fetch KPI targets from canonical source
+  ansible.builtin.include_tasks: fetch_kpi_targets.yml
+
 - name: Parse test results for each discovered test
   ansible.builtin.include_tasks: parse_test.yml
   loop: "{{ report_data.test_runs }}"

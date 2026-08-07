@@ -191,12 +191,12 @@
         absolute_max_latency: "{{ (thresholds_content.content | b64decode | from_yaml).absolute_max_latency }}"
       when: thresholds_file.stat.exists and thresholds_content.content is defined
 
-    - name: Set default thresholds if file not found
+    - name: Set thresholds from KPI targets if artifact file not found
       ansible.builtin.set_fact:
-        throughput_threshold: 99.9
-        max_latency_threshold: 30
+        throughput_threshold: "{{ kpi_targets.rfc2544.targets.throughput.value | default(99.9) }}"
+        max_latency_threshold: "{{ kpi_targets.rfc2544.targets.latency_max_80p_line_rate.value | default(30) }}"
         tolerance_nines: 6
-        absolute_max_latency: 50
+        absolute_max_latency: "{{ kpi_targets.rfc2544.targets.latency_max_80.value | default(50) }}"
       when: not thresholds_file.stat.exists
 
     - name: Apply pass/fail logic (KPI standard)

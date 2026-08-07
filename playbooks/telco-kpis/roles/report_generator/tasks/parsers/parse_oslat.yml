@@ -143,15 +143,22 @@
       loop: "{{ range(0, oslat_cores | length) | list }}"
       when: oslat_cores | length > 0 and oslat_max_values | length > 0
 
+    - name: Set oslat latency threshold from KPI targets
+      ansible.builtin.set_fact:
+        _oslat_threshold: "{{ kpi_targets.os_latency.targets.latency_max.value | default(20) | int }}"
+        _oslat_threshold_op: "{{ kpi_targets.os_latency.targets.latency_max.type | default('<=') }}"
+
     - name: Build OSLAT result
       ansible.builtin.set_fact:
         oslat_result:
-          status: "PASS"
+          status: "{{ 'PASS' if (oslat_overall_max | int <= _oslat_threshold | int) else 'FAIL' }}"
           max_latency: "{{ oslat_overall_max }}"
           availability: "{{ oslat_availability }}"
           duration: "{{ oslat_test_duration }}"
           cores: "{{ oslat_cores | join(', ') }}"
           core_results: "{{ oslat_core_results | default([]) }}"
+          kpi_threshold: "{{ _oslat_threshold }}"
+          kpi_threshold_op: "{{ _oslat_threshold_op }}"
           key_metric: "Max: {{ oslat_overall_max }}µs, Avail: {{ oslat_availability }}%"
 
     - name: Find container info marker position

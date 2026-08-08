@@ -1,0 +1,4 @@
+---
+- name: Install dependencies
+  when: ansible_os_family == "RedHat"
+  ansible.builtin.include_tasks: rhel/install-dependencies.yml

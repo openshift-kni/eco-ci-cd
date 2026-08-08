@@ -1,0 +1,114 @@
+---
+- name: Deleting nmcli bridge
+  become: true
+  when: network.bridge is defined and network.bridge and
+        network.nic is defined and
+        ('rollback' in ansible_run_tags)
+  vars:
+    _bridgename: "{{ network.bridgename | default(network.name) }}"
+  block:
+
+    - name: Reactivate network interface connection
+      ansible.builtin.shell: |-
+        for nic_uuid in $(nmcli -t -f DEVICE,UUID connection | grep '^:' | cut -d':' -f2); do \
+          nmcli -g connection.interface-name connection show uuid ${nic_uuid} | grep {{ network.nic }} > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            nmcli con down  {{ _bridgename }} &&
+            nmcli connection up uuid ${nic_uuid} &&
+            nmcli connection up uuid ${nic_uuid}
+            exit 0
+          fi
+        done
+
+    - name: Deleting bridges
+      community.general.nmcli:
+        conn_name: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ _bridgename }}"
+        - "{{ network.nic }}-4br"
+
+    - name: Daemon Reload NetworkManager service
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        name: NetworkManager
+
+- name: Setup nmcli bridges
+  become: true
+  when: network.bridge is defined and network.bridge and
+        network.nic is defined and
+        ('rollback' not in ansible_run_tags)
+  vars:
+    _bridgename: "{{ network.bridgename | default(network.name) }}"
+  block:
+
+    - name: Get UUID for {{ network.nic }} network device used by the bridge
+      ansible.builtin.shell: |-
+        nic_uuid="$(nmcli -t -f UUID,DEVICE connection show | grep ':{{ network.nic }}$' | cut -d':' -f1)"
+        if [ "${nic_uuid}" == "" ]; then
+          for nic_uuid in $(nmcli -t -f DEVICE,UUID connection | grep '^:' | cut -d':' -f2); do \
+            nmcli -g connection.interface-name connection show uuid ${nic_uuid} | grep {{ network.nic }} > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "nmcli con down uuid ${nic_uuid}"
+              exit 0
+            fi
+          done
+          echo "echo 'The bridge will use {{ network.nic }} network device'"
+        else
+          echo "nmcli con down uuid ${nic_uuid}"
+        fi
+      register: _nic_uuid
+
+    - name: Create bridge
+      community.general.nmcli:
+        type: bridge
+        autoconnect: yes
+        conn_name: "{{ _bridgename }}"
+        ifname: "{{ network.name }}"
+        stp: false
+        method4: |-
+          {%- if network.bridge_cidr_ipv4 is defined -%}
+          manual
+          {%- else -%}
+          auto
+          {%- endif -%}
+        ip4: "{{ network.bridge_cidr_ipv4 | default(omit) }}"
+        gw4: "{{ network.bridge_gw4 | default(omit) }}"
+        dns4: "{{ network.bridge_dns_ipv4 | default(omit) }}"
+        method6: |-
+          {%- if network.bridge_cidr_ipv6 is defined -%}
+          manual
+          {%- else -%}
+          auto
+          {%- endif -%}
+        ip6: "{{ network.bridge_cidr_ipv6 | default(omit) }}"
+        gw6: "{{ network.bridge_gw6 | default(omit) }}"
+        dns6: "{{ network.bridge_dns_ipv6 | default(omit) }}"
+        state: present
+
+    - name: Create bridge-slave
+      community.general.nmcli:
+        type: ethernet
+        slave_type: bridge
+        autoconnect: yes
+        conn_name: "{{ network.nic }}-4br"
+        ifname: "{{ network.nic }}"
+        master: "{{ network.name }}"
+        state: present
+
+    - name: Daemon Reload NetworkManager service
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        name: NetworkManager
+
+    - name: Up bridge connections
+      ansible.builtin.shell: |-
+        {{ _nic_uuid.stdout }} &&
+        nmcli con up {{ network.nic }}-4br &&
+        nmcli con up {{ _bridgename }} &&
+        nmcli con up {{ network.nic }}-4br
+
+    - name: Check connections
+      ansible.builtin.shell: |-
+        nmcli con show
+        ip -br a

@@ -1,0 +1,78 @@
+---
+- name: Delete firewalld zone files
+  become: true
+  when: kcli_wrp_firewalld.zone_files is defined and
+        ('rollback' in ansible_run_tags)
+  tags:
+    - rollback
+  vars:
+    zone_file_kcli_tag: "auto-generated.by.kcli_wrapper.ansible.role.xml"
+    zone_file_backup_append: "backup.auto-generated.by.kcli_wrapper.ansible.role"
+  block:
+
+    - name: Clean up firewalld zone files
+      when: zone_file.path is defined
+      ansible.builtin.shell: |-
+        # Test if the zone backup file exists
+        if [ -f {{ zone_file.path }}.{{ zone_file_backup_append }} ]; then
+          echo "{{ zone_file.path }}.{{ zone_file_backup_append }} found. Restoring backup file..."
+          mv -v {{ zone_file.path }}.{{ zone_file_backup_append }} {{ zone_file.path }}
+        fi
+      loop: "{{ kcli_wrp_firewalld.zone_files }}"
+      loop_control:
+        loop_var: zone_file
+
+    - name: Clean up auto generated firewalld zone files
+      when: zone_file.path is defined
+      ansible.builtin.file:
+        path: "{{ zone_file.path }}.{{ zone_file_kcli_tag }}"
+        state: absent
+      loop: "{{ kcli_wrp_firewalld.zone_files }}"
+      loop_control:
+        loop_var: zone_file
+
+    - name: Restart firewalld
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: firewalld.service
+
+- name: Create firewalld zone file
+  when: kcli_wrp_firewalld.zone_files is defined and
+        ('rollback' not in ansible_run_tags)
+  become: true
+  vars:
+    zone_file_kcli_tag: "auto-generated.by.kcli_wrapper.ansible.role.xml"
+    zone_file_backup_append: "backup.auto-generated.by.kcli_wrapper.ansible.role"
+  block:
+
+    - name: Creating firewalld zone file
+      when: zone_file.path is defined
+      ansible.builtin.copy:
+        dest: "{{ zone_file.path }}.{{ zone_file_kcli_tag }}"
+        content: "{{ zone_file.content }}"
+      loop: "{{ kcli_wrp_firewalld.zone_files }}"
+      loop_control:
+        loop_var: zone_file
+
+    - name: Setup firewalld zone files
+      when: zone_file.path is defined
+      ansible.builtin.shell: |-
+        # Test if the zone file already exists
+        if [ -f {{ zone_file.path }} ]; then
+          echo "{{ zone_file.path }} found."
+          if [ ! -f {{ zone_file.path }}.{{ zone_file_backup_append }} ]; then
+            echo "Creating backup..."
+            cp -v {{ zone_file.path }} {{ zone_file.path }}.{{ zone_file_backup_append }}
+          fi
+          echo "Removing kcli generated tag..."
+          mv -v {{ zone_file.path }}.{{ zone_file_kcli_tag }} {{ zone_file.path }}
+        fi
+      loop: "{{ kcli_wrp_firewalld.zone_files }}"
+      loop_control:
+        loop_var: zone_file
+
+    - name: Restart firewalld
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: firewalld.service
+

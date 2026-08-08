@@ -1,0 +1,82 @@
+---
+- name: Delete dnsmasq drop-in files
+  become: true
+  when: kcli_wrp_dnsmasq.drop_in_files is defined and
+        ('rollback' in ansible_run_tags)
+  tags:
+    - rollback
+  block:
+
+    - name: Deleting dnsmasq drop-in files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/NetworkManager/conf.d/00-use-dnsmasq.conf"
+
+    - name: Deleting dnsmasq drop-in files
+      when: drop_in.path is defined
+      ansible.builtin.file:
+        path: "{{ drop_in.path }}"
+        state: absent
+      loop: "{{ kcli_wrp_dnsmasq.drop_in_files }}"
+      loop_control:
+        loop_var: drop_in
+
+    - name: Cleaning up /etc/hosts file
+      when: cluster.parameters.cluster is defined and
+            cluster.parameters.domain is defined
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        state: absent
+        regexp: '{{ cluster.parameters.cluster }}.{{ cluster.parameters.domain }}'
+      loop: "{{ kcli_wrp.clusters }}"
+      loop_control:
+        loop_var: cluster
+
+    - name: Restart dnsmasq
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: |-
+          {%- if kcli_wrp_dnsmasq.use_nm_plugin is defined and kcli_wrp_dnsmasq.use_nm_plugin -%}
+          NetworkManager.service
+          {%- else -%}
+          dnsmasq.service
+          {%- endif -%}
+
+- name: Create dnsmasq drop-in file
+  when: kcli_wrp_dnsmasq.drop_in_files is defined and
+        ('rollback' not in ansible_run_tags)
+  become: true
+  block:
+
+    - name: Setup NetworkManager dnsmasq plugin
+      when: kcli_wrp_dnsmasq.use_nm_plugin is defined and
+            kcli_wrp_dnsmasq.use_nm_plugin
+      ansible.builtin.copy:
+        dest: "/etc/NetworkManager/conf.d/00-use-dnsmasq.conf"
+        content: |
+          # /etc/NetworkManager/conf.d/00-use-dnsmasq.conf
+          #
+          # This enabled the dnsmasq plugin.
+          [main]
+          dns=dnsmasq
+
+    - name: Creating dropin file
+      ansible.builtin.copy:
+        dest: "{{ drop_in.path }}"
+        content: "{{ drop_in.content }}"
+      loop: "{{ kcli_wrp_dnsmasq.drop_in_files }}"
+      loop_control:
+        loop_var: drop_in
+
+    - name: Restart dnsmasq
+      ansible.builtin.systemd_service:
+        state: restarted
+        name: |-
+          {%- if kcli_wrp_dnsmasq.use_nm_plugin is defined and kcli_wrp_dnsmasq.use_nm_plugin -%}
+          NetworkManager.service
+          {%- else -%}
+          dnsmasq.service
+          {%- endif -%}
+

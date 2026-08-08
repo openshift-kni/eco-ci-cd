@@ -1,0 +1,8 @@
+---
+# A digest reference has no meaningful "version" to extract - the last-colon
+# strip leaves just the sha256 hex digest, which has no dots. This should
+# fail loudly at "Validate parsed release format" rather than silently
+# treating the digest as a version.
+ocp_version_facts_release: "quay.io/openshift-release-dev/ocp-release@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"
+
+expect_failure: true

@@ -1,0 +1,12 @@
+---
+ocp_version_facts_release: "quay.io/openshift-release-dev/ocp-release:4.17.9-s390x"
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.17.9"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "9"
+  ocp_version_facts_release_type: "stable"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

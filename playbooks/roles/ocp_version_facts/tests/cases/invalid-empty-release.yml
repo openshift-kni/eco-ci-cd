@@ -1,0 +1,4 @@
+---
+ocp_version_facts_release: ""
+
+expect_failure: true

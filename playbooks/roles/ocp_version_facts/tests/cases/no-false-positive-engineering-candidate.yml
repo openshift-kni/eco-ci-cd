@@ -1,0 +1,11 @@
+---
+# Regression test: same substring false-positive as
+# no-false-positive-release-candidate.yml, but for 'ec' matching inside
+# "spec".
+ocp_version_facts_release: "4.17.0-spec.1"
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.17.0-spec.1"
+  ocp_version_facts_dev_version: "0-spec.1"
+  ocp_version_facts_release_type: "development"
+  ocp_version_facts_z_stream: null

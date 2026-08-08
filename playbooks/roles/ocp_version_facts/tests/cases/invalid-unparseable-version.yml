@@ -1,0 +1,8 @@
+---
+# Longer than 7 chars, so it goes through pull-spec-provided.yml, which
+# happily "parses" it as-is (no colon, no arch suffix to strip). It should
+# then fail main.yml's "Validate parsed release format" assert, since it
+# doesn't have at least 3 dot-separated parts.
+ocp_version_facts_release: "not-a-real-version"
+
+expect_failure: true

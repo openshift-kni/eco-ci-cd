@@ -1,15 +1,12 @@
 ---
-- name: Detect cluster network IP family
-  when: cluster_info.resources[0].spec.clusterNetwork | length == 1
-  block:
-    - name: Detect cluster network IP family
-      ansible.builtin.set_fact:
-        cluster_network_ip_family: "{{ 'ipv6' if (':' in cluster_info.resources[0].spec.clusterNetwork[0].cidr) else 'ipv4' }}"
-
-    - name: Set disconnected flag
-      when: cluster_network_ip_family == 'ipv6'
-      ansible.builtin.set_fact:
-        cluster_disconnected: true
+- name: Set disconnected flag when any cluster network uses IPv6
+  when: cluster_info.resources[0].spec.clusterNetwork
+        | map(attribute='cidr')
+        | select('search', ':')
+        | list
+        | length > 0
+  ansible.builtin.set_fact:
+    cluster_disconnected: true
 
 - name: Force disconnected mode when local mirror registry is configured
   when: use_local_mirror_registry | default(false) | bool

@@ -77,6 +77,34 @@
       ansible.builtin.debug:
         msg: "Cluster version: {{ version }}"
 
+    - name: Wait for all MachineConfigPools to finish updating
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+      kubernetes.core.k8s_info:
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+      register: mcp_status
+      retries: 60
+      delay: 30
+      until:
+        - mcp_status.resources is defined
+        - mcp_status.resources | map(attribute='status.machineCount', default=0) | sum
+          == mcp_status.resources | map(attribute='status.readyMachineCount', default=0) | sum
+        - mcp_status.resources | map(attribute='status.machineCount', default=0) | sum
+          == mcp_status.resources | map(attribute='status.updatedMachineCount', default=0) | sum
+        - mcp_status.resources | map(attribute='status.degradedMachineCount', default=0) | sum == 0
+
+    - name: Display MachineConfigPool status
+      when: mcp_status.resources | length > 0
+      ansible.builtin.debug:
+        msg: >-
+          MCP '{{ item.metadata.name }}':
+          {{ item.status.readyMachineCount | default(0) }}/{{ item.status.machineCount | default(0) }} ready,
+          {{ item.status.updatedMachineCount | default(0) }}/{{ item.status.machineCount | default(0) }} updated
+      loop: "{{ mcp_status.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
     - name: Set SRIOV_NODE_AND_DEVICE_NAME_FILTER env variable
       when: cnf_interfaces is defined and cnf_interfaces | length > 0
       block:

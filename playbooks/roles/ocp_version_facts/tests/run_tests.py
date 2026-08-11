@@ -31,6 +31,17 @@ TEST_PLAYBOOK = SCRIPT_DIR / "test.yml"
 # Fixtures are trusted, hand-written YAML with a flat `expect_failure: true`
 # key - a regex match avoids pulling in PyYAML just to read one boolean.
 EXPECT_FAILURE_RE = re.compile(r"^expect_failure:\s*true\s*$", re.MULTILINE)
+INPUT_LINE_RE = re.compile(r'^ocp_version_facts_release:\s+"([^"]*)"$', re.MULTILINE)
+
+# ansible.cfg forces color output, so captured logs are full of ANSI escapes.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# test.yml's assert tasks always phrase a failure as "<fact>: expected 'X',
+# got 'Y'" or "<fact> was expected to be unset but got 'Y'" - both contain
+# "expected" followed later by "got", which their success_msg counterparts
+# never do. Matching that shape pulls the actual-vs-expected value straight
+# out of the captured ansible-playbook output.
+ASSERT_DIFF_RE = re.compile(r'"msg":\s*"([^"]*?expected[^"]*?got[^"]*?)"')
 
 
 @dataclass
@@ -63,6 +74,22 @@ def repo_root() -> Path:
 def expects_failure(case_file: Path) -> bool:
     return bool(EXPECT_FAILURE_RE.search(case_file.read_text()))
 
+def get_input_line(case_file: Path) -> str:
+    match = re.search(INPUT_LINE_RE, case_file.read_text())
+    if match:
+        return(match.group(1))
+    else:
+        return ""
+
+def assertion_diffs(log_file: Path) -> list[str]:
+    """Pull the actual-vs-expected value out of a failed case's captured
+    output, e.g. "ocp_version_facts_major: expected '5', got '4'"."""
+    text = ANSI_ESCAPE_RE.sub("", log_file.read_text())
+    seen = []
+    for match in ASSERT_DIFF_RE.finditer(text):
+        if match.group(1) not in seen:
+            seen.append(match.group(1))
+    return seen
 
 def run_case(case_file: Path) -> CaseResult:
     """Run one fixture through test.yml in its own ansible-playbook process
@@ -105,16 +132,20 @@ def main() -> int:
     for case_file in sorted(CASES_DIR.glob("*.yml")):
         result = run_case(case_file)
         results.append(result)
+        inputLine = get_input_line(case_file)
 
         if result.passed:
             print(f"PASS  {result.name}", flush=True)
         else:
             got = "fail" if result.actual_failure else "pass"
             print(
-                f"FAIL  {result.name}  (expected_failure={str(result.expect_failure).lower()}, "
+                # get the input string here so that we can put it in the output line
+                f"FAIL  {result.name}  (input_str={inputLine}, expected_failure={str(result.expect_failure).lower()}, "
                 f"got={got}, log: {result.log_file})",
                 flush=True,
             )
+            for diff in assertion_diffs(result.log_file):
+                print(f"        {diff}", flush=True)
 
     failed = [result for result in results if not result.passed]
     print("----")

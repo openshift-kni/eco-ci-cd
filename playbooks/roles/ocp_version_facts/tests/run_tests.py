@@ -23,6 +23,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CASES_DIR = SCRIPT_DIR / "cases"
@@ -49,7 +50,7 @@ class CaseResult:
     name: str
     expect_failure: bool  # from the fixture's `expect_failure:` key
     actual_failure: bool  # whether ansible-playbook actually exited non-zero
-    log_file: Path | None  # captured output; None once a passing case's log is discarded
+    log_file: Optional[Path]  # captured output; None once a passing case's log is discarded
 
     @property
     def passed(self) -> bool:

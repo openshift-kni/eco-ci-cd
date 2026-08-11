@@ -1,0 +1,16 @@
+---
+# One character over the length-boundary-7-mocked.yml boundary: an 8-char
+# input takes the pull-spec-provided.yml (regex-only, no network) path even
+# though it's just a bare version string with no registry prefix.
+ocp_version_facts_release: "4.17.100"
+
+expected_facts:
+  ocp_version_facts_pull_spec: "4.17.100"
+  ocp_version_facts_parsed_release: "4.17.100"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "100"
+  ocp_version_facts_release_type: "stable"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

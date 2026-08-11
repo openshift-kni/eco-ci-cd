@@ -1,0 +1,17 @@
+---
+# A 4-dot-part version whose 3rd segment doesn't contain the "0-" dev marker
+# skips the dev-version branch entirely. The 4th segment is then silently
+# dropped - z_stream comes from parts[2] only ("9"), ".1" is never
+# referenced anywhere. Documents current behavior, not necessarily desired.
+ocp_version_facts_release: "4.17.9.1"
+
+expected_facts:
+  ocp_version_facts_pull_spec: "4.17.9.1"
+  ocp_version_facts_parsed_release: "4.17.9.1"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "9"
+  ocp_version_facts_release_type: "stable"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

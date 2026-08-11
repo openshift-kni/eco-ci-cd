@@ -1,0 +1,11 @@
+---
+ocp_version_facts_release: "4.17.0-ec.3"
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.17.0-ec.3"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_dev_version: "0-ec.3"
+  ocp_version_facts_release_type: "engineering-candidate"
+  # dev-version detection explicitly nulls z_stream out (it's not left unset)
+  ocp_version_facts_z_stream: null

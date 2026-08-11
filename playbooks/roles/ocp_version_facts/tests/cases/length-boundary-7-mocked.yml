@@ -1,0 +1,22 @@
+---
+# main.yml routes on length > 7 (pull-spec) vs <= 7 (version-provided/network).
+# An exact 7-char z-stream version like "4.17.10" still goes through the
+# mocked network path - the branch is purely length-based, not content-aware.
+# Paired with length-boundary-8-pull-spec.yml, which crosses the boundary.
+ocp_version_facts_release: "4.17.10"
+ocp_version_facts_query:
+  name: "4.17.10"
+  pullSpec: "quay.io/openshift-release-dev/ocp-release:4.17.10-x86_64"
+  downloadURL: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.17.10"
+image_age_days: 5
+
+expected_facts:
+  ocp_version_facts_pull_spec: "quay.io/openshift-release-dev/ocp-release:4.17.10-x86_64"
+  ocp_version_facts_parsed_release: "4.17.10"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "10"
+  ocp_version_facts_release_type: "stable"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

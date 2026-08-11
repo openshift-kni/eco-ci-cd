@@ -1,0 +1,11 @@
+---
+# Regression test: the release_type detection used to do a raw substring
+# search ('rc' in dev_version), which matched the "rc" inside "src" and
+# misclassified this as release-candidate. It's not an rc build.
+ocp_version_facts_release: "4.17.0-src.1"
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.17.0-src.1"
+  ocp_version_facts_dev_version: "0-src.1"
+  ocp_version_facts_release_type: "development"
+  ocp_version_facts_z_stream: null

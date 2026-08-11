@@ -1,0 +1,8 @@
+---
+# Regression test: Jinja's `int` filter silently defaults to 0 on non-numeric
+# input, so this used to pass validation and produce major=0, minor=0
+# instead of failing. Longer than 7 chars, so it takes the pull-spec-provided
+# path, which "parses" it unchanged (no colon, no arch suffix to strip).
+ocp_version_facts_release: "a.b.c-junk"
+
+expect_failure: true

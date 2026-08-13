@@ -9,6 +9,7 @@
       register: api_response
       failed_when: false
       changed_when: false
+      
 
     - name: Extract matching tags from response
       ansible.builtin.set_fact:

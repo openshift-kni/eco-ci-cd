@@ -1,0 +1,5 @@
+---
+ocp_operator_deployment_operators: []
+ocp_operator_deployment_version: "4.17.9"
+
+expect_failure: true

@@ -1,0 +1,11 @@
+---
+# og_spec explicitly set to {} (defined, but falsy) - default() only
+# substitutes on undefined, not on falsy, so this must NOT fall back to
+# targetNamespaces: [nsname] the way default-og-spec.yml (omitted) does.
+operator_item:
+  name: some-operator
+  nsname: some-ns
+  og_spec: {}
+
+expected_facts:
+  operator_group_spec_config: {}

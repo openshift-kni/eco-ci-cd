@@ -1,0 +1,12 @@
+---
+# deploy_brew.yaml is an unimplemented stub (unconditional
+# ansible.builtin.fail) - rewrite this fixture once it's actually
+# implemented. Until then, routing an operator to the brew catalog must
+# fail.
+ocp_operator_deployment_version: "4.17.9"
+ocp_operator_deployment_operators:
+  - name: some-operator
+    catalog: redhat-operators-brew
+    nsname: some-ns
+
+expect_failure: true

@@ -1,0 +1,8 @@
+---
+ocp_operator_deployment_operators:
+  - name: some-operator
+    catalog: redhat-operators
+    nsname: some-ns
+# ocp_operator_deployment_version intentionally omitted
+
+expect_failure: true

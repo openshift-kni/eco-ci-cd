@@ -9,6 +9,7 @@
         namespace: openshift-logging
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _cluster_logging_sub
+      when: _cluster_logging_sub is not defined
 
     - name: Set cluster-logging operator version fact
       ansible.builtin.set_fact:

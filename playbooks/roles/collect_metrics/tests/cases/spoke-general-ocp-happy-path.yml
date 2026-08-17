@@ -1,0 +1,27 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list:
+  - spoke_general_ocp
+collect_metrics_output_file: /tmp/collect_metrics_test/spoke-general-ocp-happy-path/metrics.txt
+collect_metrics_spoke_kubeconfig: "/fake/spoke-kubeconfig"
+
+_cluster_version:
+  resources:
+    - status:
+        desired:
+          version: "4.17.9"
+_infra:
+  resources:
+    - status:
+        infrastructureName: "spoke-cluster-abc123"
+_worker_nodes:
+  resources:
+    - metadata:
+        name: worker-0
+      status:
+        nodeInfo:
+          kernelVersion: "5.14.0-427.el9.x86_64"
+
+expected_facts:
+  collect_metrics_attributes: >-
+    spoke_ocp_build:4.17.9;spoke_ocp_version:4.17;spoke_cluster_name:spoke-cluster-abc123;spoke_worker-0_kernel_version:5.14.0-427.el9.x86_64;ci-lane:ci-lane-1

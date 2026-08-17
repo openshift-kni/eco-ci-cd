@@ -9,6 +9,7 @@
         namespace: openshift-local-storage
         kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _local_storage_sub
+      when: _local_storage_sub is not defined
 
     - name: Set Local Storage operator version fact
       ansible.builtin.set_fact:

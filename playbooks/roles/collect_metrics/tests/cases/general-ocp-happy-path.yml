@@ -1,0 +1,27 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list:
+  - general_ocp
+collect_metrics_output_file: /tmp/collect_metrics_test/general-ocp-happy-path/metrics.txt
+collect_metrics_kubeconfig: "/fake/kubeconfig"
+
+_cluster_version:
+  resources:
+    - status:
+        desired:
+          version: "4.17.9"
+_infra:
+  resources:
+    - status:
+        infrastructureName: "test-cluster-abc123"
+_worker_nodes:
+  resources:
+    - metadata:
+        name: worker-0
+      status:
+        nodeInfo:
+          kernelVersion: "5.14.0-427.el9.x86_64"
+
+expected_facts:
+  collect_metrics_attributes: >-
+    ocp_build:4.17.9;ocp_version:4.17;cluster_name:test-cluster-abc123;worker-0_kernel_version:5.14.0-427.el9.x86_64;ci-lane:ci-lane-1

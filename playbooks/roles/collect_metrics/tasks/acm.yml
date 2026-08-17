@@ -9,6 +9,7 @@
         namespace: open-cluster-management
         kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _acm_sub
+      when: _acm_sub is not defined
 
     - name: Set ACM operator version fact
       ansible.builtin.set_fact:

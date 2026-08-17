@@ -1,0 +1,8 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list: []
+collect_metrics_output_file: /tmp/collect_metrics_test/containers-list-empty-noop/metrics.txt
+collect_containers_list: []
+
+expected_facts:
+  collect_metrics_attributes: "ci-lane:ci-lane-1"

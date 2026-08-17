@@ -1,0 +1,55 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list:
+  - sriov
+  - sriov_fec
+  - ptp
+  - acm
+  - talm
+  - gitops
+  - local_storage
+  - logging
+collect_metrics_output_file: /tmp/collect_metrics_test/operators-happy-path/metrics.txt
+collect_metrics_spoke_kubeconfig: "/fake/spoke-kubeconfig"
+collect_metrics_hub_kubeconfig: "/fake/hub-kubeconfig"
+
+_sriov_sub:
+  resources:
+    - status:
+        installedCSV: sriov-network-operator.v4.17.0
+_sriov_fec_subs:
+  resources:
+    - spec:
+        name: sriov-fec
+      status:
+        installedCSV: sriov-fec.v2.9.0
+_ptp_subs:
+  resources:
+    - spec:
+        name: ptp-operator
+      status:
+        installedCSV: ptp-operator.v4.17.0
+_acm_sub:
+  resources:
+    - status:
+        installedCSV: advanced-cluster-management.v2.11.0
+_talm_sub:
+  resources:
+    - status:
+        installedCSV: topology-aware-lifecycle-manager.v4.17.0
+_gitops_sub:
+  resources:
+    - status:
+        installedCSV: openshift-gitops-operator.v1.14.0
+_local_storage_sub:
+  resources:
+    - status:
+        installedCSV: local-storage-operator.v4.17.0
+_cluster_logging_sub:
+  resources:
+    - status:
+        installedCSV: cluster-logging.v6.1.0
+
+expected_facts:
+  collect_metrics_attributes: >-
+    sriov_operator:4.17.0;sriov_fec_operator:2.9.0;ptp_operator:4.17.0;acm_operator:2.11.0;talm_operator:4.17.0;gitops_operator:1.14.0;local_storage_operator:4.17.0;cluster_logging_operator:6.1.0;ci-lane:ci-lane-1

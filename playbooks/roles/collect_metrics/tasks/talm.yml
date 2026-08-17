@@ -9,6 +9,7 @@
         namespace: openshift-operators
         kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _talm_sub
+      when: _talm_sub is not defined
 
     - name: Set TALM operator version fact
       ansible.builtin.set_fact:

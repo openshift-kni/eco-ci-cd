@@ -1,0 +1,66 @@
+---
+spoke_cluster: "test-spoke"
+hub_kubeconfig: "/fake/kubeconfig"
+
+clusterinstance_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        name: test-spoke
+      spec:
+        clusterName: test-spoke
+      status:
+        conditions: []
+
+managedcluster_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:01:00Z"
+        labels: {}
+      status:
+        conditions: []
+
+agentclusterinstall_query:
+  resources: []
+
+imagebasedinstall_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:02:00Z"
+      status:
+        conditions:
+          - type: Completed
+            status: "True"
+            lastTransitionTime: "2026-01-01T00:20:00Z"
+            message: "The installation has completed"
+
+talm_cgu_query:
+  resources:
+    - metadata:
+        name: test-spoke
+      status:
+        status:
+          completedAt: "2026-01-01T00:30:00Z"
+        conditions: []
+
+# infraenv_query / agents_query are only queried for AI deployments; not
+# pre-seeding them here is deliberate - the role should skip those tasks
+# entirely for an IBI deployment, and this fixture is what proves it (a live
+# k8s_info call against hub_kubeconfig would otherwise be attempted).
+manifestworks_query:
+  resources: []
+policies_query:
+  resources: []
+
+expected_facts:
+  ztp_deployment_timeline_success: true
+  ztp_deployment_timeline_deployment_method: IBI
+  ztp_deployment_timeline_start_time: "2026-01-01T00:00:00Z"
+  ztp_deployment_timeline_end_time: "2026-01-01T00:30:00Z"
+  ztp_deployment_timeline_duration_seconds: 1800
+  ztp_deployment_timeline_duration_formatted: "0h30m0s"
+
+# ClusterInstance creation, ManagedCluster creation, ImageBasedInstall
+# creation + 1 condition, TALM CGU completion = 5 (no conditions on
+# ClusterInstance/ManagedCluster/TALM CGU, no ztp-done label in this fixture)
+expected_events_count: 5

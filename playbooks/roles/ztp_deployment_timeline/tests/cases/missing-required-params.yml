@@ -1,0 +1,5 @@
+---
+spoke_cluster: ""
+hub_kubeconfig: "/fake/kubeconfig"
+
+expect_failure: true

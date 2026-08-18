@@ -193,6 +193,15 @@ def main(script_dir: Path) -> int:
     # plain output reads fine for pass/fail purposes.
     os.environ["ANSIBLE_STDOUT_CALLBACK"] = "default"
 
+    # Ansible defaults local/remote tmp to ~/.ansible/tmp. Under restricted
+    # container UIDs (e.g. OpenShift's arbitrary-UID SCC), $HOME can resolve
+    # to a read-only path, so module execution fails before any assertion
+    # runs. Point both at a fresh, always-writable directory for the test
+    # runner only - real playbook runs keep ansible.cfg's default.
+    tmp_dir = tempfile.mkdtemp(prefix="ansible-role-test-tmp-")
+    os.environ["ANSIBLE_LOCAL_TEMP"] = tmp_dir
+    os.environ["ANSIBLE_REMOTE_TEMP"] = tmp_dir
+
     # Print each result as its case finishes rather than batching output
     # until the end - a full run is several seconds per case, and a runner
     # that goes silent for a while looks hung.

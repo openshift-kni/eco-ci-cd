@@ -28,7 +28,8 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% endif %}
   {{ eco_gotests_image }}:{{ eco_gotests_tag }} \
   --timeout={{ test_timeout }} \
-  --keep-going || true
+  --keep-going \
+  --seed=1 || true
 {% endmacro %}
 
 

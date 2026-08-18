@@ -175,6 +175,12 @@
           {{ shell_script }}
           export VLAN="{{ env_var_vlans }}"
 
+    - name: Update shell_script code with NATIVE_VLAN env variable
+      ansible.builtin.set_fact:
+        shell_script: |
+          {{ shell_script }}
+          export NATIVE_VLAN="{{ cluster_config[cluster_name]['ocp_secondary']['native_vlan'] }}"
+
     - name: Update shell_script code with INTERFACE_LIST env variable
       ansible.builtin.set_fact:
         shell_script: |

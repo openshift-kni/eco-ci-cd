@@ -8,6 +8,7 @@
         namespace: vran-acceleration-operators
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _sriov_fec_subs
+      when: _sriov_fec_subs is not defined
 
     - name: Find SR-IOV FEC subscription by operator package name
       ansible.builtin.set_fact:

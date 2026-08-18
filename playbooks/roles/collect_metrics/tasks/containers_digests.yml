@@ -5,6 +5,7 @@
       containers.podman.podman_image_info:
         name: "{{ container_item }}"
       register: image_facts
+      when: image_facts is not defined
 
     - name: Set Container metric tag
       ansible.builtin.set_fact:

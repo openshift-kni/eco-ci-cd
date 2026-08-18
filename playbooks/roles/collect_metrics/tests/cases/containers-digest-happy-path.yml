@@ -1,0 +1,13 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list: []
+collect_metrics_output_file: /tmp/collect_metrics_test/containers-digest-happy-path/metrics.txt
+collect_containers_list:
+  - "registry.example.com/org/image:v1.0"
+
+image_facts:
+  images:
+    - Digest: "sha256:abcdef1234567890"
+
+expected_facts:
+  collect_metrics_attributes: "image_v1.0:abcdef1234567890;ci-lane:ci-lane-1"

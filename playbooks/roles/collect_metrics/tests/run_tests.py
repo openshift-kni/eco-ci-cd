@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs the ocp_version_facts unit test matrix. See tests/README.md; runner
+"""Runs the collect_metrics unit test matrix. See tests/README.md; runner
 logic lives in tests/lib/ansible_role_test_runner.py (shared across all role
 test suites)."""
 

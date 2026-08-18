@@ -1,0 +1,15 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list: []
+collect_metrics_output_file: /tmp/collect_metrics_test/containers-digest-rescue/metrics.txt
+collect_containers_list:
+  - "registry.example.com/org/missing:latest"
+
+# Mocked as podman_image_info would report it for an image it can't find -
+# a successful call with an empty images list, not a module failure. The
+# role's own "images[0]" index-out-of-range access is what trips the rescue.
+image_facts:
+  images: []
+
+expected_facts:
+  collect_metrics_attributes: "missing_latest:N/A;ci-lane:ci-lane-1"

@@ -1,0 +1,22 @@
+---
+# No register vars are pre-seeded here on purpose: pointing every kubeconfig
+# at a nonexistent path makes the live k8s_info calls fail fast (local file
+# read error), which drives each category's block/rescue into its N/A path
+# deterministically - no live cluster needed.
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list:
+  - sriov
+  - sriov_fec
+  - ptp
+  - acm
+  - talm
+  - gitops
+  - local_storage
+  - logging
+collect_metrics_output_file: /tmp/collect_metrics_test/operators-na-rescue/metrics.txt
+collect_metrics_spoke_kubeconfig: "/nonexistent/spoke-kubeconfig"
+collect_metrics_hub_kubeconfig: "/nonexistent/hub-kubeconfig"
+
+expected_facts:
+  collect_metrics_attributes: >-
+    sriov_operator:N/A;sriov_fec_operator:N/A;ptp_operator:N/A;acm_operator:N/A;talm_operator:N/A;gitops_operator:N/A;local_storage_operator:N/A;cluster_logging_operator:N/A;ci-lane:ci-lane-1

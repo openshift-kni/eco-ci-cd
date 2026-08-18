@@ -8,6 +8,7 @@
         namespace: openshift-ptp
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _ptp_subs
+      when: _ptp_subs is not defined
 
     - name: Find PTP subscription by operator package name
       ansible.builtin.set_fact:

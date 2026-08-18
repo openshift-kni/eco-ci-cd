@@ -1,0 +1,22 @@
+---
+collect_metrics_ci_lane: "ci-lane-1"
+collect_metrics_list:
+  - sriov_fec
+collect_metrics_output_file: /tmp/collect_metrics_test/sriov-fec-filter-by-package-name/metrics.txt
+collect_metrics_spoke_kubeconfig: "/fake/spoke-kubeconfig"
+
+# Multiple Subscriptions in the namespace - only the one whose spec.name is
+# 'sriov-fec' should be selected, exercising the selectattr filter.
+_sriov_fec_subs:
+  resources:
+    - spec:
+        name: some-other-operator
+      status:
+        installedCSV: some-other-operator.v1.0.0
+    - spec:
+        name: sriov-fec
+      status:
+        installedCSV: sriov-fec.v2.9.0
+
+expected_facts:
+  collect_metrics_attributes: "sriov_fec_operator:2.9.0;ci-lane:ci-lane-1"

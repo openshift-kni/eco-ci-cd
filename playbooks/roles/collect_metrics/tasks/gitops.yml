@@ -9,6 +9,7 @@
         namespace: openshift-gitops-operator
         kubeconfig: "{{ collect_metrics_hub_kubeconfig }}"
       register: _gitops_sub
+      when: _gitops_sub is not defined
 
     - name: Set GitOps operator version fact
       ansible.builtin.set_fact:

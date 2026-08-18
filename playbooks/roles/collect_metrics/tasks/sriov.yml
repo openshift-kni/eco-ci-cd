@@ -9,6 +9,7 @@
         namespace: openshift-sriov-network-operator
         kubeconfig: "{{ collect_metrics_spoke_kubeconfig }}"
       register: _sriov_sub
+      when: _sriov_sub is not defined
 
     - name: Set SR-IOV operator version fact
       ansible.builtin.set_fact:

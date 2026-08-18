@@ -8,6 +8,7 @@
         name: version
         kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
       register: _cluster_version
+      when: _cluster_version is not defined
 
     - name: Set version facts
       ansible.builtin.set_fact:
@@ -46,6 +47,7 @@
         name: cluster
         kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
       register: _infra
+      when: _infra is not defined
 
     - name: Append cluster name to metrics
       ansible.builtin.set_fact:
@@ -78,6 +80,7 @@
         label_selectors:
           - node-role.kubernetes.io/worker
       register: _worker_nodes
+      when: _worker_nodes is not defined
 
     - name: Append kernel version for each worker
       ansible.builtin.set_fact:

@@ -1,0 +1,5 @@
+---
+# collect_metrics_list and collect_metrics_output_file are both undefined
+collect_metrics_ci_lane: "ci-lane-1"
+
+expect_failure: true

@@ -1,0 +1,22 @@
+---
+container_image_mirror_operation: remove
+container_image_mirror_test_mode: true
+container_image_mirror_registry_host: "registry.example.com"
+container_image_mirror_registry_namespace: "ns/"
+container_image_mirror_images:
+  - dest: "org/image-a:v1.0"
+  - dest: "org/image-b:v2.0"
+
+_remove_result:
+  results:
+    - changed: true
+      failed: false
+      image_item:
+        dest: "org/image-a:v1.0"
+    - changed: true
+      failed: false
+      image_item:
+        dest: "org/image-b:v2.0"
+
+expected_remove_success_count: 2
+expected_remove_failed_count: 0

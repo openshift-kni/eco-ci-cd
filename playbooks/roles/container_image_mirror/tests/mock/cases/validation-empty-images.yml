@@ -1,0 +1,5 @@
+---
+container_image_mirror_operation: mirror
+container_image_mirror_images: []
+
+expect_failure: true

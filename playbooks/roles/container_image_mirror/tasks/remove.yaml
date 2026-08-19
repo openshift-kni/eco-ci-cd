@@ -3,14 +3,14 @@
   ansible.builtin.file:
     path: "{{ container_image_mirror_registry_data_path }}/{{ container_image_mirror_registry_namespace }}{{ image_item.dest | regex_replace(':.*', '') }}"
     state: absent
-  become: true
+  become: "{{ container_image_mirror_become_override | default(true) }}"
   loop: "{{ container_image_mirror_images }}"
   loop_control:
     loop_var: image_item
     label: "{{ container_image_mirror_registry_namespace }}{{ image_item.dest }}"
   register: _remove_result
-  failed_when: false
   ignore_errors: true
+  when: not (container_image_mirror_test_mode | default(false))
 
 - name: Build removal summary
   ansible.builtin.set_fact:

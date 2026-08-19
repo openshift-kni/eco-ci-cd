@@ -1,0 +1,126 @@
+---
+# Live integration test runner for container_image_mirror. Not meant to be
+# run on its own - see README.md. Unlike ../mock/test.yml (mocked unit tests),
+# this exercises the role's real skopeo copy, registry tag-list check, and
+# (for remove) real file deletion against the ephemeral registry instance
+# run_tests.py starts, passed in via container_image_mirror_registry_port /
+# container_image_mirror_registry_data_path.
+- name: Integration test container_image_mirror role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    container_image_mirror_registry_host: "127.0.0.1"
+    expected_mirror_success_count: null
+    expected_mirror_failed_count: null
+    expected_remove_success_count: null
+    expected_remove_failed_count: null
+
+  tasks:
+    # Seeds directly via skopeo rather than the role under test - the
+    # `container_image_mirror_operation` extra-var from the fixture
+    # (loaded via `-e @case_file`) outranks any task-level vars: override,
+    # so reusing include_role here can't be switched to "mirror" for
+    # seeding. This also keeps the remove case's setup from depending on
+    # the mirror code path being correct.
+    - name: Seed images to remove by pushing them into the registry directly
+      ansible.builtin.command:
+        cmd: >-
+          skopeo copy --dest-tls-verify=false
+          docker://{{ seed_item.source }}
+          docker://{{ container_image_mirror_registry_host }}:{{
+          container_image_mirror_registry_port }}/{{
+          container_image_mirror_registry_namespace }}{{ seed_item.dest }}
+      loop: "{{ _seed_images | default([]) }}"
+      loop_control:
+        loop_var: seed_item
+        label: "{{ seed_item.dest }}"
+      changed_when: true
+      when: _seed_images is defined
+
+    # Denies write on the seeded repo's parent directory so the role's real
+    # removal genuinely fails (EACCES) instead of succeeding - only
+    # meaningful under a non-root UID, since root bypasses this entirely
+    # (see run_tests.py's REQUIRES_NON_ROOT_RE skip).
+    - name: Deny write on the target repo's parent directory to force a real removal failure
+      ansible.builtin.file:
+        path: "{{ container_image_mirror_registry_data_path }}/{{ container_image_mirror_registry_namespace }}"
+        mode: "0555"
+      when: _block_removal | default(false)
+
+    # Computed here rather than hardcoded in the fixture, since it has to
+    # embed the auth registry's dynamically-chosen host:port as the exact
+    # docker-config key skopeo looks up, plus the credentials run_tests.py
+    # generated fresh for this run.
+    - name: Compute a real pull secret for the authenticated registry
+      ansible.builtin.set_fact:
+        container_image_mirror_pull_secret_string: >-
+          {{
+            ({
+              'auths': {
+                (container_image_mirror_registry_host ~ ':' ~ container_image_mirror_registry_port): {
+                  'auth': (_registry_auth_username ~ ':' ~ _registry_auth_password) | b64encode
+                }
+              }
+            } | to_json) | b64encode
+          }}
+      no_log: true
+      when: _use_auth_registry | default(false)
+
+    - name: Run role under test
+      ansible.builtin.include_role:
+        name: container_image_mirror
+
+    - name: Assert mirror success/failure counts
+      ansible.builtin.assert:
+        that:
+          - _mirror_success | length == expected_mirror_success_count
+          - _mirror_failed | length == expected_mirror_failed_count
+        fail_msg: >-
+          expected {{ expected_mirror_success_count }} success /
+          {{ expected_mirror_failed_count }} failed, got
+          {{ _mirror_success | length }} success / {{ _mirror_failed | length }} failed
+      when: expected_mirror_success_count is not none and expected_mirror_failed_count is not none
+
+    - name: Assert remove success/failure counts
+      ansible.builtin.assert:
+        that:
+          - _remove_success | length == expected_remove_success_count
+          - _remove_failed | length == expected_remove_failed_count
+        fail_msg: >-
+          expected {{ expected_remove_success_count }} success /
+          {{ expected_remove_failed_count }} failed, got
+          {{ _remove_success | length }} success / {{ _remove_failed | length }} failed
+      when: expected_remove_success_count is not none and expected_remove_failed_count is not none
+
+    - name: Verify destination images actually exist on the real registry
+      ansible.builtin.uri:
+        url: >-
+          http://{{ container_image_mirror_registry_host }}:{{
+          container_image_mirror_registry_port }}/v2/{{
+          container_image_mirror_registry_namespace }}{{
+          image_item.dest | regex_replace(':.*', '') }}/tags/list
+        status_code: [200]
+        url_username: "{{ _registry_auth_username | default(omit) }}"
+        url_password: "{{ _registry_auth_password | default(omit) }}"
+        force_basic_auth: "{{ _use_auth_registry | default(false) }}"
+      loop: "{{ container_image_mirror_images }}"
+      loop_control:
+        loop_var: image_item
+        label: "{{ image_item.dest }}"
+      when: assert_dest_tags_present | default(false)
+
+    - name: Verify destination images were actually removed from the real registry
+      ansible.builtin.uri:
+        url: >-
+          http://{{ container_image_mirror_registry_host }}:{{
+          container_image_mirror_registry_port }}/v2/{{
+          container_image_mirror_registry_namespace }}{{
+          image_item.dest | regex_replace(':.*', '') }}/tags/list
+        status_code: [404]
+      loop: "{{ container_image_mirror_images }}"
+      loop_control:
+        loop_var: image_item
+        label: "{{ image_item.dest }}"
+      when: assert_dest_tags_absent | default(false)

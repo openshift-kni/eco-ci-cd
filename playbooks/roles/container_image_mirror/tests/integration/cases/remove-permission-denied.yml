@@ -1,0 +1,20 @@
+---
+container_image_mirror_operation: remove
+container_image_mirror_become_override: false
+container_image_mirror_registry_namespace: "it/"
+container_image_mirror_images:
+  - dest: "remove-permission-denied:latest"
+
+# Seeded for real, then its parent directory made undeletable-from before
+# the role under test runs - see test.yml's "Deny write..." pre_task.
+_seed_images:
+  - source: "registry.access.redhat.com/ubi9/ubi-micro:latest"
+    dest: "remove-permission-denied:latest"
+_block_removal: true
+
+# Only exercises a real failure under a non-root UID - root bypasses the
+# permission denial entirely (run_tests.py skips this case when running as
+# root; see REQUIRES_NON_ROOT_RE).
+_requires_non_root: true
+
+expect_failure: true

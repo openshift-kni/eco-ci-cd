@@ -39,6 +39,7 @@
     loop_var: image_item
     label: "{{ image_item.dest }}"
   failed_when: false
+  when: not (container_image_mirror_test_mode | default(false))
 
 - name: Mirror images using skopeo
   ansible.builtin.command:
@@ -61,6 +62,7 @@
   until: _mirror_result.rc == 0
   failed_when: false
   ignore_errors: true
+  when: not (container_image_mirror_test_mode | default(false))
 
 - name: Build mirror summary
   ansible.builtin.set_fact:

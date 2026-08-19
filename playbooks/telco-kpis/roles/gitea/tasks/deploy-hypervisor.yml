@@ -149,7 +149,10 @@
   no_log: "{{ ansible_verbosity < 3 }}"
   delegate_to: "{{ gitea_hypervisor_host }}"
 
-- name: Restart Gitea after admin creation
+# Cannot use handlers here: handlers fire at end-of-play, but the API check
+# that follows needs Gitea to be fully up before it runs. Inline tasks with
+# `when: changed` preserve the required sequential ordering.
+- name: Restart Gitea after admin creation  # noqa: no-handler
   containers.podman.podman_container:
     name: "{{ gitea_container_name }}"
     state: started
@@ -157,7 +160,7 @@
   delegate_to: "{{ gitea_hypervisor_host }}"
   when: _gitea_admin_create.changed
 
-- name: Wait for Gitea to restart after admin creation
+- name: Wait for Gitea to restart after admin creation  # noqa: no-handler
   ansible.builtin.uri:
     url: "{{ gitea_root_url }}"
     method: GET
@@ -202,7 +205,9 @@
       no_log: "{{ ansible_verbosity < 3 }}"
       delegate_to: "{{ gitea_hypervisor_host }}"
 
-    - name: Restart Gitea after admin creation
+    # Cannot use handlers here: handlers fire at end-of-play, but token
+    # creation below needs Gitea running immediately after this block exits.
+    - name: Restart Gitea after admin creation  # noqa: no-handler
       containers.podman.podman_container:
         name: "{{ gitea_container_name }}"
         state: started
@@ -210,7 +215,7 @@
       when: create_admin_cli.changed
       delegate_to: "{{ gitea_hypervisor_host }}"
 
-    - name: Wait for Gitea to restart after admin creation
+    - name: Wait for Gitea to restart after admin creation  # noqa: no-handler
       ansible.builtin.uri:
         url: "{{ gitea_root_url }}"
         method: GET

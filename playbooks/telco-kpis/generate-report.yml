@@ -374,78 +374,89 @@
         suffix: .report-{{ spoke_cluster }}
       register: temp_output_dir
 
-    - name: Generate report using report_generator role
-      ansible.builtin.include_role:
-        name: report_generator
-      vars:
-        output_dir: "{{ temp_output_dir.path }}"
-        use_latest: true
-        create_tarball: false  # Tarball created separately later
+    - name: Generate, fetch, and publish report
+      block:
+        - name: Generate report using report_generator role
+          ansible.builtin.include_role:
+            name: report_generator
+          vars:
+            output_dir: "{{ temp_output_dir.path }}"
+            use_latest: true
+            create_tarball: false  # Tarball created separately later
 
-    - name: Verify report file was generated
-      ansible.builtin.stat:
-        path: "{{ temp_output_dir.path }}/{{ output_filename }}"
-      register: report_file_stat
-      failed_when: not report_file_stat.stat.exists
+        - name: Verify report file was generated
+          ansible.builtin.stat:
+            path: "{{ temp_output_dir.path }}/{{ output_filename }}"
+          register: report_file_stat
+          failed_when: not report_file_stat.stat.exists
 
-    - name: Compress shared artifacts into tarball
-      community.general.archive:
-        path: "{{ shared_artifact_dir }}/*"
-        dest: "{{ temp_output_dir.path }}/{{ tarball_name }}"
-        format: gz
-        force_archive: true
-        mode: '0644'
-      register: compress_result
+        - name: Compress shared artifacts into tarball
+          community.general.archive:
+            path: "{{ shared_artifact_dir }}/*"
+            dest: "{{ temp_output_dir.path }}/{{ tarball_name }}"
+            format: gz
+            force_archive: true
+            mode: '0644'
+          register: compress_result
 
-    - name: Get tarball size
-      ansible.builtin.stat:
-        path: "{{ temp_output_dir.path }}/{{ tarball_name }}"
-      register: tarball_stat
+        - name: Get tarball size
+          ansible.builtin.stat:
+            path: "{{ temp_output_dir.path }}/{{ tarball_name }}"
+          register: tarball_stat
 
-    - name: Create local artifact directory
-      ansible.builtin.file:
-        path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports"
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
+        - name: Create local artifact directory
+          ansible.builtin.file:
+            path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports"
+            state: directory
+            mode: '0755'
+          delegate_to: localhost
 
-    - name: Fetch report to local artifacts
-      ansible.builtin.fetch:
-        src: "{{ temp_output_dir.path }}/{{ output_filename }}"
-        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
-        flat: true
+        - name: Fetch report to local artifacts
+          ansible.builtin.fetch:
+            src: "{{ temp_output_dir.path }}/{{ output_filename }}"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+            flat: true
 
-    - name: Fetch tarball to local artifacts
-      ansible.builtin.fetch:
-        src: "{{ temp_output_dir.path }}/{{ tarball_name }}"
-        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
-        flat: true
+        - name: Fetch tarball to local artifacts
+          ansible.builtin.fetch:
+            src: "{{ temp_output_dir.path }}/{{ tarball_name }}"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+            flat: true
 
-    - name: Fetch deployment timeline JSON to local artifacts
-      ansible.builtin.fetch:
-        src: "{{ temp_output_dir.path }}/deployment-timeline-{{ spoke_cluster }}.json"
-        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
-        flat: true
-      when:
-        - deployment_timeline_stat is defined
-        - deployment_timeline_stat is not skipped
-        - deployment_timeline_stat.stat.exists
-      failed_when: false
+        - name: Fetch deployment timeline JSON to local artifacts
+          ansible.builtin.fetch:
+            src: "{{ temp_output_dir.path }}/deployment-timeline-{{ spoke_cluster }}.json"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+            flat: true
+          when:
+            - deployment_timeline_stat is defined
+            - deployment_timeline_stat is not skipped
+            - deployment_timeline_stat.stat.exists
+          failed_when: false
 
-    - name: Publish report to repository
-      ansible.builtin.include_role:
-        name: gitea
-      vars:
-        report_file: "{{ output_filename }}"
-        report_tarball: "{{ tarball_name }}"
-        report_publish_mode: "{{ _report_publish_mode }}"
-        gitea_hypervisor_host: "{{ hypervisor_host | default('') }}"
-      when: _report_publish_enabled | bool
+        - name: Fetch report index sidecar to local artifacts
+          ansible.builtin.fetch:
+            src: "{{ temp_output_dir.path }}/report-index.json"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/"
+            flat: true
+          failed_when: false
 
-    - name: Cleanup temporary output directory
-      ansible.builtin.file:
-        path: "{{ temp_output_dir.path }}"
-        state: absent
+        - name: Publish report to repository
+          ansible.builtin.include_role:
+            name: gitea
+          vars:
+            report_file: "{{ output_filename }}"
+            report_tarball: "{{ tarball_name }}"
+            report_publish_mode: "{{ _report_publish_mode }}"
+            gitea_hypervisor_host: "{{ hypervisor_host | default('') }}"
+          when: _report_publish_enabled | bool
+
+      always:
+        - name: Cleanup temporary output directory
+          ansible.builtin.file:
+            path: "{{ temp_output_dir.path }}"
+            state: absent
+          when: temp_output_dir.path is defined
 
     - name: Push test results to Splunk
       when:

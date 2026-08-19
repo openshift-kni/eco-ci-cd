@@ -2,24 +2,92 @@
 
 This repository contains automated test reports from Telco KPIs verification jobs.
 
-## Latest Reports
+{% if report_metadata_list is defined and report_metadata_list | length > 0 %}
+{# ------------------------------------------------------------------ #}
+{# Build per-(ocp_minor, arch) summary: latest entry per combination  #}
+{# ------------------------------------------------------------------ #}
+{% set ns = namespace(summary=[], seen_keys=[]) %}
+{% for meta in report_metadata_list | sort(attribute='date', reverse=True) %}
+{%   set key = meta.ocp_minor ~ '|' ~ meta.arch %}
+{%   if key not in ns.seen_keys %}
+{%     set _ = ns.summary.append(meta) %}
+{%     set _ = ns.seen_keys.append(key) %}
+{%   endif %}
+{% endfor %}
 
+## Version Summary
+
+| Date | OCP Version | Arch | Latest Report | Artifacts |
+|------|-------------|------|---------------|-----------|
+{% for s in ns.summary | sort(attribute='ocp_minor', reverse=True) %}
+{%   set anchor = 'ocp-' ~ s.ocp_minor | replace('.', '') %}
+| {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | [{{ s.report_file }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
+{% endfor %}
+
+---
+
+{# ------------------------------------------------------------------ #}
+{# Per-minor-version sections                                          #}
+{# ------------------------------------------------------------------ #}
+{% set unique_minors = report_metadata_list | map(attribute='ocp_minor') | unique | sort(reverse=True) | list %}
+{% for ocp_minor in unique_minors %}
+{%   set minor_reports = report_metadata_list | selectattr('ocp_minor', 'equalto', ocp_minor) | sort(attribute='date', reverse=True) | list %}
+{%   set anchor_id = 'ocp-' ~ ocp_minor | replace('.', '') %}
+
+## OCP {{ ocp_minor }}
+
+{%   set x86_reports = minor_reports | selectattr('arch', 'equalto', 'x86_64') | list %}
+{%   set arm_reports = minor_reports | selectattr('arch', 'equalto', 'arm64') | list %}
+
+{%   if x86_reports | length > 0 %}
+### x86_64
+
+| Date | Status | OCP Version | Spoke Cluster | Report | Artifacts |
+|------|--------|-------------|---------------|--------|-----------|
+{%     for r in x86_reports %}
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.spoke }} | [{{ r.report_file }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+{%     endfor %}
+{%   endif %}
+
+{%   if arm_reports | length > 0 %}
+### arm64
+
+| Date | Status | OCP Version | Spoke Cluster | Report | Artifacts |
+|------|--------|-------------|---------------|--------|-----------|
+{%     for r in arm_reports %}
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.spoke }} | [{{ r.report_file }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+{%     endfor %}
+{%   endif %}
+
+{%   if x86_reports | length == 0 and arm_reports | length == 0 %}
+*No reports for OCP {{ ocp_minor }}.*
+{%   endif %}
+
+---
+
+{% endfor %}
+
+{% else %}
+{# ------------------------------------------------------------------ #}
+{# Fallback: flat list (no index sidecars available yet)               #}
+{# ------------------------------------------------------------------ #}
 {% set ns = namespace(reports=[]) %}
 {% for report_path in report_list | sort(reverse=True) %}
 {%   set parts = report_path.split('/') %}
 {%   if parts | length == 3 %}
-{%     set date = parts[0] %}
-{%     set spoke = parts[1] %}
-{%     set filename = parts[2] %}
-{%     set _ = ns.reports.append({'date': date, 'spoke': spoke, 'file': filename, 'path': report_path}) %}
+{%     set _ = ns.reports.append({'date': parts[0], 'spoke': parts[1], 'file': parts[2], 'path': report_path}) %}
 {%   endif %}
 {% endfor %}
+
+## Latest Reports
 
 | Date | Spoke Cluster | Report | Artifacts |
 |------|---------------|--------|-----------|
 {% for report in ns.reports %}
 | {{ report.date }} | {{ report.spoke }} | [{{ report.file }}]({{ report.path }}) | [Browse]({{ report.date }}/{{ report.spoke }}/) |
 {% endfor %}
+
+{% endif %}
 
 ## Report Structure
 
@@ -28,14 +96,15 @@ reports/
 └── YYYY-MM-DD/
     └── <spoke-cluster>/
         ├── <report-name>.md          # Main report (Markdown)
-        ├── oslat/                     # OSLAT test artifacts
-        ├── ptp/                       # PTP test artifacts
-        ├── cyclictest/                # Cyclictest artifacts
-        ├── cpu-util/                  # CPU utilization artifacts
-        ├── reboot/                    # Reboot test artifacts
-        ├── rfc2544/                   # RFC2544 network test artifacts
-        ├── rds-compare/               # RDS compare artifacts
-        └── node-info-<spoke>.json     # Hardware metadata
+        ├── report-index.json         # Index metadata (version, arch, status)
+        ├── oslat/                    # OSLAT test artifacts
+        ├── ptp/                      # PTP test artifacts
+        ├── cyclictest/               # Cyclictest artifacts
+        ├── cpu-util/                 # CPU utilization artifacts
+        ├── reboot/                   # Reboot test artifacts
+        ├── rfc2544/                  # RFC2544 network test artifacts
+        ├── rds-compare/              # RDS compare artifacts
+        └── node-info-<spoke>.json    # Hardware metadata
 ```
 
 ## About

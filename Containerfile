@@ -13,6 +13,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsdocs=False \
     python3-pip \
     python3-devel \
     python3-wheel \
+    skopeo \
     && dnf clean all
 
 # Copy python requirements file to /eco-ci-cd

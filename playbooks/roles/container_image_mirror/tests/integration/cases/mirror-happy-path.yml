@@ -1,0 +1,10 @@
+---
+container_image_mirror_operation: mirror
+container_image_mirror_registry_namespace: "it/"
+container_image_mirror_images:
+  - source: "registry.access.redhat.com/ubi9/ubi-micro:latest"
+    dest: "mirror-happy-path:latest"
+
+assert_dest_tags_present: true
+expected_mirror_success_count: 1
+expected_mirror_failed_count: 0

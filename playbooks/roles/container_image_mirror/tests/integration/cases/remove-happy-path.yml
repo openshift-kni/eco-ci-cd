@@ -1,0 +1,16 @@
+---
+container_image_mirror_operation: remove
+container_image_mirror_become_override: false
+container_image_mirror_registry_namespace: "it/"
+container_image_mirror_images:
+  - dest: "remove-happy-path:latest"
+
+# Seeded for real by test.yml before the role-under-test runs in remove
+# mode - there has to be something real to delete.
+_seed_images:
+  - source: "registry.access.redhat.com/ubi9/ubi-micro:latest"
+    dest: "remove-happy-path:latest"
+
+assert_dest_tags_absent: true
+expected_remove_success_count: 1
+expected_remove_failed_count: 0

@@ -11,7 +11,7 @@ _cluster_version:
   resources:
     - status:
         desired:
-          version: "4.17.9"
+          version: "4.17.8"
 _infra:
   resources:
     - status:

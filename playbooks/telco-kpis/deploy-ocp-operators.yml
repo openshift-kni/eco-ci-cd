@@ -53,6 +53,11 @@
               - "NOTE: operators and version from lockdown override parameters"
               - "=========================================="
 
+    - name: Decode operators list from base64 (normal mode, not lockdown)
+      when: operators_b64 is defined
+      ansible.builtin.set_fact:
+        operators: "{{ operators_b64 | b64decode | from_json }}"
+
     - name: Validate required variables
       ansible.builtin.assert:
         that:

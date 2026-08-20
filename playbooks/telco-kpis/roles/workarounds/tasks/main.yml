@@ -10,6 +10,11 @@
 #
 # Workarounds are applied conditionally based on detected conditions.
 
+- name: Apply ClusterImagePolicy disconnected workaround (OLM BundleUnpackFailed SignatureValidationFailed)
+  ansible.builtin.include_tasks: cluster-image-policy-disconnected.yml
+  when:
+    - workarounds_disconnected_cluster_image_policy | bool
+
 - name: Apply TALM ManifestWork CRD workaround (TALM requires ManifestWork API from MCE)
   ansible.builtin.include_tasks: talm-manifestwork-crd.yml
   when:

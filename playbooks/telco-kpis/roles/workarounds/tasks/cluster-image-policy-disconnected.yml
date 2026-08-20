@@ -1,0 +1,152 @@
+---
+# Workaround: OLM BundleUnpackFailed (SignatureValidationFailed) in disconnected environments
+#
+# Issue: OLM bundle unpacking fails with SignatureValidationFailed when the OPM image
+#        (quay.io/openshift-release-dev/ocp-v4.0-art-dev) is not pre-cached on the node
+#        and sigstore signature verification is enforced by the 'openshift' ClusterImagePolicy.
+#
+# Root Cause: OCP auto-creates a ClusterImagePolicy named 'openshift' that requires sigstore
+#             signatures for all quay.io/openshift-release-dev/ocp-v4.0-art-dev images.
+#             However, the ocp-v4.0-art-dev arm64 OPM images ARE NOT SIGNED — confirmed by
+#             OCI Referrers API at quay.io returning empty manifests for the arm64 digest.
+#             The ClusterImagePolicy therefore always fails for unsigned OPM images.
+#
+# Why it hits multi-arch and not x86_64:
+#   x86_64 hubs: OPM image already cached on node from OCP installation (before CVO created
+#                ClusterImagePolicy) → CRI-O sees "already present on machine" → skips pull
+#                and signature check entirely.
+#   Multi-arch hubs: freshly deployed arm64 node → OPM image NOT cached → pull triggered →
+#                    signature check required → no signature exists → SignatureValidationFailed
+#
+# Affected Environments:
+#   - Fully disconnected clusters (no default route to quay.io)
+#   - Multi-arch hub deployments where OPM image sha may differ from OCP install
+#   - Any fresh cluster where OLM operator registry image is not pre-cached
+#
+# Upstream Bug: N/A
+# Removal Plan:
+#   1. Red Hat signs ocp-v4.0-art-dev arm64 images with cosign (then signatures can be mirrored)
+#   2. OLM supports per-image-policy signature verification opt-out in disconnected mode
+#   3. OCP ships a built-in disconnected mode that suppresses ClusterImagePolicy for unsigned images
+#
+# NOTE: Signature mirroring is NOT a viable workaround — verified via OCI Referrers API that
+#       the arm64 OPM image digest has no cosign signature at quay.io (empty referrers list).
+#
+# API Version History:
+#   OCP ≤4.18: policy.openshift.io/v1alpha1
+#   OCP ≥4.19: config.openshift.io/v1
+# Both are checked to ensure compatibility across versions.
+
+- name: Check if 'openshift' ClusterImagePolicy exists (config.openshift.io/v1)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterImagePolicy
+    name: openshift
+  register: workarounds_cluster_image_policy_check_v1
+  failed_when: false
+
+- name: Check if 'openshift' ClusterImagePolicy exists (policy.openshift.io/v1alpha1)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: policy.openshift.io/v1alpha1
+    kind: ClusterImagePolicy
+    name: openshift
+  register: workarounds_cluster_image_policy_check_v1alpha1
+  failed_when: false
+
+- name: Delete 'openshift' ClusterImagePolicy (prevents OLM BundleUnpackFailed in disconnected)
+  when: >-
+    (workarounds_cluster_image_policy_check_v1.resources | default([]) | length > 0) or
+    (workarounds_cluster_image_policy_check_v1alpha1.resources | default([]) | length > 0)
+  block:
+    - name: Remove 'openshift' ClusterImagePolicy (config.openshift.io/v1)
+      when: workarounds_cluster_image_policy_check_v1.resources | default([]) | length > 0
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: ClusterImagePolicy
+        name: openshift
+        state: absent
+
+    - name: Remove 'openshift' ClusterImagePolicy (policy.openshift.io/v1alpha1)
+      when: workarounds_cluster_image_policy_check_v1alpha1.resources | default([]) | length > 0
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: policy.openshift.io/v1alpha1
+        kind: ClusterImagePolicy
+        name: openshift
+        state: absent
+
+    - name: Find bundle unpack jobs in openshift-marketplace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: batch/v1
+        kind: Job
+        namespace: openshift-marketplace
+      register: workarounds_marketplace_jobs
+      failed_when: false
+
+    - name: Delete failed bundle unpack jobs (force OLM to retry without signature policy)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: batch/v1
+        kind: Job
+        namespace: openshift-marketplace
+        name: "{{ item.metadata.name }}"
+        state: absent
+        delete_options:
+          propagationPolicy: Foreground
+      loop: "{{ workarounds_marketplace_jobs.resources | default([]) }}"
+      when: (item.status.failed | default(0) | int) > 0
+
+    - name: Start background loop to keep ClusterImagePolicy deleted during operator deployment
+      ansible.builtin.shell: |
+        set -o pipefail
+        # CVO recreates ClusterImagePolicy within ~2 minutes of deletion. Operator mirroring
+        # (Phase 2) can take 20-30 minutes before subscriptions are created. This loop
+        # re-deletes the policy and any failed bundle unpack jobs every 90 seconds so that
+        # when OLM starts the bundle unpack job, the policy is absent and the job succeeds.
+        KUBECONFIG="{{ kubeconfig }}"
+        for i in $(seq 1 20); do
+          sleep 90
+          oc --kubeconfig="${KUBECONFIG}" delete clusterimagepolicy openshift \
+            2>/dev/null || true
+          FAILED=$(oc --kubeconfig="${KUBECONFIG}" get jobs -n openshift-marketplace \
+            -o jsonpath='{range .items[?(@.status.failed>0)]}{.metadata.name}{"\n"}{end}' \
+            2>/dev/null || true)
+          if [ -n "${FAILED}" ]; then
+            echo "${FAILED}" | xargs -I{} oc --kubeconfig="${KUBECONFIG}" delete job {} \
+              -n openshift-marketplace --cascade=foreground 2>/dev/null || true
+          fi
+        done
+      async: 1800
+      poll: 0
+      changed_when: false
+
+    - name: Display ClusterImagePolicy disconnected workaround applied
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          WORKAROUND APPLIED: ClusterImagePolicy openshift
+          ========================================
+          Issue: OLM BundleUnpackFailed (SignatureValidationFailed) in disconnected cluster.
+          Cause: 'openshift' ClusterImagePolicy enforces sigstore verification for
+                 quay.io/openshift-release-dev/ocp-v4.0-art-dev (OPM image).
+                 The arm64 OPM image is NOT SIGNED — OCI Referrers API at quay.io returns
+                 empty manifests. Signature verification always fails for unsigned images.
+          Action: Deleted 'openshift' ClusterImagePolicy.
+                  Deleted any pre-existing failed bundle unpack jobs in openshift-marketplace.
+                  Started background loop (every 90s for 30min) to re-delete policy and
+                  failed bundle unpack jobs — covers the entire operator mirroring + install
+                  window before subscriptions are created.
+          Result: OLM bundle unpacking proceeds without sigstore verification.
+                  Operators will install successfully from local mirror registry.
+          ========================================
+
+- name: Log no-op when ClusterImagePolicy openshift not found
+  when: >-
+    (workarounds_cluster_image_policy_check_v1.resources | default([]) | length == 0) and
+    (workarounds_cluster_image_policy_check_v1alpha1.resources | default([]) | length == 0)
+  ansible.builtin.debug:
+    msg: "ClusterImagePolicy 'openshift' not found (checked both API versions) — no action needed"

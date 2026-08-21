@@ -1,0 +1,7 @@
+---
+- name: Set OperatorGroup spec configuration
+  ansible.builtin.set_fact:
+    operator_group_spec_config: >-
+      {{
+        operator_item.og_spec | default({'targetNamespaces': [operator_item.nsname]})
+      }}

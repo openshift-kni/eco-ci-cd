@@ -1,0 +1,14 @@
+---
+operator_item:
+  name: some-operator
+  nsname: some-ns
+  og_spec:
+    targetNamespaces:
+      - some-ns
+      - some-other-ns
+
+expected_facts:
+  operator_group_spec_config:
+    targetNamespaces:
+      - some-ns
+      - some-other-ns

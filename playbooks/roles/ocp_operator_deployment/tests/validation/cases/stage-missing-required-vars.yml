@@ -1,0 +1,9 @@
+---
+ocp_operator_deployment_version: "4.17.9"
+ocp_operator_deployment_operators:
+  - name: some-operator
+    catalog: redhat-operators-stage
+    nsname: some-ns
+# ocp_operator_deployment_stage_repo_image / _stage_cs_secret intentionally omitted
+
+expect_failure: true

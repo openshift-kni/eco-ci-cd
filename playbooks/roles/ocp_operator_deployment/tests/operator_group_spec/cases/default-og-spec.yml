@@ -1,0 +1,11 @@
+---
+operator_item:
+  name: some-operator
+  nsname: some-ns
+  # og_spec intentionally omitted - should default to targetNamespaces:
+  # [nsname]
+
+expected_facts:
+  operator_group_spec_config:
+    targetNamespaces:
+      - some-ns

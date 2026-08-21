@@ -285,7 +285,7 @@
       ansible.builtin.fetch:
         src: "{{ lockdown_output_file }}"
         dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ lockdown_output_file | basename }}"
-        flat: yes
+        flat: true
       failed_when: false
 
     # Validation mode: Compare generated lockdown with input lockdown
@@ -438,5 +438,5 @@
           ansible.builtin.fetch:
             src: "{{ lockdown_output_file | dirname }}/spoke-lockdown-diff.txt"
             dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/spoke-lockdown-diff.txt"
-            flat: yes
+            flat: true
           failed_when: false

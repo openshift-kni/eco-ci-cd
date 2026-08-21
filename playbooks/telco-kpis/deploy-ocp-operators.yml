@@ -159,7 +159,7 @@
           ansible.builtin.fetch:
             src: "{{ hub_lockdown_output_path }}"
             dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ hub_lockdown_output_path | basename }}"
-            flat: yes
+            flat: true
           failed_when: false
 
     - name: Compare lockdown if both input and generated exist
@@ -211,5 +211,5 @@
           ansible.builtin.fetch:
             src: "{{ lockdown_artifact_dir }}/hub-lockdown-diff.txt"
             dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/hub-lockdown-diff.txt"
-            flat: yes
+            flat: true
           failed_when: false

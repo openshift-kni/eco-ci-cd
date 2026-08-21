@@ -276,6 +276,18 @@
           - "Operators captured: {{ lockdown_metadata_operators | length }}"
           - "=========================================="
 
+    # Fetch the lockdown from bastion to the Ansible controller before the comparison
+    # so it is available regardless of whether the comparison passes or fails.
+    # Both Jenkins and Prow treat the bastion as a remote node; the controller
+    # uses ARTIFACT_DIR when set (Prow) or falls back to /artifacts (Jenkins volume).
+    - name: Fetch generated spoke lockdown to controller artifact dir
+      when: ocp_operator_mirror_generate_lockdown | bool
+      ansible.builtin.fetch:
+        src: "{{ lockdown_output_file }}"
+        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ lockdown_output_file | basename }}"
+        flat: yes
+      failed_when: false
+
     # Validation mode: Compare generated lockdown with input lockdown
     - name: Compare generated lockdown with input lockdown (validation mode)
       when:
@@ -418,3 +430,13 @@
               Generated: {{ lockdown_output_file }}
               Diff saved to: {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/spoke-lockdown-diff.txt
           when: not critical_fields_match
+      always:
+        # Fetch the diff regardless of comparison result so it is available for
+        # debugging even when the play fails due to a digest mismatch.
+        # failed_when: false covers the case where digests matched and no diff was written.
+        - name: Fetch spoke lockdown diff to controller artifact dir
+          ansible.builtin.fetch:
+            src: "{{ lockdown_output_file | dirname }}/spoke-lockdown-diff.txt"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/spoke-lockdown-diff.txt"
+            flat: yes
+          failed_when: false

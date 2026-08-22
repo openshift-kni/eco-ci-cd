@@ -13,6 +13,40 @@
     dest: "{{ output_dir }}/{{ output_filename }}"
     mode: '0644'
 
+- name: Compute overall report status
+  ansible.builtin.set_fact:
+    _rg_overall_status: >-
+      {{
+        'FAIL' if (report_data.test_results | dict2items |
+          map(attribute='value') | selectattr('status', 'equalto', 'FAIL') | list | length > 0)
+        else 'PASS'
+      }}
+
+- name: Extract OCP minor version (x.y)
+  ansible.builtin.set_fact:
+    _rg_ocp_minor: >-
+      {{
+        report_data.cluster_info.sw_version | regex_replace('^(\d+\.\d+).*$', '\1')
+        if (report_data.cluster_info.sw_version | default('N/A')) | regex_search('^\d+\.\d+')
+        else 'N/A'
+      }}
+
+- name: Generate report index sidecar
+  ansible.builtin.copy:
+    content: >-
+      {{
+        {
+          'ocp_version': report_data.cluster_info.sw_version | default('N/A'),
+          'ocp_minor': _rg_ocp_minor,
+          'arch': report_data.hardware_info.architecture | default('N/A'),
+          'status': _rg_overall_status,
+          'spoke': spoke_cluster,
+          'report_file': output_filename
+        } | to_nice_json
+      }}
+    dest: "{{ output_dir }}/report-index.json"
+    mode: '0644'
+
 - name: Display report location
   ansible.builtin.debug:
     msg: "Report generated: {{ output_dir }}/{{ output_filename }}"

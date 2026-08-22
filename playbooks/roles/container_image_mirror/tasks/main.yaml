@@ -1,5 +1,5 @@
 ---
-- name: Validate required variables
+- name: Validate required variabless
   ansible.builtin.assert:
     that:
       - container_image_mirror_images is defined

@@ -1,7 +1,7 @@
 ---
 - name: Collect GitOps operator version
   block:
-    - name: Get GitOps subscription
+    - name: Get GitOps subscriptions
       kubernetes.core.k8s_info:
         api_version: operators.coreos.com/v1alpha1
         kind: Subscription

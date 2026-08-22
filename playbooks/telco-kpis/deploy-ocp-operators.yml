@@ -53,6 +53,11 @@
               - "NOTE: operators and version from lockdown override parameters"
               - "=========================================="
 
+    - name: Decode operators list from base64 (normal mode, not lockdown)
+      when: operators_b64 is defined
+      ansible.builtin.set_fact:
+        operators: "{{ operators_b64 | b64decode | from_json }}"
+
     - name: Validate required variables
       ansible.builtin.assert:
         that:
@@ -148,6 +153,15 @@
               - "Upload this file to Gitea for future deployments"
               - "=========================================="
 
+        # Fetch the lockdown from bastion to the Ansible controller before the
+        # comparison so it is available regardless of whether comparison passes.
+        - name: Fetch generated hub lockdown to controller artifact dir
+          ansible.builtin.fetch:
+            src: "{{ hub_lockdown_output_path }}"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ hub_lockdown_output_path | basename }}"
+            flat: true
+          failed_when: false
+
     - name: Compare lockdown if both input and generated exist
       when:
         - generate_hub_lockdown is defined
@@ -189,3 +203,13 @@
             dest: "{{ lockdown_artifact_dir }}/hub-lockdown-diff.txt"
             mode: '0644'
           when: lockdown_diff.stdout is defined
+      always:
+        # Fetch the diff regardless of comparison result so it is available for
+        # debugging even when the play fails. failed_when: false covers the case
+        # where no diff was written (digests matched).
+        - name: Fetch hub lockdown diff to controller artifact dir
+          ansible.builtin.fetch:
+            src: "{{ lockdown_artifact_dir }}/hub-lockdown-diff.txt"
+            dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/hub-lockdown-diff.txt"
+            flat: true
+          failed_when: false

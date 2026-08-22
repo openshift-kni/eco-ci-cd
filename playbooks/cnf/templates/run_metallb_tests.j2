@@ -1,0 +1,37 @@
+#!/bin/bash
+set -euo pipefail
+
+export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
+export KUBECONFIG="{{ kubeconfig }}"
+export CONTAINER_RUNTIME=podman
+export RUN_FRR_CONTAINER_ON_HOST_NETWORK=true
+export PROVISIONING_HOST_EXTERNAL_IPV4={{ ansible_default_ipv4.address }}
+{% if ansible_default_ipv6.address is defined %}
+export PROVISIONING_HOST_EXTERNAL_IPV6={{ ansible_default_ipv6.address }}
+{% endif %}
+export GOTOOLCHAIN=auto
+export GOFLAGS=-mod=readonly
+
+podman rm -f ibgp-single-hop 2>/dev/null || true
+
+cd {{ metallb_dir }}/e2etest
+
+"{{ metallb_dir }}/build/bin/ginkgo" -v \
+  --junit-report="{{ metallb_report_path }}/junit-report.xml" \
+  --timeout=3h \
+  --skip="L2|NetworkUnavailable|NodeExcludeBalancers|Unnumbered|Networkpolicies|FRR-MODE|IPV6|DUALSTACK" \
+  -- \
+  --kubeconfig="{{ kubeconfig }}" \
+  --service-pod-port=8080 \
+  -ipv4-service-range="{{ ipv4_service_range }}" \
+  -ipv6-service-range="{{ ipv6_service_range }}" \
+  --report-path "{{ metallb_report_path }}" \
+  --prometheus-namespace=openshift-monitoring \
+  -node-nics _ \
+  -local-nics _ \
+  -bgp-mode=frr-k8s \
+  -with-vrf=False \
+  --frr-image="{{ frr_image }}" \
+  --host-bgp-mode=ibgp \
+  --kubectl="{{ metallb_dir }}/build/kubectl" \
+  --frr-k8s-namespace=openshift-frr-k8s

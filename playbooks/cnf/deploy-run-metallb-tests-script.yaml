@@ -1,0 +1,212 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Set up MetalLB e2e tests
+# Description  : This playbook prepares the environment on the bastion host
+#                for running the MetalLB downstream e2e test suite. It opens
+#                the required firewall ports, installs dependencies, clones the
+#                MetalLB repository, installs Ginkgo, applies the MetalLB CR,
+#                and renders the test execution script.
+#
+# Prerequisites:
+#   - kubeconfig must be defined and accessible on the bastion host
+#   - oc binary must be present on the bastion host
+#   - bastion host must have internet access to clone from GitHub
+#
+# Usage:
+# ansible-playbook ./playbooks/cnf/deploy-run-metallb-tests.yaml \
+#   -i ./inventories/cnf/run-tests.yaml \
+#   --extra-vars "kubeconfig=/home/telcov10n/project/generated/hlxcl14/auth/kubeconfig"
+#
+# Available extra-vars:
+#
+# kubeconfig          # string: Path to the kubeconfig file (required)
+# metallb_repo        # string: MetalLB git repository URL
+# frr_image           # string: FRR container image to use during tests
+# ipv4_service_range  # string: IPv4 range for MetalLB service allocation
+# ipv6_service_range  # string: IPv6 range for MetalLB service allocation
+
+- name: Set up MetalLB e2e tests
+  hosts: bastion
+  gather_facts: true
+  vars:
+    metallb_dir: /tmp/metallb
+    metallb_report_path: /tmp/metallbreport
+    metallb_repo: https://github.com/openshift/metallb.git
+    frr_image: quay.io/frrouting/frr:8.5.3
+    ipv4_service_range: 192.168.10.0/24
+    ipv6_service_range: fc00:f853:0ccd:e799::/124
+    script_name: metallb-tests-run.sh
+    firewall_ports:
+      - port: 179
+        proto: tcp
+      - port: 180
+        proto: tcp
+      - port: 3784
+        proto: udp
+      - port: 3785
+        proto: udp
+      - port: 4784
+        proto: udp
+
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+
+    - name: Open BGP and BFD firewall ports
+      become: true
+      ansible.posix.firewalld:
+        zone: public
+        port: "{{ item.port }}/{{ item.proto }}"
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_ports }}"
+
+    - name: Install required packages
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - wget
+          - golang
+        state: present
+
+    - name: Ensure metallb directory does not exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ metallb_dir }}"
+        state: absent
+
+    - name: Ensure report directory does not exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ metallb_report_path }}"
+        state: absent
+
+    - name: Gather cluster network information
+      register: cluster_info
+      kubernetes.core.k8s_info:
+        api_version: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Assert cluster info was retrieved
+      ansible.builtin.assert:
+        that: cluster_info.resources | length > 0
+        fail_msg: "Failed to retrieve cluster Network resource — check kubeconfig and cluster connectivity"
+
+    - name: Extract OpenShift version
+      ansible.builtin.set_fact:
+        ocp_version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ ocp_version }}"
+
+    - name: Clone MetalLB repository
+      block:
+        - name: Clone release branch
+          ansible.builtin.git:
+            repo: "{{ metallb_repo }}"
+            dest: "{{ metallb_dir }}"
+            version: "release-{{ ocp_version }}"
+            depth: 1
+            force: true
+          register: metallb_git_clone
+          retries: 3
+          delay: 5
+          until: metallb_git_clone is not failed
+
+      rescue:
+        - name: Clone main branch as fallback
+          ansible.builtin.git:
+            repo: "{{ metallb_repo }}"
+            dest: "{{ metallb_dir }}"
+            version: main
+            depth: 1
+            force: true
+          register: metallb_main_clone
+          retries: 3
+          delay: 5
+          until: metallb_main_clone is not failed
+
+    - name: Create build directory
+      ansible.builtin.file:
+        path: "{{ metallb_dir }}/build/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Install Ginkgo v2
+      changed_when: false
+      ansible.builtin.command:
+        cmd: go install github.com/onsi/ginkgo/v2/ginkgo
+        chdir: "{{ metallb_dir }}/e2etest"
+        creates: "{{ metallb_dir }}/build/bin/ginkgo"
+      environment:
+        PATH: "/usr/local/go/bin:{{ ansible_env.PATH }}"
+        GOBIN: "{{ metallb_dir }}/build/bin"
+
+    - name: Register oc binary location
+      ansible.builtin.command: which oc
+      register: oc_binary
+      changed_when: false
+
+    - name: Create kubectl symlink pointing to oc
+      ansible.builtin.file:
+        src: "{{ oc_binary.stdout }}"
+        dest: "{{ metallb_dir }}/build/kubectl"
+        state: link
+        force: true
+
+    - name: Create report directory
+      ansible.builtin.file:
+        path: "{{ metallb_report_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Delete existing MetalLB CR
+      ansible.builtin.command: oc delete metallb metallb -n metallb-system
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: delete_cr
+      changed_when: delete_cr.rc == 0
+      failed_when: delete_cr.rc != 0 and 'not found' not in delete_cr.stderr
+
+    - name: Apply MetalLB CR with debug logging enabled
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metallb.io/v1beta1
+          kind: MetalLB
+          metadata:
+            name: metallb
+            namespace: metallb-system
+          spec:
+            logLevel: debug
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for MetalLB to become available
+      ansible.builtin.command: >
+        oc wait metallb/metallb -n metallb-system --for=condition=Available --timeout=300s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Set IP service ranges from host_vars
+      when: tests_mlb_addr_list is defined
+      ansible.builtin.set_fact:
+        ipv4_service_range: "{{ (tests_mlb_addr_list.split(',') | reject('search', ':') | list)[0] }}/32"
+        ipv6_service_range: "{{ (tests_mlb_addr_list.split(',') | select('search', ':') | list)[0] }}/128"
+
+    - name: Prepare test execution script
+      ansible.builtin.template:
+        src: run_metallb_tests.j2
+        dest: "{{ metallb_dir }}/{{ script_name }}"
+        mode: "0755"

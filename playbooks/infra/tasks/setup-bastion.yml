@@ -1,0 +1,170 @@
+- name: Deploy chrony config
+  ansible.builtin.copy:
+    content: "{{ lookup('template', 'chrony.conf.j2') }}"
+    dest: /etc/chrony.conf
+    mode: '0644'
+  become: true
+  notify:
+    - Restart chrony
+
+- name: Set up authorized_keys
+  become: false
+  no_log: true
+  ansible.builtin.lineinfile:
+    path: /home/{{ ansible_user }}/.ssh/authorized_keys
+    create: true
+    line: "{{ ssh_public_key }}"
+    mode: "0600"
+
+- name: Setup RSA key
+  become: false
+  no_log: true
+  ansible.builtin.copy:
+    content: "{{ ansible_ssh_private_key }}"
+    dest: /home/{{ ansible_user }}/.ssh/id_rsa
+    mode: "0600"
+
+- name: Setup RSA public key
+  become: false
+  ansible.builtin.copy:
+    content: "{{ ssh_public_key }}"
+    dest: /home/{{ ansible_user }}/.ssh/id_rsa.pub
+    mode: "0600"
+
+- name: Ensure epel repo present
+  ansible.builtin.dnf:
+    name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
+    state: present
+    disable_gpg_check: true
+  become: true
+
+- name: Install and update CA
+  when: install_ca_cert | default('true') | bool
+  become: true
+  block:
+    - name: Download CA certificate to pki directory
+      ansible.builtin.get_url:
+        url: "{{ ca_update_link }}"
+        dest: /etc/pki/ca-trust/source/anchors/certificate.crt
+        checksum: "sha256:{{ ca_update_sha256 }}"
+        mode: '0644'
+
+    - name: Update certificate
+      ansible.builtin.command: update-ca-trust
+      changed_when: false
+
+- name: Ensure rcm-tools repo is present on host
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ brew_repo }}"
+    dest: "/etc/yum.repos.d/repository.repo"
+    mode: '0644'
+
+- name: Install required packages
+  become: true
+  ansible.builtin.dnf:
+    name:
+      - openconnect
+      - git
+      - firewalld
+      - podman
+      - tmux
+      - java
+      - brewkoji
+      - koji
+      - make
+      - pip
+      - skopeo
+      - zip
+    state: present
+
+- name: Download GO archive
+  ansible.builtin.get_url:
+    url: "https://go.dev/dl/{{ golang_pkg }}"
+    dest: /tmp/
+    checksum: "sha256:{{ golang_pkg_sha256 }}"
+    mode: '0640'
+
+- name: Ensure destination GO directory exists
+  become: true
+  ansible.builtin.file:
+    path: /usr/local
+    state: directory
+    recurse: true
+
+- name: Extract GO archive into /usr/local
+  notify:
+    - Remove golang archive
+  become: true
+  ansible.builtin.unarchive:
+    src: /tmp/{{ golang_pkg }}
+    dest: /usr/local
+    remote_src: true
+
+- name: Add line to user's bash_profile
+  ansible.builtin.copy:
+    content: "PATH=$PATH:$HOME/.local/bin:/usr/local/go/bin"
+    dest: /home/{{ ansible_user }}/.bash_profile
+    mode: "0640"
+
+- name: Set podman auth env variable system-wide
+  become: true
+  no_log: true
+  ansible.builtin.copy:
+    content: "export REGISTRY_AUTH_FILE=/etc/containers/auth.json"
+    dest: /etc/profile.d/podman-auth-var.sh
+    mode: "0755"
+
+- name: Add auth credentials for container registries
+  no_log: true
+  ansible.builtin.set_fact:
+    pull_secret:
+      auths: "{{ podman_registry_credentials | from_json }}"
+
+- name: Setup Internal registry
+  ansible.builtin.import_role:
+    name: registry_gui_deploy
+  vars:
+    registry_gui_tls_cert: "{{ disconnected_registry_cert }}"
+    registry_gui_tls_cert_key: "{{ disconnected_registry_cert_key }}"
+    registry_gui_user: "{{ ansible_user }}"
+    registry_gui_pass: "{{ ansible_password }}"
+    registry_gui_htpasswd_content: "{{ disconnected_registry_htpasswd_string }}"
+    registry_gui_registry_ui_image: "quay.io/telcov10n-ci/docker-registry-ui:latest"
+    registry_gui_pull_secret: "{{ pull_secret }}"
+    registry_gui_nginx_lb_image: "quay.io/telcov10n-ci/nginx:1.24.0-alpine"
+
+- name: Ensure minimal python packages are installed
+  ansible.builtin.pip:
+    name:
+      - openshift
+      - pyyaml
+      - kubernetes==33.1.0
+    state: present
+
+# Do not check the checksum here, doing so breaks the ability to change OCP versions
+- name: Download oc-mirror archive
+  vars:
+    _oc_mirror_url: >-
+      https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/{{
+      ('latest-' ~ oc_mirror_version_minor) if oc_mirror_version_minor is defined else 'latest'
+      }}/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz
+  ansible.builtin.get_url:
+    url: "{{ _oc_mirror_url }}"
+    dest: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+    mode: '0644'
+
+- name: Extract oc-mirror archive
+  ansible.builtin.unarchive:
+    src: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+
+- name: Install oc-mirror binary
+  ansible.builtin.copy:
+    remote_src: true
+    src: /tmp/oc-mirror
+    dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+    mode: '0755'
+  notify:
+    - Cleanup oc-mirror artifacts

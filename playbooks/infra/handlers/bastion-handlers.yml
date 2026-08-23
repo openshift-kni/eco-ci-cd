@@ -1,0 +1,22 @@
+- name: Remove golang archive
+  delegate_to: localhost
+  ansible.builtin.file:
+    state: absent
+    path: "/tmp/{{ golang_pkg }}"
+
+- name: Cleanup oc-mirror artifacts
+  ansible.builtin.file:
+    path: "{{ oc_mirror_artifact_item }}"
+    state: absent
+  loop:
+    - "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"
+    - "/tmp/oc-mirror"
+  loop_control:
+    loop_var: oc_mirror_artifact_item
+
+- name: Restart chrony
+  ansible.builtin.systemd_service:
+    state: restarted
+    name: chronyd.service
+    enabled: true
+  become: true

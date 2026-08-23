@@ -105,5 +105,19 @@
           ansible.builtin.debug:
             msg: "OCP release from version: {{ release }}"
 
+- name: Pre-configure hub deployment flags
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Disable image policy for multi-arch disconnected hub deployments (OCP 4.22+)
+      vars:
+        _ocp_major: "{{ release | regex_search('(\\d+)\\.\\d+', '\\1') | first | default('0') }}"
+        _ocp_minor: "{{ release | regex_search('\\d+\\.(\\d+)', '\\1') | first | default('0') }}"
+      when:
+        - release is search('multi')
+        - _ocp_major | int > 4 or (_ocp_major | int == 4 and _ocp_minor | int >= 22)
+      ansible.builtin.set_fact:
+        disable_image_policy: true
+
 - name: Deploy OCP SNO cluster
   import_playbook: ../deploy-ocp-sno.yml

@@ -8,9 +8,9 @@
     git_work_dir: "/tmp/gitea-publish-{{ ansible_date_time.epoch }}"
     report_dir_name: "{{ ansible_date_time.date }}"
 
-- name: Set report base directory (root for dev, reports/ for prod)
+- name: Set report base directory (root for dev-bastion, reports/ for prod and dev-hypervisor)
   ansible.builtin.set_fact:
-    _reports_dir: "{{ git_work_dir }}{{ '' if (development_mode | default(false) | bool) else '/reports' }}"
+    _reports_dir: "{{ git_work_dir }}{{ '' if report_publish_mode | default('prod') == 'dev-bastion' else '/reports' }}"
 
 - name: Display publication info
   ansible.builtin.debug:
@@ -306,9 +306,9 @@
       - "Report: {{ report_file }}"
       - >-
         Web URL: {{ gitea_repo_web_url }}{{
-        '/-/tree/' if not (development_mode | default(false) | bool)
+        '/-/tree/' if report_publish_mode | default('prod') == 'prod'
         else '/src/branch/' }}{{
         report_publish_branch | default('main') }}{{
-        '/reports' if not (development_mode | default(false) | bool) else '' }}/{{
+        '/reports' if report_publish_mode | default('prod') != 'dev-bastion' else '' }}/{{
         report_dir_name }}/{{ spoke_cluster }}
       - "=========================================="

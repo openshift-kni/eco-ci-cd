@@ -1,38 +1,49 @@
 ---
 # Main entry point for Gitea role
-# Supports two publishing modes:
-#   - Development mode (development_mode=true): Deploy local Gitea instance
-#   - Production mode (report_repo_url is set): Publish to external git repo
+# Supports three publishing modes (report_publish_mode):
+#   - prod: publish to external git repo (report_repo_url)
+#   - dev-bastion: deploy local Gitea on bastion (same host as Ansible play)
+#   - dev-hypervisor: deploy Gitea on hypervisor (shared across all bastions)
 
-# === Development mode (local Gitea) - takes precedence ===
+# === dev-bastion: Gitea on bastion ===
 - name: Validate credentials from vault
   ansible.builtin.include_tasks: validate-credentials.yml
-  when: development_mode | default(false) | bool
+  when: report_publish_mode | default('prod') == 'dev-bastion'
 
-- name: Include deployment tasks
+- name: Deploy Gitea on bastion
   ansible.builtin.include_tasks: deploy.yml
-  when: development_mode | default(false) | bool
+  when: report_publish_mode | default('prod') == 'dev-bastion'
 
-- name: Include initialization tasks
+- name: Initialize Gitea on bastion
   ansible.builtin.include_tasks: initialize.yml
-  when: development_mode | default(false) | bool
+  when: report_publish_mode | default('prod') == 'dev-bastion'
 
-- name: Include repository creation tasks
+- name: Create report repository on bastion Gitea
   ansible.builtin.include_tasks: create-repository.yml
-  when: development_mode | default(false) | bool
+  when: report_publish_mode | default('prod') == 'dev-bastion'
 
-# === Production mode (external repository) ===
+# === dev-hypervisor: Gitea on hypervisor (shared instance) ===
+- name: Validate credentials from vault
+  ansible.builtin.include_tasks: validate-credentials.yml
+  when: report_publish_mode | default('prod') == 'dev-hypervisor'
+
+- name: Deploy and initialize Gitea on hypervisor
+  ansible.builtin.include_tasks: deploy-hypervisor.yml
+  when: report_publish_mode | default('prod') == 'dev-hypervisor'
+
+# === prod: external repository ===
 - name: Setup production repository
   ansible.builtin.include_tasks: setup-production-repo.yml
   when:
-    - not (development_mode | default(false) | bool)
+    - report_publish_mode | default('prod') == 'prod'
     - report_repo_url | default('') | length > 0
 
-# === Publish report (shared logic for both modes) ===
+# === Publish report (shared logic for all modes) ===
 - name: Include report publishing tasks
   ansible.builtin.include_tasks: publish-report.yml
   when:
-    - (development_mode | default(false) | bool) or
-      (report_repo_url | default('') | length > 0)
+    - >-
+      (report_publish_mode | default('prod') in ['dev-bastion', 'dev-hypervisor']) or
+      (report_publish_mode | default('prod') == 'prod' and report_repo_url | default('') | length > 0)
     - report_file is defined
     - report_tarball is defined

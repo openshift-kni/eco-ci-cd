@@ -173,15 +173,31 @@
 
     - name: Determine report publishing configuration
       ansible.builtin.set_fact:
-        _report_publish_enabled: "{{ (development_mode | default(false) | bool) or (report_repo_url | default('') | length > 0) }}"
+        _report_publish_mode: "{{ report_publish_mode | default('prod') }}"
+        _report_publish_enabled: >-
+          {{
+            report_publish_mode | default('prod') in ['dev-bastion', 'dev-hypervisor'] or
+            report_repo_url | default('') | length > 0
+          }}
 
-    - name: Configure freshness check URL (development mode - Gitea)
+    - name: Configure freshness check URL (dev-bastion mode - Gitea on bastion)
       ansible.builtin.set_fact:
         _freshness_repo_url: "http://{{ ansible_fqdn }}:3000/{{ ansible_user }}/telco-kpis-reports.git"
         _freshness_branch: "main"
       when:
         - _report_publish_enabled | bool
-        - development_mode | default(false) | bool
+        - _report_publish_mode == 'dev-bastion'
+
+    - name: Configure freshness check URL (dev-hypervisor mode - Gitea on hypervisor)
+      ansible.builtin.set_fact:
+        _freshness_repo_url: >-
+          http://{{ hostvars[hypervisor_host | default('')]['ansible_host'] | default(hypervisor_host | default('')) }}:3000/{{
+          ansible_user }}/telco-kpis-reports.git
+        _freshness_branch: "main"
+      when:
+        - _report_publish_enabled | bool
+        - _report_publish_mode == 'dev-hypervisor'
+        - hypervisor_host | default('') | length > 0
 
     - name: Configure freshness check URL (production repo - token auth)
       ansible.builtin.set_fact:
@@ -193,7 +209,7 @@
         _freshness_branch: "{{ report_repo_branch | default('telco-kpis-reports') }}"
       when:
         - _report_publish_enabled | bool
-        - not (development_mode | default(false) | bool)
+        - _report_publish_mode == 'prod'
         - report_repo_token | default('') | length > 0
       no_log: "{{ ansible_verbosity < 3 }}"
 
@@ -203,7 +219,7 @@
         _freshness_branch: "{{ report_repo_branch | default('telco-kpis-reports') }}"
       when:
         - _report_publish_enabled | bool
-        - not (development_mode | default(false) | bool)
+        - _report_publish_mode == 'prod'
         - report_repo_token | default('') | length == 0
         - report_repo_user | default('') | length > 0
       no_log: "{{ ansible_verbosity < 3 }}"
@@ -297,7 +313,7 @@
               - "==========================================="
               - "Test Freshness Check"
               - "==========================================="
-              - "Report repository: {{ report_repo_url | default('http://' + ansible_fqdn + ':3000/' + ansible_user + '/telco-kpis-reports.git') }}"
+              - "Report repository: {{ _freshness_repo_url | default('(not configured)') }}"
               - "Last report generated: {{ last_report_commit_time.stdout | default('Never', true) }}"
               - "Last report UTC timestamp: {{ last_report_utc_ts.stdout | default('N/A', true) }}"
               - >-
@@ -422,6 +438,8 @@
       vars:
         report_file: "{{ output_filename }}"
         report_tarball: "{{ tarball_name }}"
+        report_publish_mode: "{{ _report_publish_mode }}"
+        gitea_hypervisor_host: "{{ hypervisor_host | default('') }}"
       when: _report_publish_enabled | bool
 
     - name: Cleanup temporary output directory

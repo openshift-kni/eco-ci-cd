@@ -1,0 +1,309 @@
+---
+# Deploy and initialize Gitea on the hypervisor for dev-hypervisor mode.
+# The Gitea container runs on the HV so all bastions share one report repo —
+# emulating prod multi-spoke accumulation with a disposable local instance.
+
+# === Set HV-specific Gitea facts ===
+- name: Get hypervisor user UID and GID
+  ansible.builtin.shell: "printf '%s\n%s' $(id -u) $(id -g)"
+  register: _hv_uid_gid
+  delegate_to: "{{ gitea_hypervisor_host }}"
+  changed_when: false
+
+- name: Set hypervisor Gitea domain and URLs
+  ansible.builtin.set_fact:
+    _hv_uid: "{{ _hv_uid_gid.stdout_lines[0] }}"
+    _hv_gid: "{{ _hv_uid_gid.stdout_lines[1] }}"
+    gitea_domain: "{{ hostvars[gitea_hypervisor_host]['ansible_host'] | default(gitea_hypervisor_host) }}"
+    gitea_data_dir: "/home/{{ hostvars[gitea_hypervisor_host]['ansible_user'] | default(ansible_user) }}/gitea/data"
+
+- name: Set hypervisor Gitea URL facts
+  ansible.builtin.set_fact:
+    gitea_root_url: "http://{{ gitea_domain }}:{{ gitea_http_port }}/"
+    gitea_api_base: "http://{{ gitea_domain }}:{{ gitea_http_port }}/api/v1"
+    gitea_install_url: "http://{{ gitea_domain }}:{{ gitea_http_port }}/"
+
+# === Deploy Gitea container on HV ===
+- name: Open Gitea ports in hypervisor firewall
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  become: true
+  loop:
+    - "{{ gitea_http_port }}"
+    - "{{ gitea_ssh_port }}"
+  failed_when: false
+  delegate_to: "{{ gitea_hypervisor_host }}"
+
+- name: Check if Gitea is accessible on hypervisor
+  ansible.builtin.uri:
+    url: "{{ gitea_root_url }}"
+    method: GET
+    status_code: 200
+    validate_certs: false
+    timeout: 10
+  register: gitea_accessible
+  retries: 3
+  delay: 2
+  failed_when: false
+  changed_when: false
+
+- name: Set Gitea deployment needed flag
+  ansible.builtin.set_fact:
+    gitea_deployment_needed: "{{ gitea_accessible.status is not defined or gitea_accessible.status != 200 }}"
+
+- name: Display Gitea status on hypervisor
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Gitea already running on HV - skipping deployment' if not gitea_deployment_needed
+         else 'Deploying Gitea on HV: ' + gitea_domain }}
+
+- name: Deploy Gitea container on hypervisor
+  when: gitea_deployment_needed
+  block:
+    - name: Check if Gitea container exists on hypervisor
+      containers.podman.podman_container_info:
+        name: "{{ gitea_container_name }}"
+      register: gitea_container_info
+      failed_when: false
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Remove existing broken Gitea container on hypervisor
+      containers.podman.podman_container:
+        name: "{{ gitea_container_name }}"
+        state: absent
+      when: gitea_container_info.containers | default([]) | length > 0
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Create Gitea data directory on hypervisor
+      ansible.builtin.file:
+        path: "{{ gitea_data_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Pull Gitea container image on hypervisor
+      containers.podman.podman_image:
+        name: "{{ gitea_image }}"
+        pull: true
+        force: false
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Start Gitea container on hypervisor
+      containers.podman.podman_container:
+        name: "{{ gitea_container_name }}"
+        image: "{{ gitea_image }}"
+        state: started
+        ports:
+          - "{{ gitea_http_port }}:3000"
+          - "{{ gitea_ssh_port }}:22"
+        volume:
+          - "{{ gitea_data_dir }}:/data:Z"
+        env:
+          USER_UID: "{{ _hv_uid }}"
+          USER_GID: "{{ _hv_gid }}"
+          GITEA__database__DB_TYPE: "sqlite3"
+          GITEA__database__PATH: "/data/gitea/gitea.db"
+          GITEA__server__DOMAIN: "{{ gitea_domain }}"
+          GITEA__server__ROOT_URL: "{{ gitea_root_url }}"
+          GITEA__server__SSH_DOMAIN: "{{ gitea_domain }}"
+          GITEA__server__SSH_PORT: "{{ gitea_ssh_port }}"
+          GITEA__service__DISABLE_REGISTRATION: "true"
+          GITEA__repository__DEFAULT_BRANCH: "main"
+          GITEA__security__INSTALL_LOCK: "true"
+        restart_policy: always
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Wait for Gitea to become accessible on hypervisor
+      ansible.builtin.uri:
+        url: "{{ gitea_root_url }}"
+        method: GET
+        status_code: 200
+        validate_certs: false
+        timeout: 15
+      register: gitea_health
+      until: gitea_health.status == 200
+      retries: 30
+      delay: 2
+
+# === Initialize Gitea via CLI (INSTALL_LOCK is set via env var so no web form needed) ===
+- name: Create admin user via CLI on hypervisor
+  containers.podman.podman_container_exec:
+    name: "{{ gitea_container_name }}"
+    user: git
+    command: >
+      gitea admin user create
+      --config /data/gitea/conf/app.ini
+      --username {{ gitea_admin_user }}
+      --password {{ gitea_admin_password }}
+      --email {{ gitea_admin_email }}
+      --admin
+      --must-change-password=false
+  register: _gitea_admin_create
+  failed_when: false
+  changed_when: >-
+    'created' in (_gitea_admin_create.stdout | default('') | lower) and
+    'already' not in (_gitea_admin_create.stdout | default('') | lower)
+  no_log: "{{ ansible_verbosity < 3 }}"
+  delegate_to: "{{ gitea_hypervisor_host }}"
+
+- name: Restart Gitea after admin creation
+  containers.podman.podman_container:
+    name: "{{ gitea_container_name }}"
+    state: started
+    force_restart: true
+  delegate_to: "{{ gitea_hypervisor_host }}"
+  when: _gitea_admin_create.changed
+
+- name: Wait for Gitea to restart after admin creation
+  ansible.builtin.uri:
+    url: "{{ gitea_root_url }}"
+    method: GET
+    status_code: 200
+    timeout: 15
+  register: gitea_health
+  until: gitea_health.status == 200
+  retries: 30
+  delay: 2
+  when: _gitea_admin_create.changed
+
+# === Ensure admin user exists ===
+- name: Check admin user via Gitea API
+  ansible.builtin.uri:
+    url: "{{ gitea_api_base }}/users/{{ gitea_admin_user }}"
+    method: GET
+    status_code: [200, 404]
+    timeout: 45
+  register: user_check
+  failed_when: false
+
+- name: Create admin user via CLI if not present
+  when: user_check.status != 200
+  block:
+    - name: Create admin user via CLI on hypervisor
+      containers.podman.podman_container_exec:
+        name: "{{ gitea_container_name }}"
+        user: git
+        command: >
+          gitea admin user create
+          --config /data/gitea/conf/app.ini
+          --username {{ gitea_admin_user }}
+          --password {{ gitea_admin_password }}
+          --email {{ gitea_admin_email }}
+          --admin
+          --must-change-password=false
+      register: create_admin_cli
+      failed_when: false
+      changed_when: >-
+        'created' in (create_admin_cli.stdout | default('') | lower) and
+        'already' not in (create_admin_cli.stdout | default('') | lower)
+      no_log: "{{ ansible_verbosity < 3 }}"
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Restart Gitea after admin creation
+      containers.podman.podman_container:
+        name: "{{ gitea_container_name }}"
+        state: started
+        force_restart: true
+      when: create_admin_cli.changed
+      delegate_to: "{{ gitea_hypervisor_host }}"
+
+    - name: Wait for Gitea to restart after admin creation
+      ansible.builtin.uri:
+        url: "{{ gitea_root_url }}"
+        method: GET
+        status_code: 200
+        timeout: 15
+      register: gitea_health
+      until: gitea_health.status == 200
+      retries: 30
+      delay: 2
+      when: create_admin_cli.changed
+
+# === Create API token ===
+- name: Create API token for hypervisor Gitea
+  when: gitea_api_token is not defined or gitea_api_token == ""
+  block:
+    - name: Generate API token via HTTP Basic Auth
+      ansible.builtin.uri:
+        url: "{{ gitea_api_base }}/users/{{ gitea_admin_user }}/tokens"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "ansible-automation-{{ ansible_date_time.epoch }}"
+          scopes:
+            - write:repository
+            - write:user
+            - write:organization
+        status_code: [201, 422]
+        timeout: 45
+      register: token_result
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Extract API token
+      ansible.builtin.set_fact:
+        gitea_api_token: "{{ token_result.json.sha1 }}"
+      when:
+        - token_result.status == 201
+        - token_result.json.sha1 is defined
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+# === Create report repository ===
+- name: Check if report repository exists on hypervisor Gitea
+  ansible.builtin.uri:
+    url: "{{ gitea_api_base }}/repos/{{ gitea_admin_user }}/{{ gitea_repo_name }}"
+    method: GET
+    user: "{{ gitea_admin_user }}"
+    password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+    timeout: 45
+  register: repo_check
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Create report repository on hypervisor Gitea
+  when: repo_check.status == 404
+  block:
+    - name: Create telco-kpis-reports repository via API
+      ansible.builtin.uri:
+        url: "{{ gitea_api_base }}/user/repos"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ gitea_repo_name }}"
+          description: "{{ gitea_repo_description }}"
+          private: false
+          auto_init: true
+          default_branch: main
+          readme: "Default"
+        status_code: [201, 422]
+        timeout: 45
+      register: repo_create
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Wait for repository initialization
+      ansible.builtin.pause:
+        seconds: 5
+      when: repo_create.status == 201
+
+- name: Set hypervisor Gitea repository URLs
+  ansible.builtin.set_fact:
+    gitea_repo_http_url: >-
+      http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@{{ gitea_domain }}:{{
+      gitea_http_port }}/{{ gitea_admin_user }}/{{ gitea_repo_name }}.git
+    gitea_repo_web_url: "{{ gitea_root_url }}{{ gitea_admin_user }}/{{ gitea_repo_name }}"
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Display hypervisor Gitea status
+  ansible.builtin.debug:
+    msg:
+      - "Hypervisor Gitea: {{ gitea_root_url }}"
+      - "Repository: {{ gitea_repo_web_url }}"

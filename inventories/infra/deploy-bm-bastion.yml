@@ -1,0 +1,4 @@
+bastions:
+    hosts:
+        executor:
+        bastion:

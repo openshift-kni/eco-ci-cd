@@ -41,7 +41,8 @@
           'arch': report_data.hardware_info.architecture | default('N/A'),
           'status': _rg_overall_status,
           'spoke': spoke_cluster,
-          'report_file': output_filename
+          'report_file': output_filename,
+          'report_headline': report_data.report_headline | default('')
         } | to_nice_json
       }}
     dest: "{{ output_dir }}/report-index.json"

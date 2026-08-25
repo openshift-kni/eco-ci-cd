@@ -219,6 +219,30 @@
   ansible.builtin.set_fact:
     node_arch: "{{ 'x86_64' if node_arch == 'amd64' else node_arch }}"
 
+- name: Set arch display name (arm64 for aarch64, otherwise keep as-is)
+  ansible.builtin.set_fact:
+    arch: "{{ 'arm64' if node_arch == 'aarch64' else node_arch }}"
+
+- name: Get ClusterVersion
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: cluster_version_info
+  failed_when: false
+
+- name: Extract OCP version from ClusterVersion
+  ansible.builtin.set_fact:
+    ocp_version: >-
+      {{ cluster_version_info.resources[0].status.desired.version
+         if (cluster_version_info.resources | default([]) | length > 0)
+         else 'N/A' }}
+
+- name: Resolve report headline
+  ansible.builtin.set_fact:
+    _report_headline: "{{ report_headline | default(ocp_version ~ ' - ' ~ arch) }}"
+
 - name: Define expected BIOS settings for x86_64
   ansible.builtin.set_fact:
     expected_bios_settings:
@@ -291,16 +315,30 @@
     node_info_json:
       spoke: "{{ spoke_cluster }}"
       node_name: "{{ node_name }}"
+      ocp_version: "{{ ocp_version }}"
+      arch: "{{ arch }}"
       kernel_version: "{{ kernel_version | default('') }}"
       bios_version: "{{ bios_version | default('') }}"
       microcode_version: "{{ microcode_version | default('') }}"
       cpu_type: "{{ cpu_type | default('') }}"
       kernel_cmdline: "{{ kernel_cmdline | default('') }}"
       collected_at: "{{ ansible_date_time.iso8601 }}"
-      performance_profiles_yaml: >-
-        {{ performance_profiles.resources | to_nice_yaml
-           if (performance_profiles is defined and performance_profiles.resources is defined)
-           else '' }}
+      report_headline: "{{ _report_headline }}"
+      manifests:
+        performance_profiles: >-
+          {{ (performance_profiles.resources | to_nice_yaml | b64encode)
+             if (performance_profiles is defined and
+                 performance_profiles.resources is defined and
+                 performance_profiles.resources | length > 0)
+             else '' }}
+        cluster_version: >-
+          {{ (cluster_version_info.resources | to_nice_json | b64encode)
+             if (cluster_version_info.resources | default([]) | length > 0)
+             else '' }}
+        nodes: >-
+          {{ (nodes_info.resources | to_nice_json | b64encode)
+             if (nodes_info.resources | default([]) | length > 0)
+             else '' }}
       bios_settings: "{{ bios_settings_struct if bios_settings_struct is defined else None }}"
 
 - name: Save node info to JSON file on bastion

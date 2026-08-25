@@ -64,7 +64,11 @@
 {%- endif -%}
 {%- endmacro -%}
 
-# {{ report_generator_title }} - {{ report_data.cluster_info.cluster }}
+{%- if report_data.report_headline | default('') %}
+# {{ report_generator_title }} - {{ report_data.report_headline }}
+{%- else %}
+# {{ report_generator_title }} - {{ report_data.cluster_info.sw_version | default('N/A') }} - {{ report_data.hardware_info.architecture | default('N/A') }}
+{%- endif %}
 
 **Generated:** {{ report_timestamp }}
 {% if kpi_targets_metadata is defined %}
@@ -114,12 +118,65 @@
 ```
 {% endif %}
 
-{% if report_data.performance_profiles_yaml %}
-### PerformanceProfile
+{% if report_data.manifests is defined and report_data.manifests %}
+### Cluster Manifests
+
+{%   set _perf = report_data.manifests.performance_profiles | default('') %}
+{%   if _perf %}
+<details>
+<summary><b>▶ Click to expand PerformanceProfile</b></summary>
+
+```yaml
+{{ _perf | b64decode }}
+```
+
+</details>
+{%   elif report_data.performance_profiles_yaml | default('') %}
+<details>
+<summary><b>▶ Click to expand PerformanceProfile</b></summary>
 
 ```yaml
 {{ report_data.performance_profiles_yaml }}
 ```
+
+</details>
+{%   endif %}
+
+{%   set _cv = report_data.manifests.cluster_version | default('') %}
+{%   if _cv %}
+<details>
+<summary><b>▶ Click to expand ClusterVersion</b></summary>
+
+```json
+{{ _cv | b64decode }}
+```
+
+</details>
+{%   endif %}
+
+{%   set _nodes = report_data.manifests.nodes | default('') %}
+{%   if _nodes %}
+<details>
+<summary><b>▶ Click to expand Nodes</b></summary>
+
+```json
+{{ _nodes | b64decode }}
+```
+
+</details>
+{%   endif %}
+
+{% elif report_data.performance_profiles_yaml | default('') %}
+### PerformanceProfile
+
+<details>
+<summary><b>▶ Click to expand PerformanceProfile</b></summary>
+
+```yaml
+{{ report_data.performance_profiles_yaml }}
+```
+
+</details>
 {% endif %}
 
 ---

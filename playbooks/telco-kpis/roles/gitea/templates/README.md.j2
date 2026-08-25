@@ -19,7 +19,14 @@ This repository contains automated test reports from Telco KPIs verification job
 
 | Date | OCP Version | Arch | Latest Report | Artifacts |
 |------|-------------|------|---------------|-----------|
-{% for s in ns.summary | sort(attribute='ocp_minor', reverse=True) %}
+{# Compute a numeric sort key so 4.22 > 4.9 > 4.8, and 5.0 > 4.22 #}
+{% set ns_sort = namespace(keyed=[]) %}
+{% for s in ns.summary %}
+{%   set _parts = s.ocp_minor.split('.') %}
+{%   set _vkey = _parts[0] | int * 1000 + _parts[1] | int %}
+{%   set _ = ns_sort.keyed.append(s | combine({'_vkey': _vkey})) %}
+{% endfor %}
+{% for s in ns_sort.keyed | sort(attribute='_vkey', reverse=True) %}
 {%   set anchor = 'ocp-' ~ s.ocp_minor | replace('.', '') %}
 | {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | [{{ s.report_file }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
 {% endfor %}
@@ -29,8 +36,15 @@ This repository contains automated test reports from Telco KPIs verification job
 {# ------------------------------------------------------------------ #}
 {# Per-minor-version sections                                          #}
 {# ------------------------------------------------------------------ #}
-{% set unique_minors = report_metadata_list | map(attribute='ocp_minor') | unique | sort(reverse=True) | list %}
-{% for ocp_minor in unique_minors %}
+{% set unique_minors_raw = report_metadata_list | map(attribute='ocp_minor') | unique | list %}
+{% set ns_minors = namespace(keyed=[]) %}
+{% for m in unique_minors_raw %}
+{%   set _parts = m.split('.') %}
+{%   set _vkey = _parts[0] | int * 1000 + _parts[1] | int %}
+{%   set _ = ns_minors.keyed.append({'ver': m, 'key': _vkey}) %}
+{% endfor %}
+{% for _minor_item in ns_minors.keyed | sort(attribute='key', reverse=True) %}
+{%   set ocp_minor = _minor_item.ver %}
 {%   set minor_reports = report_metadata_list | selectattr('ocp_minor', 'equalto', ocp_minor) | sort(attribute='date', reverse=True) | list %}
 {%   set anchor_id = 'ocp-' ~ ocp_minor | replace('.', '') %}
 

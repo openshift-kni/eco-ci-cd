@@ -35,11 +35,16 @@
                 'cpu_type': node_info.cpu_type | default('N/A'),
                 'cpu_family': node_info.cpu_family | default('N/A'),
                 'cpu_model': node_info.cpu_model_number | default('N/A'),
-                'architecture': node_info.bios_settings.arch | default('N/A'),
+                'architecture': node_info.bios_settings.arch | default(node_info.arch | default('N/A')),
                 'threads_per_core': node_info.threads_per_core | default('N/A')
               },
               'proc_cmdline': node_info.kernel_cmdline | default(''),
-              'performance_profiles_yaml': node_info.performance_profiles_yaml | default('')
+              'performance_profiles_yaml': (node_info.manifests.performance_profiles | b64decode)
+                if (node_info.manifests is defined and
+                    node_info.manifests.performance_profiles | default('') | length > 0)
+                else (node_info.performance_profiles_yaml | default('')),
+              'report_headline': node_info.report_headline | default(''),
+              'manifests': node_info.manifests | default({})
             })
           }}
 

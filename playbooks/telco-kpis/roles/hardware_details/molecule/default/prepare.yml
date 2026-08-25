@@ -1,0 +1,137 @@
+---
+# Molecule prepare - creates mock system binaries for hardware_details testing
+- name: Prepare mock environment for hardware_details role
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    mock_bin: /tmp/molecule-hardware-details/bin
+
+  tasks:
+    - name: Remove previous test artifacts
+      ansible.builtin.file:
+        path: /tmp/molecule-hardware-details
+        state: absent
+
+    - name: Create mock bin directory
+      ansible.builtin.file:
+        path: "{{ mock_bin }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create results directory
+      ansible.builtin.file:
+        path: /tmp/molecule-hardware-details/results
+        state: directory
+        mode: '0755'
+
+    # --- dmidecode mock ---
+    # Outputs 8 populated 32 GiB DIMMs + 1 empty slot
+    # Configured Memory Speed (4400 MT/s) must override Speed (4800 MT/s)
+    - name: Create mock dmidecode
+      ansible.builtin.copy:
+        dest: "{{ mock_bin }}/dmidecode"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Mock dmidecode - ignores all arguments
+          for i in 1 2 3 4 5 6 7 8; do
+          cat <<'EOF'
+          Memory Device
+                  Array Handle: 0x1100
+                  Size: 32 GiB
+                  Speed: 4800 MT/s
+                  Configured Memory Speed: 4400 MT/s
+                  Type: DDR5
+          EOF
+          done
+          cat <<'EOF'
+          Memory Device
+                  Array Handle: 0x1100
+                  Size: No Module Installed
+          EOF
+
+    # --- lsblk mock ---
+    # 2 NVMe disks (aggregated as count=2) + 1 ROM device (filtered out)
+    # Script calls: lsblk -J -o NAME,TYPE,SIZE,MODEL
+    - name: Create mock lsblk
+      ansible.builtin.copy:
+        dest: "{{ mock_bin }}/lsblk"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Mock lsblk - ignores all arguments
+          cat <<'EOF'
+          {
+             "blockdevices": [
+                {"name": "nvme0n1", "type": "disk", "size": "894.3G", "model": "Dell NVMe PE8010 RI M.2 960GB"},
+                {"name": "nvme1n1", "type": "disk", "size": "894.3G", "model": "Dell NVMe PE8010 RI M.2 960GB"},
+                {"name": "sr0",     "type": "rom",  "size": "1024M",  "model": "Virtual DVD-ROM"}
+             ]
+          }
+          EOF
+
+    # --- lspci mock ---
+    # Script calls: lspci -D -vmm
+    # 4 Ethernet controllers + 1 NVMe (filtered). One Ethernet is a VF (skipped).
+    # Expected result: Dell count=1, Intel E810-C count=2 (VF skipped, NVMe not Ethernet)
+    - name: Create mock lspci
+      ansible.builtin.copy:
+        dest: "{{ mock_bin }}/lspci"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Mock lspci - ignores all arguments, outputs full -D -vmm format
+          cat <<'EOF'
+          Slot:	0000:00:1f.6
+          Class:	Ethernet controller
+          Vendor:	Dell Inc.
+          Device:	Ethernet 1Gb 2-port 331-i LOM
+          SVendor:	Dell Inc.
+          SDevice:	Ethernet 1Gb 2-port 331-i LOM
+          Rev:	31
+
+          Slot:	0000:3b:00.0
+          Class:	Ethernet controller
+          Vendor:	Intel Corporation
+          Device:	Ethernet Controller E810-C for SFP
+          SVendor:	Intel Corporation
+          SDevice:	Ethernet Controller E810-C for SFP
+          Rev:	02
+
+          Slot:	0000:3b:00.1
+          Class:	Ethernet controller
+          Vendor:	Intel Corporation
+          Device:	Ethernet Controller E810-C for SFP
+          SVendor:	Intel Corporation
+          SDevice:	Ethernet Controller E810-C for SFP
+          Rev:	02
+
+          Slot:	0000:3b:10.0
+          Class:	Ethernet controller
+          Vendor:	Intel Corporation
+          Device:	Ethernet Controller E810-C for SFP Virtual Function
+          SVendor:	Intel Corporation
+          SDevice:	Ethernet Controller E810-C for SFP Virtual Function
+          Rev:	02
+
+          Slot:	0000:01:00.0
+          Class:	Non-Volatile memory controller
+          Vendor:	Dell Inc.
+          Device:	NVMe Solid State Drive
+          Rev:	01
+
+          EOF
+
+    - name: Display preparation summary
+      ansible.builtin.debug:
+        msg:
+          - "=================================="
+          - "Mock environment ready"
+          - "=================================="
+          - "Mock bin: {{ mock_bin }}"
+          - "Mocks: dmidecode, lsblk, lspci"
+          - "Expected memory: 8 x 32 GiB = 256 GB @ 4400 MT/s"
+          - "Expected storage: 2 x Dell NVMe PE8010 RI M.2 960GB"
+          - "Expected NICs: Dell (count=1), Intel E810-C (count=2)"
+          - "=================================="

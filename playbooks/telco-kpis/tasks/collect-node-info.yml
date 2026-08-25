@@ -223,6 +223,10 @@
   ansible.builtin.set_fact:
     arch: "{{ 'arm64' if node_arch == 'aarch64' else node_arch }}"
 
+- name: Collect hardware details (vendor, model, iDRAC, memory, storage, NICs)
+  ansible.builtin.include_role:
+    name: hardware_details
+
 - name: Get ClusterVersion
   kubernetes.core.k8s_info:
     api_version: config.openshift.io/v1
@@ -340,6 +344,7 @@
              if (nodes_info.resources | default([]) | length > 0)
              else '' }}
       bios_settings: "{{ bios_settings_struct if bios_settings_struct is defined else None }}"
+      hardware_details: "{{ hardware_details | default({}) }}"
 
 - name: Save node info to JSON file on bastion
   ansible.builtin.copy:

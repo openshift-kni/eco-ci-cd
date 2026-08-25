@@ -1,0 +1,48 @@
+---
+- name: Render memory collection script on bastion
+  ansible.builtin.template:
+    src: collect_memory.sh.j2
+    dest: /tmp/collect_memory_hw.sh
+    mode: '0700'
+
+- name: Collect memory info via MCD pod
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec -i {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs bash -s < /tmp/collect_memory_hw.sh
+  register: memory_script_result
+  failed_when: false
+  changed_when: false
+  timeout: 30
+
+- name: Parse memory JSON result
+  block:
+    - name: Set hw_memory from script output
+      ansible.builtin.set_fact:
+        hw_memory: "{{ memory_script_result.stdout | trim | from_json }}"
+      when:
+        - memory_script_result.stdout | default('') | trim | length > 0
+  rescue:
+    - name: Set default memory on parse failure
+      ansible.builtin.set_fact:
+        hw_memory:
+          total_gb: "N/A"
+          slots_used: "N/A"
+          dimm_size_gb: "N/A"
+          speed_mts: "N/A"
+
+- name: Set default memory info if collection produced no output
+  ansible.builtin.set_fact:
+    hw_memory:
+      total_gb: "N/A"
+      slots_used: "N/A"
+      dimm_size_gb: "N/A"
+      speed_mts: "N/A"
+  when: hw_memory is not defined
+
+- name: Remove memory collection script from bastion
+  ansible.builtin.file:
+    path: /tmp/collect_memory_hw.sh
+    state: absent

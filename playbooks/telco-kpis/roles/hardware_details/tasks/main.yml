@@ -1,0 +1,22 @@
+---
+- name: Collect system vendor and model info
+  ansible.builtin.include_tasks: system_info.yml
+
+- name: Collect memory details
+  ansible.builtin.include_tasks: memory.yml
+
+- name: Collect storage details
+  ansible.builtin.include_tasks: storage.yml
+
+- name: Collect NIC details
+  ansible.builtin.include_tasks: nics.yml
+
+- name: Assemble hardware_details fact
+  ansible.builtin.set_fact:
+    hardware_details:
+      vendor: "{{ hw_vendor | default('N/A') }}"
+      model: "{{ hw_model | default('N/A') }}"
+      idrac_version: "{{ hw_idrac_version | default('N/A') }}"
+      memory: "{{ hw_memory | default({}) }}"
+      storage: "{{ hw_storage | default([]) }}"
+      nics: "{{ hw_nics | default([]) }}"

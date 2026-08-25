@@ -44,7 +44,9 @@
                     node_info.manifests.performance_profiles | default('') | length > 0)
                 else (node_info.performance_profiles_yaml | default('')),
               'report_headline': node_info.report_headline | default(''),
-              'manifests': node_info.manifests | default({})
+              'manifests': node_info.manifests | default({}),
+              'hardware_details': node_info.hardware_details | default({}),
+              'node_name': node_info.node_name | default('')
             })
           }}
 

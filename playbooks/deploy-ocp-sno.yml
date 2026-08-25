@@ -100,6 +100,7 @@
     - name: Populate pull secret
       ansible.builtin.set_fact:
         pull_secret: "{{ pull_secret_string | b64decode }}"
+      no_log: true
 
     - name: Prepare disconnected infrastructure
       when: disconnected | bool

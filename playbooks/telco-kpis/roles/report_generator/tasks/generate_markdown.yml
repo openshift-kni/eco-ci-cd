@@ -31,6 +31,15 @@
         else 'N/A'
       }}
 
+- name: Compute platform string from hardware details
+  ansible.builtin.set_fact:
+    _rg_platform: >-
+      {{
+        ((report_data.hardware_details.vendor | default('') ~ ' ' ~ report_data.hardware_details.model | default('')) | trim)
+        if (report_data.hardware_details is defined and report_data.hardware_details)
+        else 'N/A'
+      }}
+
 - name: Generate report index sidecar
   ansible.builtin.copy:
     content: >-
@@ -39,6 +48,7 @@
           'ocp_version': report_data.cluster_info.sw_version | default('N/A'),
           'ocp_minor': _rg_ocp_minor,
           'arch': report_data.hardware_info.architecture | default('N/A'),
+          'platform': _rg_platform,
           'status': _rg_overall_status,
           'spoke': spoke_cluster,
           'report_file': output_filename,

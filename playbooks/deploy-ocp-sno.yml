@@ -98,7 +98,6 @@
         - not (disconnected | bool)
 
     - name: Populate pull secret
-      no_log: true
       ansible.builtin.set_fact:
         pull_secret: "{{ pull_secret_string | b64decode }}"
       no_log: true

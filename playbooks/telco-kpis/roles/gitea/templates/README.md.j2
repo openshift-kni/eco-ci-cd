@@ -28,7 +28,7 @@ This repository contains automated test reports from Telco KPIs verification job
 {% endfor %}
 {% for s in ns_sort.keyed | sort(attribute='_vkey', reverse=True) %}
 {%   set anchor = 'ocp-' ~ s.ocp_minor | replace('.', '') %}
-| {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | {{ s.platform | default('N/A') }} | [{{ s.report_file }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
+| {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | {{ s.platform | default('N/A') }} | [{{ s.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
 {% endfor %}
 
 ---
@@ -59,7 +59,7 @@ This repository contains automated test reports from Telco KPIs verification job
 | Date | Status | OCP Version | Platform | Report | Artifacts |
 |------|--------|-------------|----------|--------|-----------|
 {%     for r in x86_reports %}
-| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
 {%     endfor %}
 {%   endif %}
 
@@ -69,7 +69,7 @@ This repository contains automated test reports from Telco KPIs verification job
 | Date | Status | OCP Version | Platform | Report | Artifacts |
 |------|--------|-------------|----------|--------|-----------|
 {%     for r in arm_reports %}
-| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
 {%     endfor %}
 {%   endif %}
 
@@ -98,7 +98,7 @@ This repository contains automated test reports from Telco KPIs verification job
 | Date | Report | Artifacts |
 |------|--------|-----------|
 {% for report in ns.reports %}
-| {{ report.date }} | [{{ report.file }}]({{ report.path }}) | [Browse]({{ report.date }}/{{ report.spoke }}/) |
+| {{ report.date }} | [{{ report.file | regex_replace('^telco-kpis-report-', '') }}]({{ report.path }}) | [Browse]({{ report.date }}/{{ report.spoke }}/) |
 {% endfor %}
 
 {% endif %}

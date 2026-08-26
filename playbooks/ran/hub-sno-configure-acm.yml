@@ -171,7 +171,7 @@
     - name: Require Network Progressing=False status for ~60s if update_progress is failed
       when:
         - update_progress is defined
-        - update_progress.failed | bool
+        - update_progress.failed | default(false) | bool
       kubernetes.core.k8s_info:
         api: operator.openshift.io/v1
         kind: Network
@@ -198,7 +198,7 @@
         msg: "Cluster network operator failed to enter updating state."
       when:
         - update_progress is defined
-        - update_progress.failed | bool
+        - update_progress.failed | default(false) | bool
         # Skip when the stability loop (171) ran and succeeded — only fail if it did not run or did not succeed.
         - (not network_progressing_stable_check is defined) or (not network_progressing_stable_check is succeeded)
 

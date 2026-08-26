@@ -1,0 +1,9 @@
+---
+- name: Prepare test environment
+  import_playbook: prepare.yml
+
+- name: Converge - Exercise artifact_management role
+  import_playbook: converge.yml
+
+- name: Verify - Validate artifact_management role output
+  import_playbook: verify.yml

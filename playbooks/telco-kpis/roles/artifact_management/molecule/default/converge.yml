@@ -1,0 +1,48 @@
+---
+- name: Converge - Exercise artifact_management role
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    molecule_temp_dir: /tmp/molecule-artifact-management/temp-artifacts
+    molecule_shared_base: /tmp/molecule-artifact-management/shared
+    molecule_local_base: /tmp/molecule-artifact-management/local
+
+  tasks:
+    - name: Run artifact_management with source XML pattern (oslat-style)
+      ansible.builtin.include_role:
+        name: artifact_management
+      vars:
+        artifact_management_test_name: "oslat"
+        artifact_management_spoke_cluster: "test-spoke"
+        artifact_management_temp_dir: "{{ molecule_temp_dir }}"
+        artifact_management_shared_base: "{{ molecule_shared_base }}"
+        artifact_management_local_base: "{{ molecule_local_base }}"
+        artifact_management_test_rc: 0
+        artifact_management_test_duration: 120
+        artifact_management_junit_source_pattern: "oslat_report.xml"
+
+    - name: Recreate temp dir for second scenario (no pattern — template-generated junit)
+      ansible.builtin.file:
+        path: "{{ molecule_temp_dir }}-nopattern"
+        state: directory
+        mode: '0755'
+
+    - name: Create a log file in the no-pattern temp dir
+      ansible.builtin.copy:
+        content: "ptp test output data"
+        dest: "{{ molecule_temp_dir }}-nopattern/podman-run.log"
+        mode: '0644'
+
+    - name: Run artifact_management without source XML pattern (template-generated junit)
+      ansible.builtin.include_role:
+        name: artifact_management
+      vars:
+        artifact_management_test_name: "ptp"
+        artifact_management_spoke_cluster: "test-spoke"
+        artifact_management_temp_dir: "{{ molecule_temp_dir }}-nopattern"
+        artifact_management_shared_base: "{{ molecule_shared_base }}"
+        artifact_management_local_base: "{{ molecule_local_base }}"
+        artifact_management_test_rc: 1
+        artifact_management_test_duration: 60
+        artifact_management_junit_source_pattern: ""

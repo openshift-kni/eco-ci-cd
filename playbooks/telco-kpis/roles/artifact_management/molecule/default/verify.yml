@@ -1,0 +1,159 @@
+---
+- name: Verify - Validate artifact_management role output
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    molecule_shared_base: /tmp/molecule-artifact-management/shared
+    molecule_local_base: /tmp/molecule-artifact-management/local
+
+  tasks:
+    # --- Scenario 1: oslat with source XML pattern ---
+
+    - name: Find the oslat shared artifact directory
+      ansible.builtin.find:
+        paths: "{{ molecule_shared_base }}/test-spoke"
+        patterns: "oslat-test-spoke-*"
+        file_type: directory
+      register: oslat_shared_dirs
+
+    - name: Assert oslat shared directory was created
+      ansible.builtin.assert:
+        that:
+          - oslat_shared_dirs.files | length == 1
+        fail_msg: "Expected 1 oslat shared dir, found {{ oslat_shared_dirs.files | length }}"
+        success_msg: "oslat shared directory exists: {{ oslat_shared_dirs.files[0].path }}"
+
+    - name: Set oslat shared dir path
+      ansible.builtin.set_fact:
+        oslat_shared_dir: "{{ oslat_shared_dirs.files[0].path }}"
+
+    - name: Check oslat_report.xml was copied to shared dir
+      ansible.builtin.stat:
+        path: "{{ oslat_shared_dir }}/oslat_report.xml"
+      register: oslat_report_stat
+
+    - name: Assert oslat_report.xml exists in shared dir
+      ansible.builtin.assert:
+        that:
+          - oslat_report_stat.stat.exists
+        fail_msg: "oslat_report.xml not found in shared dir"
+        success_msg: "oslat_report.xml copied to shared dir"
+
+    - name: Check junit_oslat_test-spoke.xml was created in shared dir (push-to-shared junit copy)
+      ansible.builtin.stat:
+        path: "{{ oslat_shared_dir }}/junit_oslat_test-spoke.xml"
+      register: junit_shared_stat
+
+    - name: Assert junit_oslat_test-spoke.xml exists in shared dir
+      ansible.builtin.assert:
+        that:
+          - junit_shared_stat.stat.exists
+        fail_msg: "junit_oslat_test-spoke.xml not found in shared dir — push-to-shared junit copy is broken"
+        success_msg: "junit_oslat_test-spoke.xml created in shared dir by push-to-shared"
+
+    - name: Check local artifact directory was created by collect-from-bastion
+      ansible.builtin.stat:
+        path: "{{ molecule_local_base }}/oslat-test-spoke"
+      register: oslat_local_dir_stat
+
+    - name: Assert local artifact directory exists
+      ansible.builtin.assert:
+        that:
+          - oslat_local_dir_stat.stat.exists
+          - oslat_local_dir_stat.stat.isdir
+        fail_msg: "Local artifact dir {{ molecule_local_base }}/oslat-test-spoke not created"
+        success_msg: "Local artifact dir created by collect-from-bastion"
+
+    - name: Check junit_oslat_test-spoke.xml in local dir (from generate-junit-xml)
+      ansible.builtin.stat:
+        path: "{{ molecule_local_base }}/oslat-test-spoke/junit_oslat_test-spoke.xml"
+      register: junit_local_stat
+
+    - name: Assert junit XML exists in local dir
+      ansible.builtin.assert:
+        that:
+          - junit_local_stat.stat.exists
+        fail_msg: "junit_oslat_test-spoke.xml not in local dir — generate-junit-xml failed"
+        success_msg: "junit_oslat_test-spoke.xml created in local dir"
+
+    # --- Scenario 2: ptp with no pattern (template-generated junit) ---
+
+    - name: Find the ptp shared artifact directory
+      ansible.builtin.find:
+        paths: "{{ molecule_shared_base }}/test-spoke"
+        patterns: "ptp-test-spoke-*"
+        file_type: directory
+      register: ptp_shared_dirs
+
+    - name: Assert ptp shared directory was created
+      ansible.builtin.assert:
+        that:
+          - ptp_shared_dirs.files | length == 1
+        fail_msg: "Expected 1 ptp shared dir, found {{ ptp_shared_dirs.files | length }}"
+        success_msg: "ptp shared directory exists"
+
+    - name: Set ptp shared dir path
+      ansible.builtin.set_fact:
+        ptp_shared_dir: "{{ ptp_shared_dirs.files[0].path }}"
+
+    - name: Check no junit_*.xml in ptp shared dir (no pattern = no shared junit copy)
+      ansible.builtin.find:
+        paths: "{{ ptp_shared_dir }}"
+        patterns: "junit_*.xml"
+      register: ptp_junit_shared
+
+    - name: Assert no junit copy in ptp shared dir when pattern is empty
+      ansible.builtin.assert:
+        that:
+          - ptp_junit_shared.files | length == 0
+        fail_msg: "Unexpected junit_*.xml in ptp shared dir (pattern was empty)"
+        success_msg: "No junit copy in shared dir when pattern is empty (correct)"
+
+    - name: Check junit_ptp_test-spoke.xml in local dir (template-generated)
+      ansible.builtin.stat:
+        path: "{{ molecule_local_base }}/ptp-test-spoke/junit_ptp_test-spoke.xml"
+      register: ptp_junit_local_stat
+
+    - name: Assert template-generated junit exists in local dir
+      ansible.builtin.assert:
+        that:
+          - ptp_junit_local_stat.stat.exists
+        fail_msg: "Template-generated junit not found in {{ molecule_local_base }}/ptp-test-spoke/"
+        success_msg: "Template-generated junit_ptp_test-spoke.xml exists"
+
+    - name: Verify template-generated junit contains failure element (test_rc was 1)
+      ansible.builtin.slurp:
+        src: "{{ molecule_local_base }}/ptp-test-spoke/junit_ptp_test-spoke.xml"
+      register: ptp_junit_content
+
+    - name: Assert failure element in junit (test_rc=1 → failure)
+      ansible.builtin.assert:
+        that:
+          - "'<failure' in (ptp_junit_content.content | b64decode)"
+        fail_msg: "No <failure> element in junit for failed test (test_rc=1)"
+        success_msg: "Failure element present in junit for failed test"
+
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "artifact_management Role - All Tests PASSED"
+          - "=========================================="
+          - "Scenario 1 (oslat, source pattern):"
+          - "  ✓ Shared dir created with timestamp"
+          - "  ✓ oslat_report.xml copied to shared dir"
+          - "  ✓ junit_oslat_test-spoke.xml created in shared dir"
+          - "  ✓ Local artifact dir created by collect-from-bastion"
+          - "  ✓ junit_oslat_test-spoke.xml created in local dir"
+          - "Scenario 2 (ptp, no pattern):"
+          - "  ✓ Shared dir created with timestamp"
+          - "  ✓ No junit copy in shared dir (pattern empty)"
+          - "  ✓ Template-generated junit in local dir"
+          - "  ✓ Failure element present (test_rc=1)"
+          - "=========================================="
+
+    - name: Cleanup molecule test artifacts
+      ansible.builtin.file:
+        path: /tmp/molecule-artifact-management
+        state: absent

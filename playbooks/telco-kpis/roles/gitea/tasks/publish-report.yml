@@ -8,9 +8,9 @@
     git_work_dir: "/tmp/gitea-publish-{{ ansible_date_time.epoch }}"
     report_dir_name: "{{ ansible_date_time.date }}"
 
-- name: Set report base directory (root for dev, reports/ for prod)
+- name: Set report base directory (root for dev-bastion, reports/ for prod and dev-hypervisor)
   ansible.builtin.set_fact:
-    _reports_dir: "{{ git_work_dir }}{{ '' if (development_mode | default(false) | bool) else '/reports' }}"
+    _reports_dir: "{{ git_work_dir }}{{ '' if report_publish_mode | default('prod') == 'dev-bastion' else '/reports' }}"
 
 - name: Display publication info
   ansible.builtin.debug:
@@ -131,6 +131,13 @@
     dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
     mode: '0644'
 
+- name: Copy report index sidecar
+  ansible.builtin.copy:
+    src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/report-index.json"
+    dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/report-index.json"
+    mode: '0644'
+  failed_when: false
+
 - name: Extract artifacts tarball
   ansible.builtin.unarchive:
     src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_tarball }}"
@@ -245,6 +252,27 @@
   ansible.builtin.set_fact:
     report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', _reports_dir + '/', '') | list }}"
 
+- name: Find all report index JSON files
+  ansible.builtin.find:
+    paths: "{{ _reports_dir }}"
+    patterns: "report-index.json"
+    recurse: true
+  register: _found_indexes
+
+- name: Read report index files
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ _found_indexes.files }}"
+  register: _index_contents
+
+- name: Build report metadata list for README
+  vars:
+    _path_parts: "{{ item.item.path | regex_replace('^' + _reports_dir + '/', '') | split('/') }}"
+    _meta: "{{ item.content | b64decode | from_json }}"
+  ansible.builtin.set_fact:
+    report_metadata_list: "{{ (report_metadata_list | default([])) + [_meta | combine({'date': _path_parts[0]})] }}"
+  loop: "{{ _index_contents.results | default([]) }}"
+
 - name: Update reports index README.md
   ansible.builtin.template:
     src: README.md.j2
@@ -306,9 +334,9 @@
       - "Report: {{ report_file }}"
       - >-
         Web URL: {{ gitea_repo_web_url }}{{
-        '/-/tree/' if not (development_mode | default(false) | bool)
+        '/-/tree/' if report_publish_mode | default('prod') == 'prod'
         else '/src/branch/' }}{{
         report_publish_branch | default('main') }}{{
-        '/reports' if not (development_mode | default(false) | bool) else '' }}/{{
+        '/reports' if report_publish_mode | default('prod') != 'dev-bastion' else '' }}/{{
         report_dir_name }}/{{ spoke_cluster }}
       - "=========================================="

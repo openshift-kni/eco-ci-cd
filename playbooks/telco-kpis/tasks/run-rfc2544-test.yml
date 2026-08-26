@@ -261,7 +261,7 @@
 - name: Run RFC2544 test in podman container
   containers.podman.podman_container:
     name: telco-kpis-rfc2544-{{ spoke_cluster }}
-    image: telco-kpis-test-runner:latest
+    image: "{{ telco_kpis_test_runner_image }}"
     state: started
     detach: false
     rm: true
@@ -269,6 +269,8 @@
     volume:
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+      - "/tmp/telco-kpis-disconnected-auth.json:/run/containers/0/auth.json:ro,Z"
+      - "/tmp/telco-kpis-ca-bundle.pem:/etc/pki/tls/certs/ca-bundle.crt:ro,Z"
     etc_hosts:
       disconnected.registry.local: "{{ ansible_host }}"
   register: rfc2544_result

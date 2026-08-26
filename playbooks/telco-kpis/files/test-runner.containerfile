@@ -1,8 +1,8 @@
 # Containerfile for telco-kpis test runner
 # Used by --podman mode in run-local-test-*.sh scripts
 #
-# Build:  podman build -t telco-kpis-test-runner:latest -f test-runner.containerfile .
-# Manual: podman run -it --rm -v /path/kubeconfig:/tmp/kubeconfig:ro telco-kpis-test-runner:latest bash
+# Build:  podman build -t quay.io/telcov10n-ci/telco-kpis-test-runner:latest -f test-runner.containerfile .
+# Manual: podman run -it --rm -v /path/kubeconfig:/tmp/kubeconfig:ro quay.io/telcov10n-ci/telco-kpis-test-runner:latest bash
 
 FROM registry.access.redhat.com/ubi9-minimal:latest
 
@@ -25,10 +25,6 @@ RUN printf '[centos9-appstream]\nname=CentOS Stream 9 - AppStream\nbaseurl=https
     && rm -f /etc/yum.repos.d/centos9-appstream.repo \
     && microdnf clean all
 
-RUN echo | openssl s_client -showcerts -connect prometheus.ran-metrics.telco5g.corp.redhat.com:443 2>/dev/null \
-      | awk '/BEGIN CERT/,/END CERT/' > /etc/pki/ca-trust/source/anchors/ran-metrics.pem \
-    && update-ca-trust
-# NOTE: do NOT set `curl --insecure` globally — the ran-metrics CA above is the only intercepting endpoint.
 
 RUN pip3 install --no-cache-dir jinja2-tools stcrestclient
 
@@ -46,8 +42,8 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL -o /tmp/oc.tgz "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OCP_VERSION}/openshift-client-linux${OCARCH}.tar.gz" && \
     OC_SHA256=$(curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OCP_VERSION}/sha256sum.txt" 2>/dev/null \
       | tr -d '\r' \
-      | grep -E " openshift-client-linux(-amd64)?\.tar\.gz$" \
-      | grep -v arm64 | awk '{print $1}' | head -1) && \
+      | grep " openshift-client-linux${OCARCH}\.tar\.gz$" \
+      | awk '{print $1}' | head -1) && \
     if [ -n "${OC_SHA256}" ]; then \
       echo "${OC_SHA256}  /tmp/oc.tgz" | sha256sum -c - || { echo "ERROR: OC checksum mismatch for OCP ${OCP_VERSION}"; exit 1; }; \
     else \
@@ -78,11 +74,6 @@ RUN ARCH=$(uname -m) && \
     tar -C /usr/local/bin -xzf /tmp/kc.tgz kubectl-cluster_compare && rm -f /tmp/kc.tgz && \
     chmod 0755 /usr/local/bin/kubectl-cluster_compare
 
-# Copy registry authentication and certificates into image
-# These are generated during setup-test-runner.yml from vault credentials
-COPY auth.json /run/containers/0/auth.json
-COPY certs.d /etc/containers/certs.d
-RUN chmod 0600 /run/containers/0/auth.json
 
 ENV PATH="/usr/local/go/bin:/root/go/bin:/root/bin:/root/.local/bin:${PATH}" \
     GOPATH="/root/go"

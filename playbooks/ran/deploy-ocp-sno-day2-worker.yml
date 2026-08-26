@@ -305,7 +305,8 @@
           until: >-
             clusters_app_status.resources is defined and
             clusters_app_status.resources | length > 0 and
-            clusters_app_status.resources[0].status.sync.status | default('') == 'Synced'
+            clusters_app_status.resources[0].status.operationState.phase | default('') == 'Succeeded' and
+            clusters_app_status.resources[0].status.operationState.syncResult.source.targetRevision | default('') == day2_branch
           retries: 30
           delay: 20
 

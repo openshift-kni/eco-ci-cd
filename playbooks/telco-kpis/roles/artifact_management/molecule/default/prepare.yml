@@ -1,0 +1,54 @@
+---
+- name: Prepare - Create test artifact environment
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    molecule_temp_dir: /tmp/molecule-artifact-management/temp-artifacts
+    molecule_shared_base: /tmp/molecule-artifact-management/shared
+    molecule_local_base: /tmp/molecule-artifact-management/local
+
+  tasks:
+    - name: Clean up any previous molecule run artifacts
+      ansible.builtin.file:
+        path: /tmp/molecule-artifact-management
+        state: absent
+
+    - name: Create temp artifacts directory (simulates bastion temp dir after test run)
+      ansible.builtin.file:
+        path: "{{ molecule_temp_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create shared base directory
+      ansible.builtin.file:
+        path: "{{ molecule_shared_base }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create local base directory
+      ansible.builtin.file:
+        path: "{{ molecule_local_base }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create simulated oslat_report.xml in temp dir
+      ansible.builtin.copy:
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <testsuites>
+            <testsuite name="oslat" tests="1" failures="0" errors="0">
+              <testcase name="oslat-latency" classname="telco.kpis.oslat"/>
+            </testsuite>
+          </testsuites>
+        dest: "{{ molecule_temp_dir }}/oslat_report.xml"
+        mode: '0644'
+
+    - name: Create additional test artifacts in temp dir
+      ansible.builtin.copy:
+        content: "oslat test output data"
+        dest: "{{ molecule_temp_dir }}/{{ item }}"
+        mode: '0644'
+      loop:
+        - podman-run.log
+        - test-duration.yml

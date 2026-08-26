@@ -1,0 +1,45 @@
+---
+spoke_cluster: "test-spoke"
+hub_kubeconfig: "/fake/kubeconfig"
+
+clusterinstance_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        name: test-spoke
+      spec:
+        clusterName: test-spoke
+      status:
+        conditions: []
+managedcluster_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:01:00Z"
+        labels: {}
+      status:
+        conditions: []
+agentclusterinstall_query:
+  resources: []
+imagebasedinstall_query:
+  resources: []
+# TALM CGU exists but hasn't completed yet - no status.status.completedAt
+talm_cgu_query:
+  resources:
+    - metadata:
+        name: test-spoke
+      status:
+        status: {}
+        conditions:
+          - type: Progressing
+            status: "True"
+            lastTransitionTime: "2026-01-01T00:15:00Z"
+infraenv_query:
+  resources: []
+agents_query:
+  resources: []
+manifestworks_query:
+  resources: []
+policies_query:
+  resources: []
+
+expect_failure: true

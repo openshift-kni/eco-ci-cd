@@ -1,0 +1,24 @@
+---
+spoke_cluster: "test-spoke"
+hub_kubeconfig: "/fake/kubeconfig"
+
+clusterinstance_query:
+  resources: []
+managedcluster_query:
+  resources: []
+agentclusterinstall_query:
+  resources: []
+imagebasedinstall_query:
+  resources: []
+talm_cgu_query:
+  resources: []
+infraenv_query:
+  resources: []
+agents_query:
+  resources: []
+manifestworks_query:
+  resources: []
+policies_query:
+  resources: []
+
+expect_failure: true

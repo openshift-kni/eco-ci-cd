@@ -1,0 +1,33 @@
+---
+# Wipe NVMe partition tables on a single spoke host via SSH.
+#
+# Connects as 'core' (the default RHCOS user) and runs wipefs -a on all
+# NVMe namespace devices (/dev/nvme*n1). The host must be running a
+# stale RHCOS installation and be reachable on the network.
+#
+# SSH failures are tolerated — the host may already be powered off or
+# unreachable, in which case wiping is unnecessary (no stale OS to
+# boot from).
+#
+# Required variables:
+#   host_ip: IP address of the spoke host (set by loop_var in caller)
+
+- name: "Wipe NVMe disks on {{ host_ip }}"
+  ansible.builtin.shell: |
+    ssh -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=10 \
+        -o BatchMode=yes \
+        core@{{ host_ip }} \
+        'sudo wipefs -a /dev/nvme*n1 2>&1'
+  register: _wipe_result
+  failed_when: false
+  changed_when: _wipe_result.rc == 0
+
+- name: "Show wipe result for {{ host_ip }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{ ((_wipe_result.rc == 0) | ternary(
+        'Wiped NVMe disks: ' ~ _wipe_result.stdout,
+        'Could not wipe disks (rc=' ~ _wipe_result.rc | string ~ '): ' ~ _wipe_result.stderr | default(_wipe_result.stdout, true)
+      )) }}

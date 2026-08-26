@@ -1,0 +1,82 @@
+---
+# Wipe NVMe partition tables on spoke hosts via SSH before ZTP deployment.
+#
+# When spoke hosts have a stale OS installation on their NVMe drives, the
+# UEFI firmware boots from the NVMe instead of the iLO Virtual CD-ROM
+# (virtual media ISO streaming is slow on iLO5, and the firmware falls
+# through to the next boot entry). Wiping the NVMe partition tables
+# removes the bootable OS, forcing the firmware to wait for the virtual
+# media ISO on the next boot.
+#
+# The stale OS must be running and SSH-accessible as user 'core' for
+# this to work. Hosts that are unreachable are silently skipped.
+#
+# Required variables:
+#   ztp_git_repo_url, ztp_git_repo_branch, ztp_clusters_git_path
+
+- name: Clone ZTP site configs to extract spoke host IPs
+  ansible.builtin.git:
+    repo: "{{ ztp_git_repo_url }}"
+    dest: /tmp/ztp-disk-wipe
+    version: "{{ ztp_git_repo_branch }}"
+    force: true
+  changed_when: false
+
+- name: Find ClusterInstance YAML files
+  ansible.builtin.find:
+    paths: "/tmp/ztp-disk-wipe/{{ ztp_clusters_git_path }}"
+    patterns: "*.yaml,*.yml"
+    recurse: true
+  register: _wipe_siteconfig_files
+
+- name: Read SiteConfig files
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ _wipe_siteconfig_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: _wipe_siteconfig_contents
+
+- name: Extract spoke host IPs from ClusterInstance nodes
+  ansible.builtin.set_fact:
+    _wipe_host_ips: >-
+      {{ _wipe_siteconfig_contents.results
+         | map(attribute='content')
+         | map('b64decode')
+         | map('from_yaml')
+         | selectattr('kind', 'defined')
+         | selectattr('kind', 'equalto', 'ClusterInstance')
+         | map(attribute='spec')
+         | map(attribute='nodes')
+         | flatten
+         | map(attribute='nodeNetwork')
+         | map(attribute='config')
+         | map(attribute='interfaces')
+         | flatten
+         | selectattr('state', 'defined')
+         | selectattr('state', 'equalto', 'up')
+         | selectattr('ipv4', 'defined')
+         | map(attribute='ipv4')
+         | selectattr('address', 'defined')
+         | map(attribute='address')
+         | flatten
+         | map(attribute='ip')
+         | unique
+         | list }}
+
+- name: Display spoke host IPs for disk wipe
+  ansible.builtin.debug:
+    msg: "Spoke host IPs found in SiteConfig: {{ _wipe_host_ips }}"
+
+- name: Wipe NVMe disks on each spoke host
+  ansible.builtin.include_tasks: tasks/wipe-os-disks-host.yaml
+  loop: "{{ _wipe_host_ips }}"
+  loop_control:
+    loop_var: host_ip
+    label: "{{ host_ip }}"
+
+- name: Remove cloned ZTP site configs
+  ansible.builtin.file:
+    path: /tmp/ztp-disk-wipe
+    state: absent
+  changed_when: false

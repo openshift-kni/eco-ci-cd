@@ -1,0 +1,67 @@
+---
+# Reorder the UEFI boot order on spoke BMCs via iLO Redfish API.
+#
+# Moves virtual media entries (iLO Virtual CD-ROM) to the top of the boot
+# order and demotes stale OS boot entries (Red Hat, CentOS) to the bottom.
+# This prevents hosts from booting a stale OS installation instead of the
+# discovery ISO during ZTP provisioning.
+#
+# Required variables:
+#   ztp_git_repo_url, ztp_git_repo_branch, ztp_clusters_git_path
+#   bmc_user, bmc_password
+
+- name: Clone ZTP site configs to extract BMC addresses
+  ansible.builtin.git:
+    repo: "{{ ztp_git_repo_url }}"
+    dest: /tmp/ztp-bmc-cleanup
+    version: "{{ ztp_git_repo_branch }}"
+    force: true
+  changed_when: false
+
+- name: Find ClusterInstance YAML files
+  ansible.builtin.find:
+    paths: "/tmp/ztp-bmc-cleanup/{{ ztp_clusters_git_path }}"
+    patterns: "*.yaml,*.yml"
+    recurse: true
+  register: _bmc_cleanup_siteconfig_files
+
+- name: Read SiteConfig files
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ _bmc_cleanup_siteconfig_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: _bmc_cleanup_siteconfig_contents
+
+- name: Extract BMC IPs from ClusterInstance nodes
+  ansible.builtin.set_fact:
+    _bmc_cleanup_ips: >-
+      {{ _bmc_cleanup_siteconfig_contents.results
+         | map(attribute='content')
+         | map('b64decode')
+         | map('from_yaml')
+         | selectattr('kind', 'defined')
+         | selectattr('kind', 'equalto', 'ClusterInstance')
+         | map(attribute='spec')
+         | map(attribute='nodes')
+         | flatten
+         | map(attribute='bmcAddress')
+         | map('regex_replace', '^redfish-virtualmedia://([^/]+)/.*$', '\1')
+         | unique
+         | list }}
+
+- name: Display BMC IPs for boot order cleanup
+  ansible.builtin.debug:
+    msg: "BMC IPs found in SiteConfig: {{ _bmc_cleanup_ips }}"
+
+- name: Clean boot order on each BMC
+  ansible.builtin.include_tasks: tasks/cleanup-bmc-boot-order-host.yaml
+  loop: "{{ _bmc_cleanup_ips }}"
+  loop_control:
+    loop_var: bmc_ip
+
+- name: Remove cloned ZTP site configs
+  ansible.builtin.file:
+    path: /tmp/ztp-bmc-cleanup
+    state: absent
+  changed_when: false

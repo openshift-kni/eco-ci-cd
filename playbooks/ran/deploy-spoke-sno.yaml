@@ -24,6 +24,67 @@
 #                   bmc_user=username \
 #                   bmc_password=password"
 #
+# Optional extra variables:
+#   bmc_boot_order_cleanup: bool (default: false)
+#     When true, reorders the UEFI boot order on spoke BMCs before ZTP
+#     deployment so that iLO Virtual CD-ROM boots first. This prevents
+#     hosts from booting a stale OS installation instead of the discovery
+#     ISO when Ironic's one-shot boot override is consumed.
+#     Requires: bmc_user, bmc_password
+#
+#   Example with boot order cleanup:
+#     ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#       playbooks/ran/deploy-spoke-sno.yaml \
+#       --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                     spoke_clusters='["kni-qe-100"]' \
+#                     ztp_git_repo_url=https://git.example.com/repo.git \
+#                     ztp_clusters_git_path=clusters/cluster \
+#                     ztp_policies_git_path=policy/policygentemplates \
+#                     bmc_user=username \
+#                     bmc_password=password \
+#                     bmc_boot_order_cleanup=true"
+#
+#   disable_virtual_media_tls: bool (default: false)
+#     When true, patches the hub cluster's Provisioning CR to serve
+#     virtual media over plain HTTP instead of HTTPS. iLO5 BMCs have
+#     very slow HTTPS virtual media transfer (~1 MB/min), which can
+#     cause Ironic's deploy_callback_timeout (80 min) to expire before
+#     the discovery ISO finishes downloading. Disabling TLS removes
+#     the crypto overhead and typically speeds up the transfer enough
+#     to complete within the timeout.
+#
+#   Example with virtual media TLS disabled:
+#     ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#       playbooks/ran/deploy-spoke-sno.yaml \
+#       --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                     spoke_clusters='["kni-qe-100"]' \
+#                     ztp_git_repo_url=https://git.example.com/repo.git \
+#                     ztp_clusters_git_path=clusters/cluster \
+#                     ztp_policies_git_path=policy/policygentemplates \
+#                     bmc_user=username \
+#                     bmc_password=password \
+#                     disable_virtual_media_tls=true"
+#
+#   os_disk_wipe: bool (default: false)
+#     When true, wipes NVMe partition tables on spoke hosts via SSH
+#     before ZTP deployment. This forces the UEFI firmware to boot
+#     from the iLO Virtual CD-ROM (discovery ISO) instead of falling
+#     through to a stale OS installation on the NVMe drives. The
+#     hosts must be running a stale RHCOS and be reachable via SSH
+#     as user 'core'. Unreachable hosts are silently skipped.
+#
+#   Example with OS disk wipe:
+#     ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#       playbooks/ran/deploy-spoke-sno.yaml \
+#       --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                     spoke_clusters='["kni-qe-100"]' \
+#                     ztp_git_repo_url=https://git.example.com/repo.git \
+#                     ztp_clusters_git_path=clusters/cluster \
+#                     ztp_policies_git_path=policy/policygentemplates \
+#                     bmc_user=username \
+#                     bmc_password=password \
+#                     os_disk_wipe=true"
+#
 # Note: OCP version is automatically detected from the hub cluster.
 
 - name: Deploy Spoke cluster using ZTP
@@ -35,6 +96,9 @@
     clusters_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/clusters-app.yaml"
     policies_app_path: "{{ ztp_workdir_out_path }}/argocd/deployment/policies-app.yaml"
     ztp_git_repo_branch: "main"
+    bmc_boot_order_cleanup: false
+    disable_virtual_media_tls: false
+    os_disk_wipe: false
     openshift_gitops_namespace: "openshift-gitops"
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
@@ -151,6 +215,26 @@
         state: present
         definition: "{{ lookup('template', 'templates/clusterImageSet.j2') }}"
 
+    - name: Disable TLS on Ironic virtual media server
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metal3.io/v1alpha1
+          kind: Provisioning
+          metadata:
+            name: provisioning-configuration
+          spec:
+            disableVirtualMediaTLS: true
+      when: disable_virtual_media_tls | bool
+
+    - name: Clean up stale UEFI boot entries on spoke BMCs
+      ansible.builtin.include_tasks: tasks/cleanup-bmc-boot-order.yaml
+      when: bmc_boot_order_cleanup | bool
+
+    - name: Wipe NVMe partition tables on spoke hosts
+      ansible.builtin.include_tasks: tasks/wipe-os-disks.yaml
+      when: os_disk_wipe | bool
+
     - name: Define ZTP apps
       ansible.builtin.set_fact:
         ztp_apps:
@@ -224,7 +308,8 @@
         namespace: "{{ openshift_gitops_namespace }}"
       register: app_status
       until: >-
-        app_status.resources[0].status.sync.status | default('') == 'Synced' and
+        (app_status.resources[0].status.sync.status | default('') == 'Synced' or
+         app_status.resources[0].status.operationState.phase | default('') == 'Succeeded') and
         app_status.resources[0].status.health.status | default('') in ['Healthy', 'Progressing']
       loop:
         - clusters

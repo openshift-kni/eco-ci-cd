@@ -14,6 +14,17 @@
     ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
     ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+- name: Set NROP registry namespace from OCP version
+  ansible.builtin.set_fact:
+    nrop_registry_ns: "{{ 'openshift5' if (ocp_version_major | int) >= 5 else 'openshift4' }}"
+
+- name: Set must-gather and scheduler image registries from OCP version
+  ansible.builtin.set_fact:
+    numa_mustgather_image: "registry.stage.redhat.io/{{ nrop_registry_ns }}/numaresources-must-gather-rhel9"
+    image_uri:
+      prod: "registry.redhat.io/{{ nrop_registry_ns }}"
+      stage: "registry.stage.redhat.io/{{ nrop_registry_ns }}"
+
 - name: Set Gather Image version
   ansible.builtin.set_fact:
     must_gather_image: "{{ numa_mustgather_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"

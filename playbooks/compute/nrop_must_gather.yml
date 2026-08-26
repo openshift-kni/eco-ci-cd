@@ -20,9 +20,14 @@
         ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
         ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+    - name: Set NROP registry namespace from OCP version
+      ansible.builtin.set_fact:
+        nrop_registry_ns: "{{ 'openshift5' if (ocp_version_major | int) >= 5 else 'openshift4' }}"
+
     - name: Set must gather image uri
       ansible.builtin.set_fact:
-        must_gather_uri: "{{ must_gather_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+        must_gather_image: "registry.stage.redhat.io/{{ nrop_registry_ns }}/numaresources-must-gather-rhel9"
+        must_gather_uri: "registry.stage.redhat.io/{{ nrop_registry_ns }}/numaresources-must-gather-rhel9:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
 
     - name: Ensure work directory is absent
       ansible.builtin.file:

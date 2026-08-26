@@ -99,6 +99,45 @@
 
 ---
 
+{% if report_data.hardware_details is defined and report_data.hardware_details %}
+{%   set hw = report_data.hardware_details %}
+{%   set cpu = report_data.hardware_info.cpu_type | default('N/A') %}
+## Hardware Details
+
+| | |
+|---|---|
+| **Node** | {{ report_data.cluster_info.cluster }}{% if report_data.node_name | default('') and report_data.node_name != report_data.cluster_info.cluster %} ({{ report_data.node_name }}){% endif %} |
+| **Platform** | {{ hw.vendor | default('N/A') }} {{ hw.model | default('') }} |
+| **iDRAC** | {{ hw.idrac_version | default('N/A') }} |
+| **CPU** | {{ cpu }} |
+{%   set mem = hw.memory | default({}) %}
+{%   if mem.total_gb is defined and mem.total_gb | string != 'N/A' and mem.total_gb | int > 0 %}
+| **Memory** | {{ mem.total_gb }} GB ({{ mem.slots_used }} x {{ mem.dimm_size_gb }} GB {{ mem.speed_mts | default('') }}) |
+{%   else %}
+| **Memory** | N/A |
+{%   endif %}
+{%   set storage_list = hw.storage | default([]) %}
+{%   if storage_list | length > 0 %}
+{%     set ns = namespace(parts=[]) %}
+{%     for s in storage_list %}
+{%       set ns.parts = ns.parts + [s.count | string + ' x ' + s.model + ' (' + s.size + ')'] %}
+{%     endfor %}
+| **Storage** | {{ ns.parts | join(', ') }} |
+{%   else %}
+| **Storage** | N/A |
+{%   endif %}
+{%   set nic_list = hw.nics | default([]) %}
+{%   if nic_list | length > 0 %}
+{%     set ns = namespace(parts=[]) %}
+{%     for n in nic_list %}
+{%       set ns.parts = ns.parts + [n.count | string + ' x ' + n.vendor + ' ' + n.model] %}
+{%     endfor %}
+| **NICs** | {{ ns.parts | join(', ') }} |
+{%   else %}
+| **NICs** | N/A |
+{%   endif %}
+
+{% endif %}
 ## Cluster Configuration
 
 | Parameter | Value |

@@ -1,0 +1,33 @@
+#!/bin/bash
+dmidecode -t 17 2>/dev/null | awk '
+BEGIN { slots=0; total_mb=0; dimm_mb=0; speed="unknown" }
+/^[[:space:]]*Size:[[:space:]]+[0-9]/ {
+  line = $0
+  gsub(/^[[:space:]]*Size:[[:space:]]+/, "", line)
+  split(line, parts, " ")
+  sz = parts[1]+0; unit = parts[2]
+  if (sz > 0) {
+    slots++
+    if (unit ~ /^G/) sz = sz * 1024
+    total_mb += sz
+    if (dimm_mb == 0) dimm_mb = sz
+  }
+}
+/^[[:space:]]*Configured Memory Speed:[[:space:]]/ {
+  line = $0
+  gsub(/^[[:space:]]*Configured Memory Speed:[[:space:]]+/, "", line)
+  if (line !~ /Unknown/) speed = line
+}
+/^[[:space:]]*Speed:[[:space:]]/ {
+  if (speed == "unknown") {
+    line = $0
+    gsub(/^[[:space:]]*Speed:[[:space:]]+/, "", line)
+    if (line !~ /Unknown/) speed = line
+  }
+}
+END {
+  total_gb = int(total_mb / 1024)
+  dimm_gb  = int(dimm_mb / 1024)
+  printf "{\"total_gb\":%d,\"slots_used\":%d,\"dimm_size_gb\":%d,\"speed_mts\":\"%s\"}\n", total_gb, slots, dimm_gb, speed
+}
+'

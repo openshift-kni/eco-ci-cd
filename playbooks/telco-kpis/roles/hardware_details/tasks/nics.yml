@@ -1,0 +1,40 @@
+---
+- name: Render NIC collection script on bastion
+  ansible.builtin.template:
+    src: collect_nics.sh.j2
+    dest: /tmp/collect_nics_hw.py
+    mode: '0700'
+
+- name: Collect NIC info via MCD pod
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec -i {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs python3 - < /tmp/collect_nics_hw.py
+  register: nics_script_result
+  failed_when: false
+  changed_when: false
+  timeout: 30
+
+- name: Parse NIC JSON result
+  block:
+    - name: Set hw_nics from script output
+      ansible.builtin.set_fact:
+        hw_nics: "{{ nics_script_result.stdout | trim | from_json }}"
+      when:
+        - nics_script_result.stdout | default('') | trim | length > 0
+  rescue:
+    - name: Set default NICs on parse failure
+      ansible.builtin.set_fact:
+        hw_nics: []
+
+- name: Set default NIC info if collection produced no output
+  ansible.builtin.set_fact:
+    hw_nics: []
+  when: hw_nics is not defined
+
+- name: Remove NIC collection script from bastion
+  ansible.builtin.file:
+    path: /tmp/collect_nics_hw.py
+    state: absent

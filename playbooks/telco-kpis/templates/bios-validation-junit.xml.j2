@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+{% set _fetch_failed = _bios_profile_fetch_failed | default(false) | bool %}
+{% set _used_cache = _bios_profile_used_cache | default(false) | bool %}
+{% set _profile_source = 'unavailable' if _fetch_failed else ('cache' if _used_cache else 'remote') %}
+{% set _results = validation_results | default([]) %}
+{% set _setting_failures = _results | selectattr('status', 'equalto', 'FAIL') | list | length %}
+{% set _test_count = 1 + (_results | length) %}
+{% set _failure_count = (1 if _fetch_failed else 0) + _setting_failures %}
+<testsuites>
+  <testsuite name="bios-validation-{{ spoke_cluster }}"
+             tests="{{ _test_count }}"
+             failures="{{ _failure_count }}"
+             errors="0"
+             time="{{ test_duration_seconds | default(0) }}">
+    <properties>
+      <property name="spoke_cluster" value="{{ spoke_cluster }}"/>
+      <property name="ocp_version" value="{{ version | default('unknown') }}"/>
+      <property name="bios_profile_path" value="{{ bios_profile_path | default('dell/bios-profile.yaml') }}"/>
+      <property name="bios_profile_branch" value="{{ bios_profile_branch | default('main') }}"/>
+      {% if bios_profile_url | default('') | length > 0 %}
+      <property name="bios_profile_url" value="{{ bios_profile_url }}"/>
+      {% endif %}
+    </properties>
+    <testcase name="BIOS_PROFILE_SOURCE"
+              classname="telco.kpis.bios_validation.profile"
+              time="0">
+      <properties>
+        <property name="source" value="{{ _profile_source }}"/>
+        {% if _used_cache %}
+        <property name="cache_path" value="{{ _bios_cache_path | default('') }}"/>
+        {% endif %}
+      </properties>
+      {% if _fetch_failed %}
+      {% set _src = bios_profile_url if bios_profile_url | default('') | length > 0
+         else 'GitLab API — telcov10n/kpi/' + (bios_profile_path | default('dell/bios-profile.yaml'))
+           + ' (branch: ' + (bios_profile_branch | default('main')) + ')' %}
+      <failure message="BIOS profile unavailable: no remote access and no cached profile">
+Profile source: {{ _src }}
+Cache path checked: {{ _bios_cache_path | default('n/a') }}
+No cached profile found. BIOS validation was skipped. Test is marked as failed.
+      </failure>
+      {% elif _used_cache %}
+      <system-out>WARNING: Remote profile was unreachable. Validation ran using cached copy from {{ _bios_cache_path | default('') }}.</system-out>
+      {% endif %}
+    </testcase>
+    {% for item in _results %}
+    <testcase name="{{ item.key }}"
+              classname="telco.kpis.bios_validation.settings"
+              time="0">
+      {% if item.status == 'FAIL' %}
+      <failure message="Expected: {{ item.value }} — Got: {{ item.current_value }}">
+Setting:  {{ item.key }}
+Expected: {{ item.value }}
+Current:  {{ item.current_value }}
+      </failure>
+      {% endif %}
+    </testcase>
+    {% endfor %}
+  </testsuite>
+</testsuites>

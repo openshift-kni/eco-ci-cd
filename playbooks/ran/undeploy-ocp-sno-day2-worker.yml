@@ -1,0 +1,400 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Test thoroughly in your environment before production use.
+#
+# This Ansible playbook automates the removal of a worker node from a Single
+# Node OpenShift (SNO) Spoke cluster, reverting it to a pure SNO configuration.
+# It performs the inverse of deploy-ocp-sno-day2-worker.yml.
+
+## Prerequisites:
+# - Ansible 2.10+
+# - A bastion server (if required)
+# - An inventory with required host_vars/group_vars populated
+# - A functional SNO Spoke cluster with an additional worker node
+#
+# Required variables (examples):
+# - kubeconfig: a valid kubeconfig for hub cluster authentication [str],
+#               e.g. "/path/to/kubeconfig"
+# - spoke_cluster_name: the name of the spoke cluster to target [str],
+#                       e.g. "kni-qe-107"
+# - sno_branch: the name of the branch containing the SNO-only config [str],
+#               e.g. "sno_day2_worker"
+---
+- name: Pre-flight validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate that the required variables are defined
+      ansible.builtin.assert:
+        that:
+          - spoke_cluster_name is defined
+          - spoke_cluster_name | length > 0
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - sno_branch is defined
+          - sno_branch | length > 0
+        fail_msg: "the required extra vars must be provided and non-empty"
+
+- name: Undeploy day2 worker from SNO cluster
+  hosts: bastion
+  gather_facts: false
+  vars:
+    sno_branch: "sno_day2_worker"
+    openshift_gitops_namespace: "openshift-gitops"
+    day2_cgu_name: "day2-worker-cgu"
+  tasks:
+    - name: Define a unique id for this playbook session
+      ansible.builtin.set_fact:
+        playbook_run_id: "undeploy-day2-{{ now(fmt='%Y%m%d%H%M%S') }}"
+
+    - name: Define the name of the spoke kubeconfig file
+      ansible.builtin.set_fact:
+        spoke_kubeconfig: "/tmp/{{ playbook_run_id }}-spoke-kubeconfig"
+
+    - name: Set up a group of tasks with a cleanup handler
+      block:
+        - name: Read the Spoke cluster's kubeconfig directly from the Hub cluster
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ spoke_cluster_name }}-admin-kubeconfig"
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: spoke_secret
+
+        - name: Fail if secret not found
+          ansible.builtin.fail:
+            msg: Kubeconfig secret not found for cluster {{ spoke_cluster_name }}
+          when: spoke_secret.resources | length == 0
+
+        - name: "Write spoke kubeconfig at: {{ spoke_kubeconfig }}"
+          ansible.builtin.copy:
+            content: "{{ spoke_secret.resources[0].data.kubeconfig | b64decode }}"
+            dest: "{{ spoke_kubeconfig }}"
+            mode: '0600'
+
+        - name: Wait for the spoke cluster API to become reachable
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Namespace
+            name: default
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_api_check
+          until: spoke_api_check is success
+          retries: 30
+          delay: 30
+
+        # ── Phase 1: Delete any existing CGU to avoid interference ──
+        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade # noqa: ignore-errors
+          kubernetes.core.k8s:
+            api_version: ran.openshift.io/v1alpha1
+            kind: ClusterGroupUpgrade
+            name: "{{ day2_cgu_name }}"
+            namespace: default
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            wait: true
+            wait_timeout: 120
+          ignore_errors: true
+
+        # ── Phase 2: Revert the clusters application to SNO-only branch ──
+        - name: Patch the ArgoCD clusters application to revert to SNO-only branch
+          kubernetes.core.k8s:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: clusters
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            merge_type: merge
+            definition:
+              spec:
+                source:
+                  targetRevision: "{{ sno_branch }}"
+
+        - name: Wait for the ArgoCD clusters application to sync
+          kubernetes.core.k8s_info:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: clusters
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: clusters_app_status
+          until: >-
+            clusters_app_status.resources is defined and
+            clusters_app_status.resources | length > 0 and
+            clusters_app_status.resources[0].status.sync.status | default('') == 'Synced'
+          retries: 30
+          delay: 20
+
+        # ── Phase 3: Revert the policies application to SNO-only branch ──
+        - name: Patch the ArgoCD policies application to revert to SNO-only branch
+          kubernetes.core.k8s:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: policies
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: present
+            merge_type: merge
+            definition:
+              spec:
+                source:
+                  targetRevision: "{{ sno_branch }}"
+
+        - name: Wait for the ArgoCD policies application to sync
+          kubernetes.core.k8s_info:
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            name: policies
+            namespace: "{{ openshift_gitops_namespace }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: policies_app_status
+          until: >-
+            policies_app_status.resources is defined and
+            policies_app_status.resources | length > 0 and
+            policies_app_status.resources[0].status.sync.status | default('') == 'Synced'
+          retries: 30
+          delay: 20
+
+        # ── Phase 4: Force cleanup of worker node resources ──
+        - name: Get all worker nodes (excluding master)
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+            kubeconfig: "{{ spoke_kubeconfig }}"
+            label_selectors:
+              - "node-role.kubernetes.io/worker"
+              - "!node-role.kubernetes.io/master"
+          register: worker_nodes
+
+        - name: Drain and delete worker nodes
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              oc --kubeconfig {{ spoke_kubeconfig }} adm drain {{ item.metadata.name }} \
+                --ignore-daemonsets --delete-emptydir-data --force --timeout=300s || true
+              oc --kubeconfig {{ spoke_kubeconfig }} delete node {{ item.metadata.name }} --wait=false || true
+          loop: "{{ worker_nodes.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: worker_nodes.resources | length > 0
+          changed_when: true
+
+        - name: Get all BareMetalHosts in the spoke namespace
+          kubernetes.core.k8s_info:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: bmh_list
+
+        - name: Filter BareMetalHosts for worker nodes (excluding SNO)
+          ansible.builtin.set_fact:
+            worker_bmhs: >-
+              {{
+                bmh_list.resources |
+                selectattr('metadata.name', 'search', 'worker') |
+                list
+              }}
+
+        - name: Remove finalizers and delete worker BareMetalHosts
+          kubernetes.core.k8s:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            wait: false
+          loop: "{{ worker_bmhs }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: worker_bmhs | length > 0
+
+        - name: Patch worker BMHs to remove finalizers if stuck # noqa: ignore-errors
+          ansible.builtin.shell:
+            cmd: |
+              oc --kubeconfig {{ kubeconfig }} patch bmh {{ item.metadata.name }} \
+                -n {{ spoke_cluster_name }} --type=merge \
+                -p '{"metadata":{"finalizers":[]}}'
+          loop: "{{ worker_bmhs }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: worker_bmhs | length > 0
+          ignore_errors: true
+          changed_when: true
+
+        # ── Phase 5: Clean up Ironic nodes for worker ──
+        - name: Get metal3 ironic pod
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: openshift-machine-api
+            label_selectors:
+              - k8s-app=metal3
+            kubeconfig: "{{ kubeconfig }}"
+          register: metal3_pods
+
+        - name: Find ironic container pod
+          ansible.builtin.set_fact:
+            ironic_pod: >-
+              {{
+                metal3_pods.resources |
+                selectattr('spec.containers', 'defined') |
+                map(attribute='spec.containers') |
+                flatten |
+                selectattr('name', 'equalto', 'metal3-ironic') |
+                list |
+                first |
+                default({})
+              }}
+            ironic_pod_name: >-
+              {{
+                (metal3_pods.resources |
+                 selectattr('spec.containers', 'defined') |
+                 selectattr('spec', 'search', 'metal3-ironic') |
+                 list |
+                 first).metadata.name |
+                default('')
+              }}
+
+        - name: List and delete Ironic nodes for worker # noqa: ignore-errors
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              oc --kubeconfig {{ kubeconfig }} exec -n openshift-machine-api {{ ironic_pod_name }} \
+                -c metal3-ironic -- \
+                curl -s --unix-socket /shared/ironic.sock http://localhost/v1/nodes | \
+                python3 -c 'import json,sys; nodes=json.load(sys.stdin)["nodes"]; \
+                  [print(n["uuid"], n.get("name","")) for n in nodes]' | \
+                grep -i worker | awk '{print $1}' | \
+                while read uuid; do
+                  echo "Deleting Ironic node $uuid"
+                  oc --kubeconfig {{ kubeconfig }} exec -n openshift-machine-api {{ ironic_pod_name }} \
+                    -c metal3-ironic -- \
+                    curl -s -X PUT --unix-socket /shared/ironic.sock \
+                    -H 'Content-Type: application/json' \
+                    -d '{"reason":"cleanup"}' \
+                    "http://localhost/v1/nodes/$uuid/maintenance" || true
+                  oc --kubeconfig {{ kubeconfig }} exec -n openshift-machine-api {{ ironic_pod_name }} \
+                    -c metal3-ironic -- \
+                    curl -s -X DELETE --unix-socket /shared/ironic.sock \
+                    "http://localhost/v1/nodes/$uuid" || true
+                done
+          when: ironic_pod_name | length > 0
+          ignore_errors: true
+          changed_when: true
+
+        # ── Phase 6: Clean up PreprovisioningImages ──
+        - name: Get PreprovisioningImages in spoke namespace
+          kubernetes.core.k8s_info:
+            api_version: metal3.io/v1alpha1
+            kind: PreprovisioningImage
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: ppi_list
+
+        - name: Delete PreprovisioningImages # noqa: ignore-errors
+          kubernetes.core.k8s:
+            api_version: metal3.io/v1alpha1
+            kind: PreprovisioningImage
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            wait: false
+          loop: "{{ ppi_list.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: ppi_list.resources | length > 0
+          ignore_errors: true
+
+        - name: Patch PPIs to remove finalizers if stuck # noqa: ignore-errors
+          ansible.builtin.shell:
+            cmd: |
+              oc --kubeconfig {{ kubeconfig }} patch preprovisioningimage.metal3.io {{ item.metadata.name }} \
+                -n {{ spoke_cluster_name }} --type=merge \
+                -p '{"metadata":{"finalizers":[]}}'
+          loop: "{{ ppi_list.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: ppi_list.resources | length > 0
+          ignore_errors: true
+          changed_when: true
+
+        # ── Phase 7: Clean up Agent resources ──
+        - name: Get Agent resources in spoke namespace
+          kubernetes.core.k8s_info:
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+          register: agent_list
+
+        - name: Filter Agents for worker nodes
+          ansible.builtin.set_fact:
+            worker_agents: >-
+              {{
+                agent_list.resources |
+                selectattr('metadata.labels', 'defined') |
+                selectattr('metadata.labels.agent-install.openshift.io/bmh', 'search', 'worker') |
+                list
+              }}
+
+        - name: Remove finalizers and delete worker Agents # noqa: ignore-errors
+          kubernetes.core.k8s:
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ kubeconfig }}"
+            state: absent
+            wait: false
+          loop: "{{ worker_agents }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: worker_agents | length > 0
+          ignore_errors: true
+
+        - name: Patch worker Agents to remove finalizers if stuck # noqa: ignore-errors
+          ansible.builtin.shell:
+            cmd: |
+              oc --kubeconfig {{ kubeconfig }} patch agent {{ item.metadata.name }} \
+                -n {{ spoke_cluster_name }} --type=json \
+                -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+          loop: "{{ worker_agents }}"
+          loop_control:
+            label: "{{ item.metadata.name }}"
+          when: worker_agents | length > 0
+          ignore_errors: true
+          changed_when: true
+
+        # ── Phase 8: Verify cleanup ──
+        - name: Wait for worker nodes to be removed from cluster
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+            kubeconfig: "{{ spoke_kubeconfig }}"
+            label_selectors:
+              - "node-role.kubernetes.io/worker"
+              - "!node-role.kubernetes.io/master"
+          register: remaining_workers
+          until: remaining_workers.resources | length == 0
+          retries: 20
+          delay: 30
+          failed_when: false
+
+        - name: Report cleanup status
+          ansible.builtin.debug:
+            msg: >-
+              Day2 worker cleanup complete.
+              Remaining worker nodes: {{ remaining_workers.resources | length }}.
+              ArgoCD applications reverted to branch: {{ sno_branch }}.
+
+      always:
+        - name: Clean up the temporary files
+          ansible.builtin.file:
+            path: "{{ spoke_kubeconfig }}"
+            state: absent

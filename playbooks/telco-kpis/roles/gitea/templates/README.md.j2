@@ -4,31 +4,29 @@ This repository contains automated test reports from Telco KPIs verification job
 
 {% if report_metadata_list is defined and report_metadata_list | length > 0 %}
 {# ------------------------------------------------------------------ #}
-{# Build per-(ocp_minor, arch) summary: latest entry per combination  #}
+{# Build sorted unique minor versions (numeric, newest first)          #}
 {# ------------------------------------------------------------------ #}
-{% set ns = namespace(summary=[], seen_keys=[]) %}
-{% for meta in report_metadata_list | sort(attribute='date', reverse=True) %}
-{%   set key = meta.ocp_minor ~ '|' ~ meta.arch ~ '|' ~ (meta.platform | default('N/A')) %}
-{%   if key not in ns.seen_keys %}
-{%     set _ = ns.summary.append(meta) %}
-{%     set _ = ns.seen_keys.append(key) %}
-{%   endif %}
-{% endfor %}
-
-## Version Summary
-
-| Date | OCP Version | Arch | Platform | Latest Report | Artifacts |
-|------|-------------|------|----------|---------------|-----------|
-{# Compute a numeric sort key so 4.22 > 4.9 > 4.8, and 5.0 > 4.22 #}
-{% set ns_sort = namespace(keyed=[]) %}
-{% for s in ns.summary %}
-{%   set _parts = s.ocp_minor.split('.') %}
+{% set unique_minors_raw = report_metadata_list | map(attribute='ocp_minor') | unique | list %}
+{% set ns_minors = namespace(keyed=[], links=[]) %}
+{% for m in unique_minors_raw %}
+{%   set _parts = m.split('.') %}
 {%   set _vkey = _parts[0] | int * 1000 + _parts[1] | int %}
-{%   set _ = ns_sort.keyed.append(s | combine({'_vkey': _vkey})) %}
+{%   set _ = ns_minors.keyed.append({'ver': m, 'key': _vkey}) %}
 {% endfor %}
-{% for s in ns_sort.keyed | sort(attribute='_vkey', reverse=True) %}
+{% for item in ns_minors.keyed | sort(attribute='key', reverse=True) %}
+{%   set _ = ns_minors.links.append('[' ~ item.ver ~ '](#ocp-' ~ item.ver | replace('.', '') ~ ')') %}
+{% endfor %}
+
+**Reported Versions:** {{ ns_minors.links | join(', ') }}
+
+## Latest 10 Reports
+
+| Date | OCP Version | Arch | Latest Reports | Artifacts |
+|------|-------------|------|----------------|-----------|
+{% set top10 = report_metadata_list | sort(attribute='date', reverse=True) | list %}
+{% for s in top10[:10] %}
 {%   set anchor = 'ocp-' ~ s.ocp_minor | replace('.', '') %}
-| {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | {{ s.platform | default('N/A') }} | [{{ s.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
+| {{ s.date }} | [{{ s.ocp_minor }}](#{{ anchor }}) | {{ s.arch }} | [{{ s.report_headline | default(s.report_file | regex_replace('^telco-kpis-report-', '')) }}]({{ s.date }}/{{ s.spoke }}/{{ s.report_file }}) | [Browse]({{ s.date }}/{{ s.spoke }}/) |
 {% endfor %}
 
 ---
@@ -36,17 +34,9 @@ This repository contains automated test reports from Telco KPIs verification job
 {# ------------------------------------------------------------------ #}
 {# Per-minor-version sections                                          #}
 {# ------------------------------------------------------------------ #}
-{% set unique_minors_raw = report_metadata_list | map(attribute='ocp_minor') | unique | list %}
-{% set ns_minors = namespace(keyed=[]) %}
-{% for m in unique_minors_raw %}
-{%   set _parts = m.split('.') %}
-{%   set _vkey = _parts[0] | int * 1000 + _parts[1] | int %}
-{%   set _ = ns_minors.keyed.append({'ver': m, 'key': _vkey}) %}
-{% endfor %}
 {% for _minor_item in ns_minors.keyed | sort(attribute='key', reverse=True) %}
 {%   set ocp_minor = _minor_item.ver %}
 {%   set minor_reports = report_metadata_list | selectattr('ocp_minor', 'equalto', ocp_minor) | sort(attribute='date', reverse=True) | list %}
-{%   set anchor_id = 'ocp-' ~ ocp_minor | replace('.', '') %}
 
 ## OCP {{ ocp_minor }}
 
@@ -56,20 +46,20 @@ This repository contains automated test reports from Telco KPIs verification job
 {%   if x86_reports | length > 0 %}
 ### x86_64
 
-| Date | Status | OCP Version | Platform | Report | Artifacts |
-|------|--------|-------------|----------|--------|-----------|
+| Date | Status | OCP Version | Reports | Artifacts |
+|------|--------|-------------|---------|-----------|
 {%     for r in x86_reports %}
-| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | [{{ r.report_headline | default(r.report_file | regex_replace('^telco-kpis-report-', '')) }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
 {%     endfor %}
 {%   endif %}
 
 {%   if arm_reports | length > 0 %}
 ### arm64
 
-| Date | Status | OCP Version | Platform | Report | Artifacts |
-|------|--------|-------------|----------|--------|-----------|
+| Date | Status | OCP Version | Reports | Artifacts |
+|------|--------|-------------|---------|-----------|
 {%     for r in arm_reports %}
-| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | {{ r.platform | default('N/A') }} | [{{ r.report_file | regex_replace('^telco-kpis-report-', '') }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
+| {{ r.date }} | {{ '✅PASS' if r.status == 'PASS' else '❌FAIL' }} | {{ r.ocp_version }} | [{{ r.report_headline | default(r.report_file | regex_replace('^telco-kpis-report-', '')) }}]({{ r.date }}/{{ r.spoke }}/{{ r.report_file }}) | [Browse]({{ r.date }}/{{ r.spoke }}/) |
 {%     endfor %}
 {%   endif %}
 

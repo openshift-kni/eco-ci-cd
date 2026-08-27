@@ -8,7 +8,7 @@
               time="{{ ztp_deployment_timeline_duration_seconds }}">
       {% if not test_passed %}
       <failure type="ZTPDeploymentValidationFailed"
-               message="ZTP deployment validation failed - {% if not duration_passed %}duration exceeded threshold{% endif %}{% if not duration_passed and not (spoke_reboot_count | int <= 2) %}, {% endif %}{% if not (spoke_reboot_count | int <= 2) %}reboot count exceeded threshold{% endif %}">
+               message="ZTP deployment validation failed - {% if not duration_passed %}duration exceeded threshold{% endif %}{% if not duration_passed and not (spoke_reboot_count | int <= 2) %}, {% endif %}{% if not (spoke_reboot_count | int <= 2) %}reboot count exceeded threshold{% endif %}"><![CDATA[
 ZTP AI Deployment Time Test Failed
 
 Spoke Cluster: {{ spoke_cluster }}
@@ -31,9 +31,9 @@ Reboot Count Check:
   {% if not (spoke_reboot_count | int <= 2) %}Exceeded By: {{ spoke_reboot_count | int - 2 }} reboots{% endif %}
 
 Overall Result: FAIL
-      </failure>
+]]></failure>
       {% endif %}
-      <system-out>
+      <system-out><![CDATA[
 Spoke Cluster: {{ spoke_cluster }}
 Hub Cluster: {{ hub_cluster }}
 Deployment Method: {{ ztp_deployment_timeline_deployment_method }}
@@ -53,7 +53,7 @@ Reboot Count Check:
 
 Overall Result: {{ test_status }}
 Events Captured: {{ ztp_deployment_timeline_events | length }}
-      </system-out>
+]]></system-out>
     </testcase>
   </testsuite>
 </testsuites>

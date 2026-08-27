@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    config.openshift.io/inject-trusted-cabundle: "true"
+  name: o2ims-trusted-ca-bundle
+  namespace: {{ oran_o2ims_deploy_namespace }}
+
+---

@@ -1,0 +1,69 @@
+---
+- name: Create temporary directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: bootstrap-pki-
+  register: pki_tmp_dir
+
+- name: Create root CA key and cert
+  ansible.builtin.shell: |
+    openssl req -x509 -new -nodes -days 3650 -newkey ed25519 \
+      -keyout {{ pki_tmp_dir.path }}/root-ca.key -out {{ pki_tmp_dir.path }}/root-ca.crt \
+      -subj "/C=US/ST=NC/L=Raleigh/O=Red Hat/OU=Telco Verification/CN={{ cluster_name }}" \
+      -addext "keyUsage=critical,cRLSign,digitalSignature,keyCertSign"
+  changed_when: true
+
+- name: Create root CA secret
+  ansible.builtin.shell: |
+    oc delete --ignore-not-found=true secret root-ca -n cert-manager
+    oc create secret tls root-ca --cert={{ pki_tmp_dir.path }}/root-ca.crt --key={{ pki_tmp_dir.path }}/root-ca.key -n cert-manager
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: true
+
+- name: Update cluster trusted CA store
+  ansible.builtin.shell: |
+    oc delete --ignore-not-found=true configmap custom-ca-certs -n openshift-config
+    oc create configmap -n openshift-config custom-ca-certs \
+      --from-file=ca-bundle.crt={{ pki_tmp_dir.path }}/root-ca.crt \
+      --from-file=ca-bundle.pem={{ pki_tmp_dir.path }}/root-ca.crt
+    oc patch proxy/cluster --type=merge --patch='{"spec":{"trustedCA":{"name": "custom-ca-certs"}}}'
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: true
+
+- name: Update default ingress controller for mTLS
+  vars:
+    ingress_controller_patch:
+      spec:
+        clientTLS:
+          clientCertificatePolicy: Optional
+          clientCA:
+            name: custom-ca-certs
+  ansible.builtin.shell: |
+    oc patch ingresscontroller -n openshift-ingress-operator default --type=merge --patch='{{ ingress_controller_patch | to_json }}'
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: true
+
+- name: Create ClusterIssuer with root CA
+  ansible.builtin.shell: |
+    set -o pipefail
+    cat <<EOF | oc apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+      name: root-ca-issuer
+    spec:
+      ca:
+        secretName: root-ca
+    EOF
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  register: create_cluster_issuer
+  changed_when: "'created' in create_cluster_issuer.stdout or 'configured' in create_cluster_issuer.stdout"
+
+- name: Clean up temporary directory
+  ansible.builtin.file:
+    path: "{{ pki_tmp_dir.path }}"
+    state: absent

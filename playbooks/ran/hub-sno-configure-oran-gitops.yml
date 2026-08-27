@@ -185,6 +185,34 @@
               target:
                 name: ztp-app-project
                 namespace: openshift-gitops
+            # Grant the ArgoCD application controller permission to manage the
+            # O-RAN resources. hub-rds-cluster-role aggregates into the
+            # cluster-manager-admin role that is bound cluster-wide to the
+            # controller SA (CRB hub-rds-gitops), so appending these rules lets
+            # ArgoCD create the resources on its first sync — no post-apply
+            # RoleBinding or re-trigger needed.
+            - patch: |-
+                - op: add
+                  path: /rules/-
+                  value:
+                    apiGroups: [metal3.io]
+                    resources: [baremetalhosts]
+                    verbs: [create, get, list, watch, update, delete, patch]
+                - op: add
+                  path: /rules/-
+                  value:
+                    apiGroups: [clcm.openshift.io]
+                    resources: [clustertemplates, hardwareplugins, hardwaretemplates, hardwareprofiles]
+                    verbs: [create, get, list, watch, update, delete, patch]
+                - op: add
+                  path: /rules/-
+                  value:
+                    apiGroups: [ocloud.openshift.io]
+                    resources: [locations, ocloudsites, resourcepools]
+                    verbs: [create, get, list, watch, update, delete, patch]
+              target:
+                kind: ClusterRole
+                name: hub-rds-cluster-role
 
     - name: Display patched deployment kustomization
       ansible.builtin.command:
@@ -196,39 +224,15 @@
       ansible.builtin.debug:
         msg: "{{ patched_kustomization.stdout_lines }}"
 
-    # Grant the ArgoCD application controller SA admin rights in the O-RAN
-    # namespaces so it can create ClusterTemplates, HardwareProfiles, and
-    # inventory CRs (clcm.openshift.io / ocloud.openshift.io). The SA has
-    # a cluster-wide ClusterRoleBinding with ["*"]=["*"] but OPA/webhook
-    # policies restrict it to namespaces where it also has a RoleBinding.
-    - name: Grant ArgoCD SA admin access in O-RAN namespaces
-      kubernetes.core.k8s:
-        state: present
-        kubeconfig: "{{ kubeconfig }}"
-        definition:
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: RoleBinding
-          metadata:
-            name: argocd-admin-oran
-            namespace: "{{ item }}"
-          roleRef:
-            apiGroup: rbac.authorization.k8s.io
-            kind: ClusterRole
-            name: admin
-          subjects:
-            - kind: ServiceAccount
-              name: openshift-gitops-argocd-application-controller
-              namespace: openshift-gitops
-      loop:
-        - "sno-ran-du-v{{ oran_clusters_repo_path | basename | replace('.', '-') }}"
-        - oran-o2ims
-
     - name: Apply ArgoCD deployment kustomization
       ansible.builtin.command:
         cmd: oc apply -k {{ argocd_deployment_path }}
       changed_when: true
 
-    - name: Wait for O-RAN ArgoCD apps to sync successfully
+    # RBAC is granted at apply time via the hub-rds-cluster-role patch above, so
+    # ArgoCD creates the O-RAN resources (and the ClusterTemplate namespace) on
+    # its first automated sync. Just wait for that sync to settle.
+    - name: Wait for O-RAN ArgoCD apps to be Synced and Healthy
       kubernetes.core.k8s_info:
         api_version: argoproj.io/v1alpha1
         kind: Application
@@ -244,3 +248,25 @@
         - policies
       retries: 20
       delay: 30
+
+    # The ClusterTemplate namespace is now guaranteed to exist.
+    # o-cloud-manager needs the cluster pull-secret there to provision spokes.
+    - name: Get pull-secret from openshift-config
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+        kubeconfig: "{{ kubeconfig }}"
+      register: pull_secret_info
+      no_log: true
+
+    - name: Copy pull-secret to ClusterTemplate namespace
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        template: "{{ playbook_dir }}/templates/clustertemplate-pull-secret.yaml.j2"
+      vars:
+        clustertemplate_namespace: "sno-ran-du-v{{ oran_clusters_repo_path | basename | replace('.', '-') }}"
+      no_log: true
+

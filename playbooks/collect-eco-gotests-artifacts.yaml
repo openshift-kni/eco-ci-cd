@@ -1,0 +1,155 @@
+---
+# Playbook Name: Collect eco-gotests artifacts
+# Description  : Lane-agnostic playbook that pulls XML reports and k8sreporter
+#                artifacts from the bastion to the CI pod (artifact_dir), gathers
+#                JUnit XMLs to a unified bastion directory for
+#                telcov10n-verify-junit-reports-bastion.
+#
+# Required vars:
+#   eco_gotests_features  Space-separated list of feature names
+#                         (e.g. "oran-pre-provision oran-provision oran-post-provision")
+#   artifact_dir          Artifact directory on the CI pod (ARTIFACT_DIR)
+#
+# Optional vars:
+#   eco_gotest_dir_prefix Bastion path prefix for feature dirs. Each feature dir is
+#                         <prefix><feature>. Default: /tmp/eco_gotests_
+#   bastion_junit_dir     Flat directory on bastion for unified JUnit XMLs consumed by
+#                         telcov10n-verify-junit-reports-bastion.
+#                         Default: /tmp/eco_gotests_junit
+
+- name: Collect eco-gotests artifacts
+  hosts: bastion
+  gather_facts: false
+  vars:
+    bastion_junit_dir: /tmp/eco_gotests_junit
+    eco_gotest_dir_prefix: /tmp/eco_gotests_
+  tasks:
+    - name: Build eco_gotests_entries from features
+      ansible.builtin.set_fact:
+        eco_gotests_entries: >-
+          {{ eco_gotests_entries | default([]) +
+             [{'name': item, 'eco_gotest_dir': eco_gotest_dir_prefix + item}] }}
+      loop: "{{ eco_gotests_features.split() }}"
+
+    - name: Rename testsuite in JUnit XMLs to feature name for ReportPortal
+      ansible.builtin.shell: |
+        for f in {{ item.eco_gotest_dir }}/report/*junit*.xml; do
+          [ -f "$f" ] || continue
+          sed -i \
+            "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
+             s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "$f"
+        done
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Clean and recreate unified JUnit directory
+      ansible.builtin.shell: |
+        rm -rf {{ bastion_junit_dir }} && mkdir -p {{ bastion_junit_dir }}
+      changed_when: false
+
+    - name: Gather JUnit XMLs to unified bastion directory
+      ansible.builtin.shell: |
+        mkdir -p {{ bastion_junit_dir }}
+        for f in {{ item.eco_gotest_dir }}/report/*junit*.xml; do
+          [ -f "$f" ] || continue
+          cp "$f" "{{ bastion_junit_dir }}/{{ item.name }}_$(basename "$f")"
+        done
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Find XML report files per entry
+      ansible.builtin.find:
+        paths: "{{ item.eco_gotest_dir }}/report"
+        patterns: "*.xml"
+      register: xml_files_result
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Fetch XML reports to artifact directory
+      ansible.builtin.fetch:
+        src: "{{ file_item.path }}"
+        dest: "{{ artifact_dir }}/junit_eco_gotests_{{ entry_name }}/"
+        flat: true
+        fail_on_missing: false
+      loop: "{{ xml_files_result.results | subelements('files') }}"
+      loop_control:
+        label: "{{ file_item.path }}"
+      vars:
+        entry_name: "{{ item.0.item.name }}"
+        file_item: "{{ item.1 }}"
+
+    - name: Create versioned k8sreporter directory on bastion
+      ansible.builtin.shell: |
+        ocp_version=$(oc --kubeconfig {{ hub_clusterconfigs_path }}/auth/kubeconfig \
+          get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null \
+          || echo "unknown")
+        k8s_dir="/tmp/k8sreporter-${ocp_version:-unknown}"
+        rm -rf "${k8s_dir}" && mkdir -p "${k8s_dir}"
+        echo "${k8s_dir}"
+      register: k8s_dir_result
+      changed_when: false
+
+    - name: Zip k8sreporter artifacts and store on bastion
+      ansible.builtin.shell: |
+        report_dir="{{ item.eco_gotest_dir }}/report"
+        [ -d "${report_dir}" ] || exit 0
+        (cd "${report_dir}" && \
+          find . -mindepth 1 ! -name '*.xml' -type f \
+            | zip "/tmp/k8sreporter_{{ item.name }}.zip" -@ 2>/dev/null || true)
+        cp "/tmp/k8sreporter_{{ item.name }}.zip" "{{ k8s_dir_result.stdout }}/" 2>/dev/null || true
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Fetch k8sreporter zips to artifact directory
+      ansible.builtin.fetch:
+        src: "/tmp/k8sreporter_{{ item.name }}.zip"
+        dest: "{{ artifact_dir }}/junit_eco_gotests_{{ item.name }}/"
+        flat: true
+        fail_on_missing: false
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Clean bastion report directories to avoid stale files from previous runs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/test_reports/polarion
+        - /tmp/test_reports/junit
+
+    - name: Prepare report files on bastion for telcov10n-functional-report
+      # Copy report_testrun.xml (Polarion XML) to the bastion report directories.
+      # The report step's bastion fallback reads from /tmp/test_reports/:
+      #   polarion/ → Polarion upload (POLARION_REPORT_PATH)
+      #   junit/    → ReportPortal upload (JUNIT_REPORT_PATH)
+      ansible.builtin.shell: |
+        mkdir -p /tmp/test_reports/polarion /tmp/test_reports/junit
+        f="{{ item.eco_gotest_dir }}/report/report_testrun.xml"
+        [ -f "$f" ] || exit 0
+        # report_testrun.xml (Polarion XML) → junit/ (matches PTP GM pattern)
+        sed \
+          "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
+           s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+          "$f" > "/tmp/test_reports/junit/{{ item.name }}_suite_test_polarion.xml"
+        # Ginkgo JUnit → polarion/ → POLARION_REPORT_PATH → used by RP upload
+        # (test names contain test_id:XXXXX, matching PTP GM pattern)
+        junit="{{ item.eco_gotest_dir }}/report/oran_suite_test_junit.xml"
+        if [ -f "$junit" ]; then
+          sed \
+            "s/testsuites name=\"[^\"]*\"/testsuites name=\"{{ item.name }}\"/g;
+             s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
+            "$junit" > "/tmp/test_reports/polarion/{{ item.name }}_suite_test.xml"
+        fi
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false

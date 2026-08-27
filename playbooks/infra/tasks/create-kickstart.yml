@@ -1,0 +1,28 @@
+- name: Ensure firewalld is running
+  become: true
+  ansible.builtin.service:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Set ISO name
+  ansible.builtin.set_fact:
+    iso_name: installation.iso
+
+- name: Prepare kickstart iso
+  ansible.builtin.import_role:
+    name: kickstart_iso
+  vars:
+    kickstart_iso_link: "{{ system_iso_link }}"
+    kickstart_iso_name: "{{ iso_name }}"
+    kickstart_iso_file_desire_location: /opt/http_store/data
+    kickstart_iso_timezone: "{{ hostvars['bastion'].timezone }}"
+    kickstart_iso_password: "{{ ansible_password }}"
+    kickstart_iso_username: "{{ ansible_user }}"
+    kickstart_iso_net_config: "{{ hostvars['bastion'].net_config | from_yaml }}"
+
+- name: Setup http storage
+  ansible.builtin.import_role:
+    name: redhatci.ocp.setup_http_store
+  vars:
+    http_port: "{{ http_store_port | string }}"

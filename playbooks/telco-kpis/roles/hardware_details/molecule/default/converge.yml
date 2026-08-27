@@ -1,0 +1,143 @@
+---
+# Molecule converge for hardware_details role
+# Three plays:
+#   1. Script parsing - render templates, run with mock commands, save JSON results
+#   2. Happy-path assembly - verify set_fact assembly logic with known-good inputs
+#   3. Degradation - run full role with invalid cluster creds, verify N/A fallbacks
+
+# ─── Play 1: Script parsing via mock commands ────────────────────────────────
+- name: Test collection scripts with mock system commands
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    role_templates: /eco-ci-cd/playbooks/telco-kpis/roles/hardware_details/templates
+    mock_bin: /tmp/molecule-hardware-details/bin
+    results_dir: /tmp/molecule-hardware-details/results
+
+  tasks:
+    - name: Render memory collection script
+      ansible.builtin.template:
+        src: "{{ role_templates }}/collect_memory.sh.j2"
+        dest: /tmp/molecule-hardware-details/collect_memory.sh
+        mode: '0700'
+
+    - name: Render storage collection script
+      ansible.builtin.template:
+        src: "{{ role_templates }}/collect_storage.sh.j2"
+        dest: /tmp/molecule-hardware-details/collect_storage.py
+        mode: '0700'
+
+    - name: Render NIC collection script
+      ansible.builtin.template:
+        src: "{{ role_templates }}/collect_nics.sh.j2"
+        dest: /tmp/molecule-hardware-details/collect_nics.py
+        mode: '0700'
+
+    - name: Run memory script with mock dmidecode
+      ansible.builtin.shell: |
+        PATH={{ mock_bin }}:$PATH bash /tmp/molecule-hardware-details/collect_memory.sh
+      register: memory_script_result
+      changed_when: false
+
+    - name: Run storage script with mock lsblk
+      ansible.builtin.shell: |
+        PATH={{ mock_bin }}:$PATH python3 /tmp/molecule-hardware-details/collect_storage.py
+      register: storage_script_result
+      changed_when: false
+
+    - name: Run NIC script with mock lspci
+      ansible.builtin.shell: |
+        PATH={{ mock_bin }}:$PATH python3 /tmp/molecule-hardware-details/collect_nics.py
+      register: nics_script_result
+      changed_when: false
+
+    - name: Save script outputs to results files (for verify phase)
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ results_dir }}/{{ item.name }}"
+        mode: '0644'
+      loop:
+        - name: memory.json
+          content: "{{ memory_script_result.stdout }}"
+        - name: storage.json
+          content: "{{ storage_script_result.stdout }}"
+        - name: nics.json
+          content: "{{ nics_script_result.stdout }}"
+
+    - name: Display script outputs
+      ansible.builtin.debug:
+        msg:
+          - "memory: {{ memory_script_result.stdout }}"
+          - "storage: {{ storage_script_result.stdout }}"
+          - "nics: {{ nics_script_result.stdout }}"
+
+# ─── Play 2: Happy-path assembly ─────────────────────────────────────────────
+- name: Test hardware_details assembly with known-good inputs
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    hw_vendor: "Dell Inc."
+    hw_model: "PowerEdge XR8620t"
+    hw_idrac_version: "7.30.10.50"
+    hw_memory:
+      total_gb: 256
+      slots_used: 8
+      dimm_size_gb: 32
+      speed_mts: "4400 MT/s"
+    hw_storage:
+      - count: 2
+        model: "Dell NVMe PE8010 RI M.2 960GB"
+        size: "894.3G"
+    hw_nics:
+      - count: 2
+        vendor: "Intel"
+        model: "Ethernet Controller E810-C for SFP"
+
+  tasks:
+    - name: Assemble hardware_details fact (mirrors main.yml assembly task)
+      ansible.builtin.set_fact:
+        hardware_details_happy:
+          vendor: "{{ hw_vendor | default('N/A') }}"
+          model: "{{ hw_model | default('N/A') }}"
+          idrac_version: "{{ hw_idrac_version | default('N/A') }}"
+          memory: "{{ hw_memory | default({}) }}"
+          storage: "{{ hw_storage | default([]) }}"
+          nics: "{{ hw_nics | default([]) }}"
+
+    - name: Save happy-path hardware_details to results file
+      ansible.builtin.copy:
+        content: "{{ hardware_details_happy | to_nice_json }}"
+        dest: /tmp/molecule-hardware-details/results/hardware_details_happy.json
+        mode: '0644'
+
+    - name: Display assembled hardware_details
+      ansible.builtin.debug:
+        var: hardware_details_happy
+
+# ─── Play 3: Degradation (full role with invalid cluster credentials) ─────────
+- name: Test hardware_details graceful degradation when cluster is unreachable
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run hardware_details role with invalid cluster credentials
+      ansible.builtin.include_role:
+        name: hardware_details
+      vars:
+        mcd_pod: "nonexistent-pod-for-molecule"
+        spoke_kubeconfig: "/tmp/nonexistent-kubeconfig"
+        bmc_ip: ""
+        bmc_user: ""
+        bmc_pass: ""
+
+    - name: Save degraded hardware_details to results file
+      ansible.builtin.copy:
+        content: "{{ hardware_details | to_nice_json }}"
+        dest: /tmp/molecule-hardware-details/results/hardware_details_degraded.json
+        mode: '0644'
+
+    - name: Display degraded hardware_details
+      ansible.builtin.debug:
+        var: hardware_details

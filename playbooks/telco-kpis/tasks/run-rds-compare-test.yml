@@ -83,7 +83,7 @@
 - name: Run kubectl-cluster_compare in podman container
   containers.podman.podman_container:
     name: telco-kpis-rds-compare-{{ spoke_cluster }}
-    image: telco-kpis-test-runner:latest
+    image: "{{ telco_kpis_test_runner_image }}"
     state: started
     detach: false
     rm: true
@@ -94,6 +94,7 @@
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ reference_repo_path }}:/workspace/reference:ro,Z"
       - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+      - "/tmp/telco-kpis-ca-bundle.pem:/etc/pki/tls/certs/ca-bundle.crt:ro,Z"
   register: compare_result
   failed_when: false
   changed_when: false

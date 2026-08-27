@@ -1,0 +1,46 @@
+---
+# Generic test runner for ztp_deployment_timeline. Not meant to be run on its
+# own - see README.md. Pass a fixture from cases/ via -e "@cases/<name>.yml".
+- name: Unit test ztp_deployment_timeline role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    expected_facts: {}
+    expected_undefined_facts: []
+
+  tasks:
+    - name: Run role under test
+      ansible.builtin.include_role:
+        name: ztp_deployment_timeline
+
+    - name: Assert expected facts match actual values
+      ansible.builtin.assert:
+        that:
+          - (lookup('vars', item.key, default='UNDEFINED')) | string == item.value | string
+        fail_msg: >-
+          {{ item.key }}: expected '{{ item.value }}', got
+          '{{ lookup('vars', item.key, default='UNDEFINED') }}'
+        success_msg: "{{ item.key }} == {{ item.value }}"
+      loop: "{{ expected_facts | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Assert facts that should be unset are unset
+      ansible.builtin.assert:
+        that:
+          - lookup('varnames', '^' + item + '$') | length == 0
+        fail_msg: "{{ item }} was expected to be unset but got '{{ lookup('vars', item, default='') }}'"
+        success_msg: "{{ item }} is unset as expected"
+      loop: "{{ expected_undefined_facts }}"
+
+    - name: Assert timeline event count
+      ansible.builtin.assert:
+        that: ztp_deployment_timeline_events | length == expected_events_count
+        fail_msg: >-
+          expected {{ expected_events_count }} events, got
+          {{ ztp_deployment_timeline_events | length }}
+          ({{ ztp_deployment_timeline_events | map(attribute='event') | list }})
+        success_msg: "event count == {{ expected_events_count }}"
+      when: expected_events_count is defined

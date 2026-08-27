@@ -1,0 +1,59 @@
+- name: Wait until system installation is completed
+  ansible.builtin.wait_for_connection:
+    delay: 360
+    sleep: 10
+    timeout: 7200
+  notify:
+    - Remove installation ISO
+
+- name: Get system rpm from repository
+  ansible.builtin.get_url:
+    url: "{{ system_rpm_link }}"
+    dest: "{{ system_rpm_path }}"
+    checksum: "sha256:{{ system_rpm_sha256 }}"
+    force: false
+    mode: "0640"
+
+- name: Install system rpm
+  ansible.builtin.dnf:
+    name: "{{ system_rpm_path }}"
+    state: present
+    # This RPM is not signed
+    disable_gpg_check: true
+
+- name: Activate OS
+  ansible.builtin.command:
+    "{{ activate_system_cmd }}"
+  changed_when: false
+
+- name: "Deploy user {{ hostvars[inventory_hostname].ansible_user }}"
+  ansible.builtin.user:
+    name: "{{ hostvars[inventory_hostname].ansible_user }}"
+    create_home: true
+    groups: wheel
+    password: "{{ hostvars[inventory_hostname].ansible_password | password_hash('sha512') }}"
+    state: present
+
+- name: Set passwordless sudo
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers.d/{{ hostvars[inventory_hostname].ansible_user }}
+    line: "{{ hostvars[inventory_hostname].ansible_user }} ALL=(ALL) NOPASSWD: ALL"
+    mode: "0640"
+    create: true
+
+- name: Remove cloud-init default sshd config
+  ansible.builtin.file:
+    path: "/etc/ssh/sshd_config.d/50-cloud-init.conf"
+    state: absent
+
+- name: Restart SSH daemon
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted
+
+- name: Run partprobe to update kernel partition table
+  ansible.builtin.command:
+    cmd: partprobe
+  changed_when: true
+  notify:
+    - Remove key file

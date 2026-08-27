@@ -21,7 +21,16 @@ gitea_image: "docker.io/gitea/gitea:latest"
 gitea_api_base: "{{ gitea_root_url }}api/v1"
 gitea_install_url: "{{ gitea_root_url }}"
 
-# Development mode flag (passed from playbook)
+# Publish mode: prod | dev-bastion | dev-hypervisor
+# prod: publish to external report_repo_url
+# dev-bastion: deploy local Gitea on bastion
+# dev-hypervisor: deploy Gitea on hypervisor (shared across all bastions)
+report_publish_mode: "prod"
+
+# Hypervisor inventory hostname (dev-hypervisor mode only)
+gitea_hypervisor_host: ""
+
+# Legacy flag kept for backward compatibility (unused internally)
 development_mode: false
 
 # Repository retention policy

@@ -12,16 +12,17 @@
 # Usage:
 #   ansible-playbook playbooks/telco-kpis/mirror-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
-#     --extra-vars "images='[{\"source\":\"quay.io/org/image:tag\",\"dest\":\"namespace/image:tag\"}]'"
+#     --extra-vars "images_b64=$(echo '[{"source":"quay.io/org/image:tag","dest":"namespace/image:tag"}]' | base64 -w0)"
 #
 #   # With pull secret
 #   ansible-playbook playbooks/telco-kpis/mirror-images.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
-#     --extra-vars "images='[...]' pull_secret_string=$(cat ~/.docker/config.json | base64 -w0)"
+#     --extra-vars "images_b64=$(echo '[...]' | base64 -w0) pull_secret_string=$(cat ~/.docker/config.json | base64 -w0)"
 #
 # Required variables:
-#   images: List of image mappings with 'source' and 'dest' keys
-#     Example: [{"source": "quay.io/org/image:tag", "dest": "namespace/image:tag"}]
+#   images_b64: Base64-encoded JSON list of image mappings with 'source' and 'dest' keys.
+#     Encoding avoids shell quoting issues when passed via --extra-vars.
+#     Example: echo '[{"source": "quay.io/org/image:tag", "dest": "namespace/image:tag"}]' | base64 -w0
 #
 # Optional variables:
 #   registry_host: Target registry hostname (default: bastion FQDN)
@@ -40,7 +41,7 @@
       no_log: "{{ ansible_verbosity < 3 }}"
       vars:
         container_image_mirror_operation: mirror
-        container_image_mirror_images: "{{ images }}"
+        container_image_mirror_images: "{{ images_b64 | b64decode | from_json }}"
         container_image_mirror_registry_host: "{{ registry_host | default(ansible_fqdn) }}"
         container_image_mirror_registry_port: "{{ registry_port | default(5000) }}"
         container_image_mirror_registry_namespace: "{{ registry_namespace | default('') }}"

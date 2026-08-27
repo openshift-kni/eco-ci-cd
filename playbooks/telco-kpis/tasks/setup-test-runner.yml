@@ -1,49 +1,36 @@
 ---
 # Setup test-runner container image on bastion
-# This task ensures the telco-kpis-test-runner:latest container image exists on the bastion
+# Pulls {{ telco_kpis_test_runner_image }} when not already cached,
+# and writes the disconnected registry auth.json to a stable path for runtime mounting.
 #
 # Optional variables:
-#   - skip_rebuild_image: Skip rebuild if image exists (default: false, always rebuild)
-
-- name: Force remove existing test container if present
-  containers.podman.podman_container:
-    name: "telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
-    state: absent
-    force_delete: true
-  when: not (skip_rebuild_image | default(false) | bool)
-  failed_when: false
-
-- name: Remove existing test-runner image to ensure fresh credentials
-  containers.podman.podman_image:
-    name: telco-kpis-test-runner:latest
-    state: absent
-  when: not (skip_rebuild_image | default(false) | bool)
+#   - force_pull_test_runner_image: Force re-pull even if image is already cached (default: false)
 
 - name: Check if test-runner container image exists
   containers.podman.podman_image_info:
-    name: telco-kpis-test-runner:latest
+    name: "{{ telco_kpis_test_runner_image }}"
   register: image_info
   failed_when: false
 
 - name: Set image exists fact
   ansible.builtin.set_fact:
-    image_exists: "{{ image_info.images | length > 0 }}"
+    _image_exists: "{{ image_info.images | length > 0 }}"
 
-- name: Create temporary directory for Containerfile
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: .telco-kpis-build
-  register: build_dir
-  when: not image_exists
+- name: Remove cached image to force fresh pull
+  containers.podman.podman_image:
+    name: "{{ telco_kpis_test_runner_image }}"
+    state: absent
+  when:
+    - _image_exists
+    - force_pull_test_runner_image | default(false) | bool
 
-- name: Copy Containerfile to bastion
-  ansible.builtin.copy:
-    src: files/test-runner.containerfile
-    dest: "{{ build_dir.path }}/test-runner.containerfile"
-    mode: '0644'
-  when: not image_exists
+- name: Pull test-runner container image from Quay.io
+  containers.podman.podman_image:
+    name: "{{ telco_kpis_test_runner_image }}"
+    state: present
+  when: not _image_exists or (force_pull_test_runner_image | default(false) | bool)
 
-- name: Create auth.json with disconnected registry credentials for image build
+- name: Create disconnected registry auth.json for runtime volume mount
   ansible.builtin.copy:
     content: |
       {
@@ -53,45 +40,30 @@
           }
         }
       }
-    dest: "{{ build_dir.path }}/auth.json"
+    dest: /tmp/telco-kpis-disconnected-auth.json
     mode: '0600'
-  when: not image_exists
   no_log: "{{ ansible_verbosity < 3 }}"
 
-- name: Copy registry certificates to build directory
-  ansible.builtin.copy:
-    src: /etc/containers/certs.d/
-    dest: "{{ build_dir.path }}/certs.d/"
-    remote_src: true
-    mode: preserve
-  when: not image_exists
+- name: Build augmented CA bundle including ran-metrics certificate chain
+  ansible.builtin.shell: |
+    set -o pipefail
+    {
+      cat /etc/pki/tls/certs/ca-bundle.crt
+      openssl s_client -showcerts \
+        -connect pushgateway.ran-metrics.telco5g.corp.redhat.com:443 \
+        < /dev/null 2>/dev/null \
+        | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/'
+    } > /tmp/telco-kpis-ca-bundle.pem
+  args:
+    executable: /bin/bash
+  changed_when: false
 
-- name: Build test-runner container image
-  containers.podman.podman_image:
-    name: telco-kpis-test-runner
-    tag: latest
-    path: "{{ build_dir.path }}"
-    build:
-      file: "{{ build_dir.path }}/test-runner.containerfile"
-      format: oci
-    state: build
-  register: build_result
-  when: not image_exists
-  async: 600
-  poll: 10
-
-- name: Cleanup build directory
-  ansible.builtin.file:
-    path: "{{ build_dir.path }}"
-    state: absent
-  when: not image_exists
-
-- name: Verify container image was built successfully
+- name: Verify container image is available
   containers.podman.podman_image_info:
-    name: telco-kpis-test-runner:latest
+    name: "{{ telco_kpis_test_runner_image }}"
   register: image_verify
   failed_when: image_verify.images | length == 0
 
 - name: Display success message
   ansible.builtin.debug:
-    msg: "Container image telco-kpis-test-runner:latest is ready"
+    msg: "Container image {{ telco_kpis_test_runner_image }} is ready"

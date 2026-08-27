@@ -1,0 +1,40 @@
+---
+- name: Render storage collection script on bastion
+  ansible.builtin.template:
+    src: collect_storage.sh.j2
+    dest: /tmp/collect_storage_hw.py
+    mode: '0700'
+
+- name: Collect storage info via MCD pod
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec -i {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs python3 - < /tmp/collect_storage_hw.py
+  register: storage_script_result
+  failed_when: false
+  changed_when: false
+  timeout: 30
+
+- name: Parse storage JSON result
+  block:
+    - name: Set hw_storage from script output
+      ansible.builtin.set_fact:
+        hw_storage: "{{ storage_script_result.stdout | trim | from_json }}"
+      when:
+        - storage_script_result.stdout | default('') | trim | length > 0
+  rescue:
+    - name: Set default storage on parse failure
+      ansible.builtin.set_fact:
+        hw_storage: []
+
+- name: Set default storage info if collection produced no output
+  ansible.builtin.set_fact:
+    hw_storage: []
+  when: hw_storage is not defined
+
+- name: Remove storage collection script from bastion
+  ansible.builtin.file:
+    path: /tmp/collect_storage_hw.py
+    state: absent

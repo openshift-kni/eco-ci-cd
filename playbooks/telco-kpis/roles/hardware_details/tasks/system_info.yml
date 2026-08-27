@@ -1,0 +1,88 @@
+---
+- name: Get system vendor and model via dmidecode -t 1
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} \
+      -n openshift-machine-config-operator \
+      exec {{ mcd_pod }} \
+      -c machine-config-daemon \
+      -- chroot /rootfs dmidecode -t 1
+  register: dmidecode_system_result
+  failed_when: false
+  changed_when: false
+  timeout: 30
+
+- name: Parse vendor from dmidecode system info
+  ansible.builtin.set_fact:
+    hw_vendor: >-
+      {{ (dmidecode_system_result.stdout | default(''))
+         | regex_search('Manufacturer:\s+(.+)', '\1')
+         | first | default('N/A', true) | trim }}
+  when: dmidecode_system_result.stdout | default('') | length > 0
+
+- name: Parse product model from dmidecode system info
+  ansible.builtin.set_fact:
+    hw_model: >-
+      {{ (dmidecode_system_result.stdout | default(''))
+         | regex_search('Product Name:\s+(.+)', '\1')
+         | first | default('N/A', true) | trim }}
+  when: dmidecode_system_result.stdout | default('') | length > 0
+
+- name: Set default vendor and model if dmidecode gave no output
+  ansible.builtin.set_fact:
+    hw_vendor: "N/A"
+    hw_model: "N/A"
+  when: dmidecode_system_result.stdout | default('') | length == 0
+
+- name: Query Redfish Managers list for iDRAC firmware version
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Managers"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+  register: redfish_managers_hw
+  when:
+    - bmc_ip | default('') != ''
+    - bmc_user | default('') != ''
+    - bmc_pass | default('') != ''
+  no_log: "{{ ansible_verbosity < 3 }}"
+  failed_when: false
+
+- name: Resolve first Redfish Manager member URL
+  ansible.builtin.set_fact:
+    _hw_manager_url: "{{ redfish_managers_hw.json.Members[0]['@odata.id'] }}"
+  when:
+    - redfish_managers_hw is defined
+    - redfish_managers_hw.json is defined
+    - redfish_managers_hw.json.Members is defined
+    - redfish_managers_hw.json.Members | length > 0
+
+- name: Query Redfish Manager details for firmware version
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}{{ _hw_manager_url }}"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+  register: redfish_manager_detail_hw
+  when:
+    - _hw_manager_url is defined
+    - bmc_ip | default('') != ''
+  no_log: "{{ ansible_verbosity < 3 }}"
+  failed_when: false
+
+- name: Extract iDRAC firmware version from Redfish Manager
+  ansible.builtin.set_fact:
+    hw_idrac_version: "{{ redfish_manager_detail_hw.json.FirmwareVersion | default('N/A') }}"
+  when:
+    - redfish_manager_detail_hw is defined
+    - redfish_manager_detail_hw.json is defined
+
+- name: Set iDRAC version to N/A if Redfish was unavailable
+  ansible.builtin.set_fact:
+    hw_idrac_version: "N/A"
+  when: hw_idrac_version is not defined

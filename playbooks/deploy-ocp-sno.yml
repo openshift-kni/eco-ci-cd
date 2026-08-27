@@ -37,6 +37,13 @@
 # - share_http_iso_port, dest_iso_dir, repo_root_path
 # - extra_manifests_folder: folder containing extra manifests for Day0 installation
 # - disable_insights (boolean; default is false): removes cloud.openshift.com from pull secret to opt out of remote health reporting
+# - extra_virt_install_options: additional flags passed to virt-install when creating VMs
+#     (e.g., "--boot hd,cdrom" to control UEFI boot order)
+#     Caveat: this is a plain string, so only a SINGLE option is supported. When
+#     passed on the command line via `-e key=value`, ansible splits the value on
+#     whitespace, so the option must use the `--opt=value` form (equals sign, no
+#     space) to avoid truncation, e.g. `-e extra_virt_install_options=--boot=hd,cdrom`.
+#     A space-separated form like "--boot hd,cdrom" is truncated to "--boot".
 
 ## Roles Requirements
 # - ocp_version_facts
@@ -162,6 +169,7 @@
             mode: '0644'
 
         - name: Add registry credentials to pull secret
+          no_log: true
           ansible.builtin.set_fact:
             pull_secret: >-
               {{
@@ -658,7 +666,7 @@
 
     - name: Create VMs
       vars:
-        additional_virt_install_options: "--boot cdrom,hd"
+        additional_virt_install_options: "{{ extra_virt_install_options | default('') }}"
       ansible.builtin.import_role:
         name: redhatci.ocp.create_vms
 

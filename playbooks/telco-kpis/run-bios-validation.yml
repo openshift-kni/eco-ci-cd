@@ -2,14 +2,18 @@
 # BIOS validation test for Telco-KPIs spoke clusters
 # This is a helper playbook for validating BIOS settings, not a performance test
 #
-# Usage:
+# Usage (private repo - default):
 #   ansible-playbook run-bios-validation.yml \
 #     -e spoke_cluster=spree-02 \
 #     -e spoke_kubeconfig=/path/to/spoke/kubeconfig \
 #     -e version=4.21 \
-#     -e bios_profile_url=https://... \
+#     -e bios_profile_path=dell/bios-profile.yaml \
+#     -e bios_profile_branch=main \
 #     -e apply_fixes=false \
 #     -e reboot_after_apply=false
+#
+# Usage (public URL - no auth):
+#   ansible-playbook run-bios-validation.yml ... -e bios_profile_url=https://public-host/path/profile.yaml
 
 - name: Validate BIOS settings on spoke cluster
   hosts: bastion
@@ -44,13 +48,14 @@
         fail_msg: "version parameter is required"
         success_msg: "OCP version: {{ version }}"
 
-    - name: Validate bios_profile_url parameter
+    - name: Validate git_repo_token when bios_profile_url is not set
       ansible.builtin.assert:
         that:
-          - bios_profile_url is defined
-          - bios_profile_url | length > 0
-        fail_msg: "bios_profile_url parameter is required"
-        success_msg: "BIOS profile URL: {{ bios_profile_url }}"
+          - git_repo_token is defined
+          - git_repo_token | length > 0
+        fail_msg: "git_repo_token is required when bios_profile_url is not set (needed for GitLab API authentication)"
+        success_msg: "GitLab token provided"
+      when: bios_profile_url | default('') | length == 0
 
     - name: Execute BIOS validation tasks
       ansible.builtin.include_tasks: "tasks/run-bios-validation-test.yml"

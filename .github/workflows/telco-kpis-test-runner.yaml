@@ -1,0 +1,56 @@
+name: Build and push telco-kpis-test-runner
+
+# Builds and pushes the telco-kpis-test-runner container image to Quay.io
+# whenever playbooks/telco-kpis/files/test-runner.containerfile changes on main.
+#
+# On pull requests the image is built but not pushed (acts as a build validation).
+# On push to main or workflow_dispatch the image is built and pushed.
+#
+# Required repository secrets:
+#   QUAY_USERNAME  - Quay.io robot account username (e.g. telcov10n-ci+github_ci)
+#   QUAY_PASSWORD  - Quay.io robot account token
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'playbooks/telco-kpis/files/test-runner.containerfile'
+  pull_request:
+    paths:
+      - 'playbooks/telco-kpis/files/test-runner.containerfile'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    name: Build and push test-runner image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      IMAGE_REPO: quay.io/telcov10n-ci/telco-kpis-test-runner
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Log in to Quay.io
+        if: github.event_name != 'pull_request'
+        run: echo "${{ secrets.QUAY_PASSWORD }}" | podman login quay.io -u "${{ secrets.QUAY_USERNAME }}" --password-stdin
+
+      - name: Build image
+        run: |
+          podman build \
+            --file playbooks/telco-kpis/files/test-runner.containerfile \
+            --tag "${IMAGE_REPO}:latest" \
+            --tag "${IMAGE_REPO}:${GITHUB_SHA:0:8}" \
+            .
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        run: |
+          podman push "${IMAGE_REPO}:latest"
+          podman push "${IMAGE_REPO}:${GITHUB_SHA:0:8}"

@@ -167,6 +167,12 @@
         - Remove stopped containers
         - Remove reporter project dir
 
+    - name: Clear old Report Portal URL file before upload
+      ansible.builtin.file:
+        path: "/tmp/{{ report_portal_url_filename | default('.reportportal_url') }}"
+        state: absent
+      when: upload_to_report_portal | default(false) | bool
+
     - name: Run make upload-report-portal
       changed_when: true
       ansible.builtin.shell: |

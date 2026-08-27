@@ -1,0 +1,215 @@
+---
+# Molecule verify for hardware_details role
+- name: Verify hardware_details role
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    results_dir: /tmp/molecule-hardware-details/results
+
+  tasks:
+    # ── Load results written by converge.yml ──────────────────────────────────
+    - name: Load script result files
+      ansible.builtin.slurp:
+        src: "{{ results_dir }}/{{ item }}"
+      register: result_files
+      loop:
+        - memory.json
+        - storage.json
+        - nics.json
+        - hardware_details_happy.json
+        - hardware_details_degraded.json
+
+    - name: Parse result data
+      ansible.builtin.set_fact:
+        parsed_memory: "{{ (result_files.results[0].content | b64decode) | from_json }}"
+        parsed_storage: "{{ (result_files.results[1].content | b64decode) | from_json }}"
+        parsed_nics: "{{ (result_files.results[2].content | b64decode) | from_json }}"
+        hw_happy: "{{ (result_files.results[3].content | b64decode) | from_json }}"
+        hw_degraded: "{{ (result_files.results[4].content | b64decode) | from_json }}"
+
+    # ── Group 1: Memory script parsing ───────────────────────────────────────
+    - name: Verify memory script — total_gb
+      ansible.builtin.assert:
+        that: parsed_memory.total_gb | int == 256
+        fail_msg: "Expected total_gb=256, got {{ parsed_memory.total_gb }}"
+        success_msg: "memory total_gb=256 ✓"
+
+    - name: Verify memory script — slots_used
+      ansible.builtin.assert:
+        that: parsed_memory.slots_used | int == 8
+        fail_msg: "Expected slots_used=8, got {{ parsed_memory.slots_used }}"
+        success_msg: "memory slots_used=8 ✓"
+
+    - name: Verify memory script — dimm_size_gb
+      ansible.builtin.assert:
+        that: parsed_memory.dimm_size_gb | int == 32
+        fail_msg: "Expected dimm_size_gb=32, got {{ parsed_memory.dimm_size_gb }}"
+        success_msg: "memory dimm_size_gb=32 ✓"
+
+    - name: Verify memory script — speed_mts prefers Configured Memory Speed
+      ansible.builtin.assert:
+        that: parsed_memory.speed_mts == "4400 MT/s"
+        fail_msg: "Expected speed_mts='4400 MT/s' (Configured Memory Speed), got '{{ parsed_memory.speed_mts }}'"
+        success_msg: "memory speed_mts=4400 MT/s (Configured Memory Speed preferred) ✓"
+
+    # ── Group 2: Storage script parsing ──────────────────────────────────────
+    - name: Verify storage script — ROM device filtered, disks aggregated
+      ansible.builtin.assert:
+        that: parsed_storage | length == 1
+        fail_msg: "Expected 1 storage entry (ROM filtered), got {{ parsed_storage | length }}: {{ parsed_storage }}"
+        success_msg: "storage: 1 aggregated entry (ROM filtered) ✓"
+
+    - name: Verify storage script — disk count
+      ansible.builtin.assert:
+        that: parsed_storage[0].count | int == 2
+        fail_msg: "Expected count=2 for NVMe disks, got {{ parsed_storage[0].count }}"
+        success_msg: "storage count=2 ✓"
+
+    - name: Verify storage script — disk model
+      ansible.builtin.assert:
+        that: parsed_storage[0].model == "Dell NVMe PE8010 RI M.2 960GB"
+        fail_msg: "Expected 'Dell NVMe PE8010 RI M.2 960GB', got '{{ parsed_storage[0].model }}'"
+        success_msg: "storage model='Dell NVMe PE8010 RI M.2 960GB' ✓"
+
+    - name: Verify storage script — disk size
+      ansible.builtin.assert:
+        that: parsed_storage[0].size == "894.3G"
+        fail_msg: "Expected size='894.3G', got '{{ parsed_storage[0].size }}'"
+        success_msg: "storage size='894.3G' ✓"
+
+    # ── Group 3: NIC script parsing ───────────────────────────────────────────
+    - name: Verify NIC script — VF and non-Ethernet devices filtered, ports deduplicated
+      ansible.builtin.assert:
+        that: parsed_nics | length == 2
+        fail_msg: >-
+          Expected 2 NIC entries (Dell 1Gb + Intel E810, VF and NVMe filtered).
+          Got {{ parsed_nics | length }}: {{ parsed_nics }}
+        success_msg: "nics: 2 entries (VF + NVMe filtered) ✓"
+
+    - name: Set NIC lookup facts for assertions
+      ansible.builtin.set_fact:
+        nic_dell: "{{ parsed_nics | selectattr('vendor', 'equalto', 'Dell') | list | first | default({}) }}"
+        nic_intel: "{{ parsed_nics | selectattr('vendor', 'equalto', 'Intel') | list | first | default({}) }}"
+
+    - name: Verify NIC script — Dell 1Gb count
+      ansible.builtin.assert:
+        that:
+          - nic_dell | length > 0
+          - nic_dell.count | int == 1
+          - "'Ethernet 1Gb 2-port' in nic_dell.model"
+        fail_msg: "Dell 1Gb NIC entry wrong: {{ nic_dell }}"
+        success_msg: "Dell NIC count=1 model='{{ nic_dell.model }}' ✓"
+
+    - name: Verify NIC script — Intel E810-C count (2 ports, VF excluded)
+      ansible.builtin.assert:
+        that:
+          - nic_intel | length > 0
+          - nic_intel.count | int == 2
+          - "'E810-C for SFP' in nic_intel.model"
+          - "'Virtual Function' not in nic_intel.model"
+        fail_msg: "Intel E810 NIC entry wrong: {{ nic_intel }}"
+        success_msg: "Intel NIC count=2 model='{{ nic_intel.model }}' (VF excluded) ✓"
+
+    # ── Group 4: Happy-path assembly ──────────────────────────────────────────
+    - name: Verify happy-path — vendor
+      ansible.builtin.assert:
+        that: hw_happy.vendor == "Dell Inc."
+        fail_msg: "Expected vendor='Dell Inc.', got '{{ hw_happy.vendor }}'"
+        success_msg: "happy vendor='Dell Inc.' ✓"
+
+    - name: Verify happy-path — model
+      ansible.builtin.assert:
+        that: hw_happy.model == "PowerEdge XR8620t"
+        fail_msg: "Expected model='PowerEdge XR8620t', got '{{ hw_happy.model }}'"
+        success_msg: "happy model='PowerEdge XR8620t' ✓"
+
+    - name: Verify happy-path — idrac_version
+      ansible.builtin.assert:
+        that: hw_happy.idrac_version == "7.30.10.50"
+        fail_msg: "Expected idrac_version='7.30.10.50', got '{{ hw_happy.idrac_version }}'"
+        success_msg: "happy idrac_version='7.30.10.50' ✓"
+
+    - name: Verify happy-path — memory dict
+      ansible.builtin.assert:
+        that:
+          - hw_happy.memory.total_gb | int == 256
+          - hw_happy.memory.slots_used | int == 8
+          - hw_happy.memory.dimm_size_gb | int == 32
+          - hw_happy.memory.speed_mts == "4400 MT/s"
+        fail_msg: "Happy-path memory wrong: {{ hw_happy.memory }}"
+        success_msg: "happy memory=256 GB (8 x 32 GB 4400 MT/s) ✓"
+
+    - name: Verify happy-path — storage list
+      ansible.builtin.assert:
+        that:
+          - hw_happy.storage | length == 1
+          - hw_happy.storage[0].count | int == 2
+          - hw_happy.storage[0].model == "Dell NVMe PE8010 RI M.2 960GB"
+        fail_msg: "Happy-path storage wrong: {{ hw_happy.storage }}"
+        success_msg: "happy storage=[2 x Dell NVMe PE8010 RI M.2 960GB] ✓"
+
+    - name: Verify happy-path — nics list
+      ansible.builtin.assert:
+        that:
+          - hw_happy.nics | length == 1
+          - hw_happy.nics[0].count | int == 2
+          - hw_happy.nics[0].vendor == "Intel"
+        fail_msg: "Happy-path nics wrong: {{ hw_happy.nics }}"
+        success_msg: "happy nics=[2 x Intel E810] ✓"
+
+    # ── Group 5: Degradation (unreachable cluster) ────────────────────────────
+    - name: Verify degradation — vendor falls back to N/A
+      ansible.builtin.assert:
+        that: hw_degraded.vendor == "N/A"
+        fail_msg: "Expected vendor='N/A' on degradation, got '{{ hw_degraded.vendor }}'"
+        success_msg: "degraded vendor='N/A' ✓"
+
+    - name: Verify degradation — model falls back to N/A
+      ansible.builtin.assert:
+        that: hw_degraded.model == "N/A"
+        fail_msg: "Expected model='N/A' on degradation, got '{{ hw_degraded.model }}'"
+        success_msg: "degraded model='N/A' ✓"
+
+    - name: Verify degradation — idrac_version falls back to N/A
+      ansible.builtin.assert:
+        that: hw_degraded.idrac_version == "N/A"
+        fail_msg: "Expected idrac_version='N/A' on degradation, got '{{ hw_degraded.idrac_version }}'"
+        success_msg: "degraded idrac_version='N/A' ✓"
+
+    - name: Verify degradation — storage falls back to empty list
+      ansible.builtin.assert:
+        that: hw_degraded.storage == []
+        fail_msg: "Expected storage=[] on degradation, got {{ hw_degraded.storage }}"
+        success_msg: "degraded storage=[] ✓"
+
+    - name: Verify degradation — nics falls back to empty list
+      ansible.builtin.assert:
+        that: hw_degraded.nics == []
+        fail_msg: "Expected nics=[] on degradation, got {{ hw_degraded.nics }}"
+        success_msg: "degraded nics=[] ✓"
+
+    - name: Verify degradation — memory falls back to N/A dict
+      ansible.builtin.assert:
+        that:
+          - hw_degraded.memory.total_gb == "N/A"
+          - hw_degraded.memory.slots_used == "N/A"
+          - hw_degraded.memory.dimm_size_gb == "N/A"
+          - hw_degraded.memory.speed_mts == "N/A"
+        fail_msg: "Expected memory N/A dict on degradation, got {{ hw_degraded.memory }}"
+        success_msg: "degraded memory=N/A dict ✓"
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg:
+          - "==========================================="
+          - "✅ All hardware_details verifications passed"
+          - "==========================================="
+          - "Script parsing:"
+          - "  Memory: 256 GB (8 x 32 GB 4400 MT/s) ✓"
+          - "  Storage: 2 x Dell NVMe PE8010 RI M.2 960GB (ROM filtered) ✓"
+          - "  NICs: Dell count=1, Intel E810-C count=2 (VF + NVMe filtered) ✓"
+          - "Happy-path assembly: all fields correct ✓"
+          - "Degradation: N/A fallbacks for all fields ✓"
+          - "==========================================="

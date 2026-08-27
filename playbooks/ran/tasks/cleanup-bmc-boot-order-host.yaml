@@ -1,0 +1,114 @@
+---
+# Reorder UEFI boot order on a single BMC via iLO Redfish API.
+#
+# Moves iLO Virtual CD-ROM to the top and stale OS entries to the bottom,
+# so Ironic's virtual media boot override has a correct fallback order.
+#
+# Required variables:
+#   bmc_ip (loop var from caller)
+#   bmc_user, bmc_password
+
+- name: "Get current boot order | {{ bmc_ip }}"
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems/1"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 30
+  register: _bmc_system
+  no_log: true
+
+- name: "Store current boot order | {{ bmc_ip }}"
+  ansible.builtin.set_fact:
+    _bmc_current_boot_order: "{{ _bmc_system.json.Boot.BootOrder }}"
+
+- name: "Get boot options collection | {{ bmc_ip }}"
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems/1/BootOptions/"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 30
+  register: _bmc_boot_options_collection
+  no_log: true
+
+- name: "Get details for each boot option | {{ bmc_ip }}"
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}{{ item['@odata.id'] }}"
+    method: GET
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 30
+  loop: "{{ _bmc_boot_options_collection.json.Members }}"
+  loop_control:
+    label: "{{ item['@odata.id'] | basename }}"
+  register: _bmc_boot_option_details
+  no_log: true
+
+- name: "Display current boot options | {{ bmc_ip }}"
+  ansible.builtin.debug:
+    msg: "{{ item.json.BootOptionReference }} : {{ item.json.DisplayName }}"
+  loop: "{{ _bmc_boot_option_details.results }}"
+  loop_control:
+    label: "{{ item.json.BootOptionReference }}"
+
+- name: "Classify boot entries | {{ bmc_ip }}"
+  ansible.builtin.set_fact:
+    _bmc_virtual_media_refs: >-
+      {{ _bmc_boot_option_details.results
+         | map(attribute='json')
+         | selectattr('DisplayName', 'search', '(?i)iLO Virtual')
+         | map(attribute='BootOptionReference')
+         | list }}
+    _bmc_stale_os_refs: >-
+      {{ _bmc_boot_option_details.results
+         | map(attribute='json')
+         | selectattr('DisplayName', 'search', '(?i)Red Hat|CentOS')
+         | map(attribute='BootOptionReference')
+         | list }}
+
+- name: "Display classified entries | {{ bmc_ip }}"
+  ansible.builtin.debug:
+    msg:
+      virtual_media: "{{ _bmc_virtual_media_refs }}"
+      stale_os: "{{ _bmc_stale_os_refs }}"
+
+- name: "Compute new boot order | {{ bmc_ip }}"
+  ansible.builtin.set_fact:
+    _bmc_new_boot_order: >-
+      {{ _bmc_virtual_media_refs
+         + (_bmc_current_boot_order | difference(_bmc_virtual_media_refs) | difference(_bmc_stale_os_refs))
+         + _bmc_stale_os_refs }}
+
+- name: "Patch boot order (virtual media first, stale OS last) | {{ bmc_ip }}"
+  ansible.builtin.uri:
+    url: "https://{{ bmc_ip }}/redfish/v1/Systems/1"
+    method: PATCH
+    user: "{{ bmc_user }}"
+    password: "{{ bmc_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      Boot:
+        BootOrder: "{{ _bmc_new_boot_order }}"
+    timeout: 30
+    status_code: [200, 204]
+  when: _bmc_new_boot_order != _bmc_current_boot_order
+  no_log: true
+
+- name: "Boot order updated | {{ bmc_ip }}"
+  ansible.builtin.debug:
+    msg: "Boot order reordered: {{ _bmc_new_boot_order }}"
+  when: _bmc_new_boot_order != _bmc_current_boot_order
+
+- name: "Boot order already correct | {{ bmc_ip }}"
+  ansible.builtin.debug:
+    msg: "Boot order already has virtual media first — no change needed"
+  when: _bmc_new_boot_order == _bmc_current_boot_order

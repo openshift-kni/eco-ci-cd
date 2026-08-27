@@ -1,0 +1,74 @@
+---
+spoke_cluster: "test-spoke"
+hub_kubeconfig: "/fake/kubeconfig"
+
+clusterinstance_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        name: test-spoke
+      spec:
+        clusterName: test-spoke
+      status:
+        conditions:
+          - type: Provisioned
+            status: "True"
+            lastTransitionTime: "2026-01-01T00:05:00Z"
+            message: "done"
+
+managedcluster_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:01:00Z"
+        labels:
+          ztp-done: ""
+      status:
+        conditions:
+          - type: ManagedClusterConditionAvailable
+            status: "True"
+            lastTransitionTime: "2026-01-01T00:10:00Z"
+
+agentclusterinstall_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:02:00Z"
+      status:
+        conditions:
+          - type: Completed
+            status: "True"
+            lastTransitionTime: "2026-01-01T00:20:00Z"
+            message: "The installation has completed"
+
+imagebasedinstall_query:
+  resources: []
+
+talm_cgu_query:
+  resources:
+    - metadata:
+        name: test-spoke
+      status:
+        status:
+          completedAt: "2026-01-01T01:00:00Z"
+        conditions:
+          - type: Succeeded
+            status: "True"
+            lastTransitionTime: "2026-01-01T01:00:00Z"
+
+infraenv_query:
+  resources: []
+agents_query:
+  resources: []
+manifestworks_query:
+  resources: []
+policies_query:
+  resources: []
+
+expected_facts:
+  ztp_deployment_timeline_success: true
+  ztp_deployment_timeline_deployment_method: AI
+  ztp_deployment_timeline_start_time: "2026-01-01T00:00:00Z"
+  ztp_deployment_timeline_end_time: "2026-01-01T01:00:00Z"
+  ztp_deployment_timeline_duration_seconds: 3600
+  ztp_deployment_timeline_duration_formatted: "1h0m0s"
+
+expected_events_count: 9

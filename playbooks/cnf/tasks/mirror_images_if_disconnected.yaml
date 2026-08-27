@@ -1,6 +1,11 @@
 ---
+# Auto-detect disconnected mode by checking for single-stack IPv6 clusters.
+# Dual-stack clusters (2+ clusterNetwork entries) are NOT auto-detected —
+# pass cluster_disconnected=true via --extra-vars for those.
 - name: Detect cluster network IP family
-  when: cluster_info.resources[0].spec.clusterNetwork | length == 1
+  when:
+    - cluster_disconnected is not defined
+    - cluster_info.resources[0].spec.clusterNetwork | length == 1
   block:
     - name: Detect cluster network IP family
       ansible.builtin.set_fact:

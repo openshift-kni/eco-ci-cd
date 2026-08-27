@@ -21,3 +21,14 @@
     dest: "{{ artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}/{{ shared_artifact_dir_name }}/"
     remote_src: true
     mode: '0755'
+
+- name: Create junit-prefixed copy of XML report for Jenkins collection
+  ansible.builtin.copy:
+    src: "{{artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}/{{
+      shared_artifact_dir_name }}/{{ artifact_management_junit_source_pattern }}"
+    dest: "{{ artifact_management_shared_base }}/{{ artifact_management_spoke_cluster }}/{{
+      shared_artifact_dir_name }}/junit_{{ artifact_management_test_name }}_{{ artifact_management_spoke_cluster }}.xml"
+    remote_src: true
+    mode: '0644'
+  when: artifact_management_junit_source_pattern | length > 0
+  failed_when: false

@@ -1,0 +1,44 @@
+---
+spoke_cluster: "test-spoke"
+hub_kubeconfig: "/fake/kubeconfig"
+
+clusterinstance_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        name: test-spoke
+      spec:
+        clusterName: test-spoke
+      status:
+        conditions: []
+managedcluster_query:
+  resources:
+    - metadata:
+        creationTimestamp: "2026-01-01T00:00:05Z"
+        labels: {}
+      status:
+        conditions: []
+agentclusterinstall_query:
+  resources: []
+imagebasedinstall_query:
+  resources: []
+talm_cgu_query:
+  resources:
+    - metadata:
+        name: test-spoke
+      status:
+        status:
+          completedAt: "2026-01-01T00:00:45Z"
+        conditions: []
+infraenv_query:
+  resources: []
+agents_query:
+  resources: []
+manifestworks_query:
+  resources: []
+policies_query:
+  resources: []
+
+expected_facts:
+  ztp_deployment_timeline_duration_seconds: 45
+  ztp_deployment_timeline_duration_formatted: "0h0m45s"

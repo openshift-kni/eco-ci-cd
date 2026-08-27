@@ -1,0 +1,180 @@
+## Disclaimer
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for Bare-Metal Bastion Deployment Using Kickstart and iDRAC/iLO Boot
+
+## Overview
+# This playbook automates the deployment of a bastion host on a bare-metal server
+# using a Kickstart-enabled ISO and iDRAC/iLO virtual-media boot. After the OS
+# install completes, it activates the system and applies bastion configuration
+# (SSH keys, packages, internal registry, oc-mirror).
+#
+# Note: The executor host must already be installed and reachable over SSH.
+# It builds the Kickstart ISO and serves it over HTTP. The bastion is the
+# bare-metal target and is provisioned from scratch.
+
+## Prerequisites
+# - Ansible 2.10+ installed on the control node.
+# - Executor host accessible via SSH.
+# - Bastion BMC (iDRAC/iLO) configured and reachable from the control node.
+# - Bastion BMC must be able to fetch the ISO from executor:8888.
+# - Ensure the `passlib` and `community.general` collections are installed.
+
+## Roles Requirements
+# The playbook uses multiple roles:
+# - kickstart_iso: Prepares the Kickstart-enabled ISO on the executor.
+# - redhatci.ocp.setup_http_store: Serves the ISO from the executor over HTTP.
+# - redhatci.ocp.boot_iso: Boots the bastion from BMC using the hosted ISO.
+# - registry_gui_deploy: Deploys the internal container registry on the bastion.
+
+## Variables Used by Playbook
+# Please note: For `kickstart_iso` variables, refer to the `kickstart_iso` README.
+# extra-vars:
+#   location: tlv                                         # Lab location: rdu or tlv (selects the ISO mirror)
+
+# all:
+#   activate_system_cmd: active-bin                       # Command to activate the system
+#   ansible_become_password: "become_password"            # Password for becoming root (BECOME PASSWORD)
+#   ansible_password: "pa$$word"                          # SSH password for Ansible user
+#   ansible_ssh_private_key: 'ssh-key'                    # Private SSH key content for the bastion user
+#   ansible_user: user                                    # SSH username created by Kickstart
+#   bmc_password: 'pa$$word'                              # Password for BMC (Baseboard Management Controller)
+#   bmc_user: 'user'                                      # Username for BMC authentication
+#   ssh_public_key: 'public_ssh_key'                      # Public SSH key for authentication after installation
+#   system_rpm_link: http://example.rpm                   # URL to the RPM package used for system activation
+#   system_rpm_sha256: 'deadbeef...'                      # sha256 of the artifact at system_rpm_link
+#   ca_update_link: https://example/ca.crt                # URL to the CA certificate to trust
+#   ca_update_sha256: 'deadbeef...'                       # sha256 of the artifact at ca_update_link
+
+# executor:
+#   ansible_host: 10.1.1.2                                # IP address of the executor (ISO build and HTTP store)
+
+# bastion:
+#   ansible_host: 10.1.1.1                                # IP address assigned to the bastion by Kickstart
+#   bmc_address: BMC_ADDRESS                              # BMC address of the bastion
+#   net_config: |-
+#     interface_name: "eth0"                              # Install NIC used in the Kickstart network config
+#     hostname: "bastion.example.com"                     # Hostname of the bastion
+#     ip: "{{ ansible_host }}"                            # IP address of the bastion (matches ansible_host)
+#     mask: "255.255.255.0"                               # Subnet mask
+#     gw: "10.1.1.254"                                    # Gateway address
+#     dns: "10.1.1.254"                                   # DNS server address
+#   timezone: "America/Toronto"                           # Timezone applied in the Kickstart file
+#   vendor: "HPE"                                         # BMC vendor (HPE or Dell)
+
+# bastions:
+#   dest_iso_dir: /tmp/                                   # Working directory for ISO files on the executor
+#   system_iso_rdu_link: http://Link-to-rdu-iso-file.iso  # RHEL ISO URL when location=rdu
+#   system_iso_tlv_link: http://link-to-tlv-iso-file.iso  # RHEL ISO URL when location=tlv
+#   golang_pkg: go1.24.2.linux-amd64.tar.gz               # Go archive filename installed on the bastion
+#   golang_pkg_sha256: 'deadbeef...'                      # sha256 of https://go.dev/dl/{{ golang_pkg }}
+#   brew_repo: https://download.repo/brew.repo            # rcm-tools / brew yum repo URL
+
+## Playbook Workflow
+# 1. Kickstart ISO Creation (executor):
+#    - The `kickstart_iso` role generates a Kickstart-enabled ISO using
+#      the bastion network, timezone, and credentials.
+#    - The ISO is hosted on the executor HTTP store (port 8888).
+#
+# 2. Bare-Metal Boot (bastion BMC):
+#    - `boot_iso` attaches the executor-hosted ISO via iDRAC/iLO and boots it.
+#    - SSH is temporarily pointed at the executor so Ansible can run while
+#      the bastion OS is not yet installed, then restored afterward.
+#
+# 3. Initial System Setup (bastion):
+#    - Waits for Kickstart to finish and the host to become reachable.
+#    - Installs the system RPM, activates the OS, and configures sudo/SSH.
+#
+# 4. Bastion Setup:
+#    - Configures SSH keys, chrony, CA trust, and required packages.
+#    - Deploys the internal registry and installs oc-mirror.
+
+## Running the Playbook
+# Ensure that host_vars and group_vars are properly installed.
+# Pass location so the executor downloads the ISO from the local mirror:
+# ansible-playbook playbooks/infra/deploy-bm-bastion.yml \
+#   -i ./inventories/infra/deploy-bm-bastion.yml \
+#   --extra-vars location=tlv
+---
+- name: Create a Kickstart-enabled ISO
+  hosts: executor
+  gather_facts: true
+  vars:
+    iso_mount_path: "{{ dest_iso_dir }}/mount"
+    os_install_path: "{{ dest_iso_dir }}/os-install"
+    location: rdu
+    system_iso_link: "{{ system_iso_rdu_link if location == 'rdu' else system_iso_tlv_link }}"
+    http_store_port: "8888"
+  tasks:
+
+    - name: Include create-kickstart tasks
+      ansible.builtin.include_tasks:
+        file: tasks/create-kickstart.yml
+
+- name: Deploy Bare-Metal
+  hosts: bastion
+  gather_facts: false
+  become: true
+  vars:
+    system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
+    http_store_port: "8888"
+  tasks:
+
+    - name: Boot BM using pre-configured ISO
+      block:
+        - name: Redirect SSH to executor for boot_iso
+          ansible.builtin.set_fact:
+            original_ansible_host: "{{ ansible_host }}"
+            ansible_host: "{{ hostvars['executor']['ansible_host'] }}"
+
+        - name: Boot BM using pre-configured ISO
+          ansible.builtin.import_role:
+            name: redhatci.ocp.boot_iso
+          vars:
+            boot_iso_url: >-
+              http://{{ hostvars['executor']['ansible_host'] }}:{{ http_store_port }}/{{ hostvars['executor']['iso_name'] }}
+
+      always:
+        - name: Restore bastion connection IP
+          ansible.builtin.set_fact:
+            ansible_host: "{{ original_ansible_host | default(ansible_host) }}"
+
+- name: Initial system setup
+  hosts: bastion
+  gather_facts: false
+  become: true
+  vars:
+    system_rpm_path: "/tmp/{{ system_rpm_link | basename }}"
+
+  tasks:
+    - name: Include executor tasks
+      ansible.builtin.include_tasks:
+        file: tasks/initial-system-setup.yml
+
+  handlers:
+
+    - name: Remove key file
+      failed_when: false
+      delegate_to: localhost
+      no_log: true
+      ansible.builtin.file:
+        state: absent
+        path: "/tmp/private_key.pem"
+
+- name: Setup bastion host
+  hosts: bastion
+  gather_facts: true
+  environment:
+    REGISTRY_AUTH_FILE: /etc/containers/auth.json
+
+  tasks:
+    - name: Include executor tasks
+      ansible.builtin.include_tasks:
+        file: tasks/setup-bastion.yml
+
+  handlers:
+    - name: Include executor handlers
+      ansible.builtin.import_tasks:
+        file: handlers/bastion-handlers.yml

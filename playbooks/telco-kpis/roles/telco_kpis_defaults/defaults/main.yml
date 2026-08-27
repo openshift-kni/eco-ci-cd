@@ -13,7 +13,7 @@ telco_kpis_telco_reference_repo: "https://github.com/openshift-kni/telco-referen
 telco_kpis_test_scripts_repo: "https://gitlab.cee.redhat.com/ccardeno/telco-kpis-test-local-scripts.git"
 
 # Container Images
-telco_kpis_test_runner_image: "telco-kpis-test-runner:latest"
+telco_kpis_test_runner_image: "quay.io/telcov10n-ci/telco-kpis-test-runner:latest"
 telco_kpis_dpdk_testpmd_image: "quay.io/container-perf-tools/dpdk-testpmd"
 
 # OpenShift Namespaces

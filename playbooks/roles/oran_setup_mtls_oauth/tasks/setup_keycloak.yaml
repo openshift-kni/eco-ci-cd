@@ -1,0 +1,54 @@
+- name: Write pull secret for image mirroring
+  ansible.builtin.copy:
+    content: "{{ pull_secret_string | b64decode }}"
+    dest: /tmp/oran-pull-secret.json
+    mode: "0600"
+  no_log: true
+
+- name: Mirror postgres image
+  ansible.builtin.shell: |
+    oc image mirror --registry-config /tmp/oran-pull-secret.json --insecure \
+      {{ oran_postgres_image }} {{ oran_postgres_image_mirrored }}
+  changed_when: true
+
+- name: Create temp directory for templates
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: keycloak-
+  register: keycloak_tmp_dir
+
+- name: Create template for keycloak-postgres
+  ansible.builtin.template:
+    src: keycloak-postgres.yaml.j2
+    dest: "{{ keycloak_tmp_dir.path }}/keycloak-postgres.yaml"
+    mode: 0644
+
+# no_log because the rendered manifest embeds the realm export (client secrets +
+# realm signing keys). oran_realm_json is loaded/derived in tasks/main.yaml.
+- name: Create template for keycloak
+  ansible.builtin.template:
+    src: keycloak.yaml.j2
+    dest: "{{ keycloak_tmp_dir.path }}/keycloak.yaml"
+    mode: 0644
+  no_log: true
+
+- name: Apply templates for keycloak
+  ansible.builtin.shell: |
+    oc apply -f {{ keycloak_tmp_dir.path }}/keycloak-postgres.yaml && \
+    oc apply -f {{ keycloak_tmp_dir.path }}/keycloak.yaml
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  register: apply_status
+  changed_when: "'created' in apply_status.stdout or 'configured' in apply_status.stdout"
+
+- name: Wait for realm import to be ready
+  ansible.builtin.shell: |
+    oc wait --timeout=30m --for=condition=Done=true keycloakrealmimport -n rhbk-operator oran-realm-import
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: false
+
+- name: Clean up temp directory
+  ansible.builtin.file:
+    path: "{{ keycloak_tmp_dir.path }}"
+    state: absent

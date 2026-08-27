@@ -1,0 +1,219 @@
+---
+# This playbook applies the O-RAN specific GitOps (ArgoCD) configuration on the hub
+# cluster. It is the O-RAN counterpart of deploy-spoke-ztp.yml: instead of deploying a
+# spoke via ZTP siteconfigs/policygentemplates, it repoints the ArgoCD "clusters" and
+# "policies" applications at the O-RAN clustertemplates/policytemplates and whitelists
+# the O-RAN CRDs so the spoke can later be provisioned from within the tests
+# (via ProvisioningRequest), not by CI.
+#
+# Ported from the ocp-edge linchpin role deploy-gitops-du/tasks/setup_for_oran.yaml.
+#
+# Prerequisites:
+#   - hub-sno-configure-kustomize-plugin.yml must be run first to extract the ZTP
+#     ArgoCD artifacts to {{ ztp_workdir_out_path }}/argocd/deployment
+#   - OpenShift GitOps operator installed and configured (hub-sno-configure-gitops.yml)
+#   - SSH access to bastion node
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/hub-sno-configure-oran-gitops.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig \
+#                   oran_clusters_repo_url=https://gitlab.example.com/group/ztp.git \
+#                   oran_clusters_repo_branch=oran-4.22 \
+#                   oran_policies_repo_url=https://gitlab.example.com/group/ztp.git \
+#                   oran_policies_repo_branch=oran-4.22"
+#
+# Required variables:
+#   kubeconfig: Path to kubeconfig file for hub cluster authentication
+#   oran_clusters_repo_url: Git repository URL hosting the O-RAN clustertemplates
+#   oran_clusters_repo_branch: Git branch/revision for the clustertemplates
+#   oran_policies_repo_url: Git repository URL hosting the O-RAN policytemplates
+#   oran_policies_repo_branch: Git branch/revision for the policytemplates
+#
+# Optional variables:
+#   oran_clusters_repo_path: ArgoCD source path for clusters app (default: clustertemplates)
+#   oran_policies_repo_path: ArgoCD source path for policies app (default: policytemplates)
+
+- name: Configure hub cluster ArgoCD for O-RAN provisioning
+  hosts: bastion
+  gather_facts: false
+  become: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+    KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    ztp_workdir_path: "/tmp/ztp-workdir"
+    ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"
+    argocd_deployment_path: "{{ ztp_workdir_out_path }}/argocd/deployment"
+    openshift_gitops_namespace: "openshift-gitops"
+    oran_clusters_repo_path: "clustertemplates"
+    oran_policies_repo_path: "policytemplates"
+    # Default policies repo to the clusters repo unless overridden.
+    oran_policies_repo_url: "{{ oran_clusters_repo_url }}"
+    oran_policies_repo_branch: "{{ oran_clusters_repo_branch }}"
+
+  tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - oran_clusters_repo_url is defined
+          - oran_clusters_repo_url | length > 0
+          - oran_clusters_repo_branch is defined
+          - oran_clusters_repo_branch | length > 0
+        fail_msg: |
+          Required variables must be defined:
+            - kubeconfig: Path to hub kubeconfig
+            - oran_clusters_repo_url: Git repo URL for the O-RAN clustertemplates
+            - oran_clusters_repo_branch: Git branch for the O-RAN clustertemplates
+        success_msg: "All required variables are defined"
+
+    - name: Cleanup existing ProvisioningRequest resources
+      ansible.builtin.command:
+        cmd: oc delete --timeout=10m --all provisioningrequest
+      register: pr_cleanup
+      changed_when: "'deleted' in pr_cleanup.stdout"
+      # ProvisioningRequest CRD may not exist yet on a fresh hub; that is not fatal.
+      failed_when:
+        - pr_cleanup.rc != 0
+        - "'the server doesn\\'t have a resource type' not in pr_cleanup.stderr"
+        - "'No resources found' not in pr_cleanup.stderr"
+
+    - name: Ensure ArgoCD deployment kustomization exists
+      ansible.builtin.stat:
+        path: "{{ argocd_deployment_path }}/kustomization.yaml"
+      register: deployment_kustomize_stat
+
+    - name: Fail if ArgoCD deployment kustomization is missing
+      ansible.builtin.fail:
+        msg: |
+          {{ argocd_deployment_path }}/kustomization.yaml not found.
+          Run hub-sno-configure-kustomize-plugin.yml first to extract the ZTP ArgoCD artifacts.
+      when: not deployment_kustomize_stat.stat.exists
+
+    - name: Add O-RAN patches to deployment kustomization
+      ansible.builtin.blockinfile:
+        path: "{{ argocd_deployment_path }}/kustomization.yaml"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - O-RAN"
+        insertafter: EOF
+        block: |
+          patches:
+            - patch: |-
+                - op: replace
+                  path: /spec/source
+                  value:
+                    path: {{ oran_clusters_repo_path }}
+                    repoURL: "{{ oran_clusters_repo_url }}"
+                    targetRevision: "{{ oran_clusters_repo_branch }}"
+                - op: add
+                  path: /spec/ignoreDifferences/-
+                  value:
+                    group: metal3.io
+                    jsonPointers:
+                    - /spec/preprovisioningNetworkDataName
+                    - /spec/online
+                    kind: BareMetalHost
+              target:
+                name: clusters
+                namespace: openshift-gitops
+            - patch: |-
+                - op: replace
+                  path: /spec/source
+                  value:
+                    path: {{ oran_policies_repo_path }}
+                    repoURL: "{{ oran_policies_repo_url }}"
+                    targetRevision: "{{ oran_policies_repo_branch }}"
+              target:
+                name: policies
+                namespace: openshift-gitops
+            - patch: |-
+                - op: add
+                  path: /spec/destinations/-
+                  value:
+                    namespace: 'sno*'
+                    server: '*'
+                - op: add
+                  path: /spec/destinations/-
+                  value:
+                    namespace: 'oran*'
+                    server: '*'
+              target:
+                name: policy-app-project
+                namespace: openshift-gitops
+            - patch: |-
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: metal3.io
+                    kind: BareMetalHost
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: clcm.openshift.io
+                    kind: ClusterTemplate
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: clcm.openshift.io
+                    kind: HardwarePlugin
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: clcm.openshift.io
+                    kind: HardwareTemplate
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: clcm.openshift.io
+                    kind: HardwareProfile
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: ocloud.openshift.io
+                    kind: Location
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: ocloud.openshift.io
+                    kind: OCloudSite
+                - op: add
+                  path: /spec/namespaceResourceWhitelist/-
+                  value:
+                    group: ocloud.openshift.io
+                    kind: ResourcePool
+              target:
+                name: ztp-app-project
+                namespace: openshift-gitops
+
+    - name: Display patched deployment kustomization
+      ansible.builtin.command:
+        cmd: "cat {{ argocd_deployment_path }}/kustomization.yaml"
+      register: patched_kustomization
+      changed_when: false
+
+    - name: Show patched deployment kustomization
+      ansible.builtin.debug:
+        msg: "{{ patched_kustomization.stdout_lines }}"
+
+    - name: Apply ArgoCD deployment kustomization
+      ansible.builtin.command:
+        cmd: oc apply -k {{ argocd_deployment_path }}
+      changed_when: true
+
+    - name: Wait for O-RAN ArgoCD apps to sync successfully
+      kubernetes.core.k8s_info:
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: "{{ item }}"
+        namespace: "{{ openshift_gitops_namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: app_status
+      until: >-
+        app_status.resources[0].status.sync.status | default('') == 'Synced' and
+        app_status.resources[0].status.health.status | default('') in ['Healthy', 'Progressing']
+      loop:
+        - clusters
+        - policies
+      retries: 20
+      delay: 30

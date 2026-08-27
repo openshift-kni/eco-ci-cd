@@ -23,6 +23,7 @@
     starting_csv: "{{ operator_item.starting_csv | default('') }}"
     subscription_name: "{{ operator_item.subscription_name | default(undefined) }}"
     install_approval: "{{ operator_item.install_approval | default('Automatic') }}"
+    olm_operator_validate_install: "{{ operator_item.validate_install | default(true) }}"
 
 - name: Apply default operator configuration if exist
   kubernetes.core.k8s:

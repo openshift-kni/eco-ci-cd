@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-db-secret
+  namespace: rhbk-operator
+stringData:
+  POSTGRESQL_USER: testuser
+  POSTGRESQL_PASSWORD: testpassword
+  POSTGRESQL_DATABASE: keycloak
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-db
+  namespace: rhbk-operator
+spec:
+  serviceName: postgresql-db-service
+  selector:
+    matchLabels:
+      app: postgresql-db
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: postgresql-db
+    spec:
+      containers:
+        - name: postgresql-db
+          image: {{ oran_postgres_image_mirrored }}
+          volumeMounts:
+            - mountPath: /data
+              name: cache-volume
+          envFrom:
+            - secretRef:
+                name: postgresql-db-secret
+          env:
+            - name: PGDATA
+              value: /data/pgdata
+      volumes:
+        # emptyDir is intentional: all realm configuration lives in the
+        # KeycloakRealmImport CR (etcd-backed). If the pod restarts, the
+        # Keycloak operator re-imports the realm from the CR automatically —
+        # BUT only if the CR status is not already Done=True. If it is, delete
+        # the CR and recreate it to force a fresh import:
+        #   oc delete keycloakrealmimport oran-realm-import -n rhbk-operator
+        #   oc apply -f <original-realm-import.yaml>
+        - name: cache-volume
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-db
+  namespace: rhbk-operator
+spec:
+  selector:
+    app: postgresql-db
+  type: LoadBalancer
+  ports:
+  - port: 5432
+    targetPort: 5432

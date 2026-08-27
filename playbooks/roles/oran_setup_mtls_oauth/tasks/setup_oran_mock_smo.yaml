@@ -1,0 +1,37 @@
+- name: Mirror oran-mock-smo image
+  ansible.builtin.shell: |
+    oc image mirror --registry-config /tmp/oran-pull-secret.json --insecure \
+      {{ oran_mock_smo_image }} {{ oran_mock_smo_image_mirrored }}
+  changed_when: true
+
+- name: Create tempfile for template
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".yaml"
+  register: oran_mock_smo_template_file
+
+- name: Create template for oran-mock-smo
+  ansible.builtin.template:
+    src: oran-mock-smo.yaml.j2
+    dest: "{{ oran_mock_smo_template_file.path }}"
+    mode: 0644
+
+- name: Apply template for oran-mock-smo
+  ansible.builtin.shell: |
+    oc apply -f {{ oran_mock_smo_template_file.path }}
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  register: apply_status
+  changed_when: "'created' in apply_status.stdout or 'configured' in apply_status.stdout"
+
+- name: Wait for oran-mock-smo to be ready
+  ansible.builtin.shell: |
+    oc wait --timeout=1m --for=condition=Available=True deployment -n oran-smo oran-smo-server
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: false
+
+- name: Clean up template file
+  ansible.builtin.file:
+    path: "{{ oran_mock_smo_template_file.path }}"
+    state: absent

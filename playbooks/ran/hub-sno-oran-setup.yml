@@ -1,0 +1,79 @@
+---
+# This playbook performs the "special O-RAN setup" on the hub cluster: it
+# bootstraps the cluster PKI (root CA + cert-manager ClusterIssuer), stands up
+# Keycloak (OAuth) with the O-RAN realm, deploys the oran-mock-smo, and
+# configures the oran-o2ims Inventory CR with mTLS + OAuth so the O2IMS
+# operator registers with the mock SMO.
+#
+# It wraps the `oran_setup_mtls_oauth` role, computing the hub domain from the
+# cluster ingress so the role's templates render the correct
+# keycloak/smo/o2ims subdomains.
+#
+# Prerequisites:
+#   - Valid kubeconfig for the hub cluster
+#   - cert-manager and rhbk (Keycloak) operators installed
+#   - A reachable disconnected mirror registry (for postgres / mock-smo images)
+#
+# The o-cloud-manager operator does NOT need to be installed up front: the CI
+# step runs this playbook in two passes (skipping the o2ims Inventory in the
+# first), installs o-cloud-manager in between, then runs the second pass which
+# creates the Inventory CR. Standalone callers that want the Inventory in a
+# single run must install o-cloud-manager beforehand.
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/hub-sno-oran-setup.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig cluster_name=kni-qe-129"
+#
+# Required variables:
+#   kubeconfig:   Path to the hub cluster kubeconfig
+#   cluster_name: Hub cluster name (used as the root CA common name)
+#
+# Optional variables:
+#   oran_registry_url:      Override the disconnected mirror registry
+#                           (defaults to registry.<oran_hub_domain>:5000)
+#   oran_setup_r750_firmware: When true, download Dell R750 firmware
+#
+# What it does:
+#   1. Validates required variables are defined
+#   2. Reads the cluster ingress domain and derives oran_hub_domain
+#      (spec.domain with the leading "apps." stripped)
+#   3. Runs the oran_setup_mtls_oauth role
+
+- name: Special O-RAN setup on the hub cluster
+  hosts: bastion
+  gather_facts: false
+  become: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - cluster_name is defined
+        fail_msg: "Required variables 'kubeconfig' and 'cluster_name' must be defined"
+        success_msg: "All required variables are defined"
+
+    - name: Get the cluster ingress domain
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: cluster_ingress
+
+    - name: Derive the hub domain (ingress spec.domain without the apps. prefix)
+      ansible.builtin.set_fact:
+        oran_hub_domain: "{{ cluster_ingress.resources[0].spec.domain | regex_replace('^apps\\.', '') }}"
+
+    - name: Show the derived hub domain
+      ansible.builtin.debug:
+        msg: "Using oran_hub_domain={{ oran_hub_domain }}"
+
+    - name: Set mirror registry from inventory disconnected_registry_url
+      ansible.builtin.set_fact:
+        oran_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port | default('5000') }}"
+
+    - name: Run the O-RAN mTLS/OAuth setup role
+      ansible.builtin.include_role:
+        name: oran_setup_mtls_oauth

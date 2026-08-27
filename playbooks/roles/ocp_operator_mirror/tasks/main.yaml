@@ -26,6 +26,25 @@
       ocp_operator_mirror_fbc_image_base,
       ocp_operator_mirror_art_images_share
 
+# Configure registry.redhat.io (prod) as a fallback for registry.stage.redhat.io.
+# The role rewrites pre-GA FBC relatedImages to stage. For images that exist on
+# prod but not on stage (e.g. postgresql-18 in the o-cloud-manager bundle), this
+# transparently falls back to prod so mirroring doesn't fail.
+- name: Configure registry.redhat.io as fallback mirror for registry.stage.redhat.io
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/containers/registries.conf.d/stage-to-prod-fallback.conf
+    mode: "0644"
+    content: |
+      [[registry]]
+      prefix = "registry.stage.redhat.io"
+      location = "registry.stage.redhat.io"
+      insecure = false
+
+      [[registry.mirror]]
+      location = "registry.redhat.io"
+      insecure = false
+
 - name: Disable default OperatorHub sources
   when: ocp_operator_mirror_disable_default_sources | bool
   kubernetes.core.k8s:

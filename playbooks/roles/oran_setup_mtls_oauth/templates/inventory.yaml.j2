@@ -1,0 +1,29 @@
+apiVersion: ocloud.openshift.io/v1alpha1
+kind: Inventory
+metadata:
+  name: default
+  namespace: {{ oran_o2ims_deploy_namespace }}
+  annotations:
+    ocloud.openshift.io/register-on-restart: "true"
+spec:
+  cloudID: d110162a-df26-4025-8d85-7eecf746cd02
+  smo:
+    url: https://smo.apps.{{ oran_hub_domain }}
+    registrationEndpoint: /mock_smo/v1/o2ims_ocloud_observer
+    oauth:
+      url: https://keycloak.apps.{{ oran_hub_domain }}/realms/oran
+      clientSecretName: oauth-client-secrets
+      tokenEndpoint: /protocol/openid-connect/token
+      scopes:
+        - profile
+        - roles
+        - smo-audience
+        - role:ocloud-manager
+      usernameClaim: preferred_username
+      groupsClaim: roles
+    tls:
+      secretName: o2ims-client-tls-certificate
+  caBundleName: o2ims-trusted-ca-bundle
+  ingress:
+    tls:
+      secretName: o2ims-client-tls-certificate

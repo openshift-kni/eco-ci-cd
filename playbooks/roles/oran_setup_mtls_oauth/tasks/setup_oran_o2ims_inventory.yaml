@@ -1,0 +1,52 @@
+- name: Create temp directory for templates
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: oran-o2ims-
+  register: oran_o2ims_tmp_dir
+
+- name: Create template for oran-o2ims inventory
+  ansible.builtin.template:
+    src: inventory.yaml.j2
+    dest: "{{ oran_o2ims_tmp_dir.path }}/inventory.yaml"
+    mode: 0644
+
+- name: Create template for o2ims-client-cert
+  ansible.builtin.template:
+    src: o2ims-client-cert.yaml.j2
+    dest: "{{ oran_o2ims_tmp_dir.path }}/o2ims-client-cert.yaml"
+    mode: 0644
+
+- name: Create template for trusted-ca-bundle
+  ansible.builtin.template:
+    src: trusted-ca-bundle.yaml.j2
+    dest: "{{ oran_o2ims_tmp_dir.path }}/trusted-ca-bundle.yaml"
+    mode: 0644
+
+- name: Create template for oauth-client-secrets
+  ansible.builtin.template:
+    src: oauth-client-secrets.yaml.j2
+    dest: "{{ oran_o2ims_tmp_dir.path }}/oauth-client-secrets.yaml"
+    mode: 0644
+
+# We delete the existing trusted-ca-bundle configmap to ensure that when we
+# apply the new one, it injects the updated CA bundle with the bootstrapped
+# root CA.
+- name: Apply templates for oran-o2ims
+  ansible.builtin.shell: |
+    oc apply -f {{ oran_o2ims_tmp_dir.path }}/inventory.yaml && \
+    oc apply -f {{ oran_o2ims_tmp_dir.path }}/o2ims-client-cert.yaml && \
+    oc delete --ignore-not-found=true configmap o2ims-trusted-ca-bundle -n oran-o2ims && \
+    oc apply -f {{ oran_o2ims_tmp_dir.path }}/trusted-ca-bundle.yaml && \
+    oc apply -f {{ oran_o2ims_tmp_dir.path }}/oauth-client-secrets.yaml
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  register: apply_status
+  changed_when: "'created' in apply_status.stdout or 'configured' in apply_status.stdout"
+
+- name: Wait for SMO registration to complete
+  ansible.builtin.shell: |
+    oc wait --timeout=30m --for=condition=SmoRegistrationCompleted=True -n {{ oran_o2ims_deploy_namespace }} inventory default
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  changed_when: false
+  retries: 30

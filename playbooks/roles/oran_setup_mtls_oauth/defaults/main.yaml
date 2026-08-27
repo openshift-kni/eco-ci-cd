@@ -1,0 +1,57 @@
+# Path to the hub cluster kubeconfig. The calling playbook / CI step passes
+# `kubeconfig`; fall back to it so this role works standalone.
+oran_hub_kubeconfig: "{{ kubeconfig }}"
+
+# The hub domain is used as the base for all subdomains of the hub (e.g.
+# keycloak.apps.<oran_hub_domain>). It must NOT include the "apps." prefix nor
+# the registry subdomain. The calling playbook computes this from the hub
+# cluster ingress domain (spec.domain with the leading "apps." stripped).
+# oran_hub_domain: "kni-qe-129.example.com"   # required, provided by caller
+
+# Disconnected mirror registry used to host the images below. Defaults to the
+# per-cluster registry convention; override via the CI MIRROR_REGISTRY when the
+# environment uses a different disconnected registry.
+oran_registry_url: "registry.{{ oran_hub_domain }}:5000"
+
+# These images will be mirrored from the image to the image_mirrored variable.
+oran_postgres_image: "registry.redhat.io/rhel8/postgresql-15:latest"
+oran_postgres_image_mirrored: "{{ oran_registry_url }}/rhel8/postgresql-15:latest"
+
+oran_mock_smo_image: "quay.io/rh-ee-klaskosk/oran-mock-smo:latest"
+oran_mock_smo_image_mirrored: "{{ oran_registry_url }}/rh-ee-klaskosk/oran-mock-smo:latest"
+
+# Namespace for the oran-o2ims operator. This is the same variable as in the
+# oran-o2ims-deploy role.
+oran_o2ims_deploy_namespace: "oran-o2ims"
+
+# Path to the Keycloak "oran" realm export. This file carries client secrets and
+# the realm signing keys, so it is NOT committed to this repo: CI mounts it from
+# Vault and passes oran_realm_json_file pointing at the mounted copy. For a
+# standalone run, drop the realm export at the path below yourself.
+# The o2ims-client / smo-client secrets consumed by the templates are derived
+# from this file at runtime (see tasks/main.yaml) so there is a single source of
+# truth and no secret is hard-coded.
+oran_realm_json_file: "{{ role_path }}/files/oran-realm.json"
+
+# Server model to download firmware for. Set via ORAN_FIRMWARE_SERVER_MODEL in CI.
+oran_firmware_server_model: "r750"
+
+# Dell will not accept the curl user agent for firmware downloads.
+oran_dell_firmware_user_agent: "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0"
+# Firmware URLs and checksums keyed by server model.
+# Add entries here when supporting additional Dell models.
+# Taken from https://www.dell.com/support/product-details/en-us/product/poweredge-r750/drivers.
+oran_dell_firmware:
+  r750:
+    latest_bios:
+      url: "https://dl.dell.com/FOLDER13279687M/1/BIOS_12YN5_WN64_1.18.1.EXE"
+      sha256: "be58e04edda600917f5054f892e8e3f0b4c983db1b04e57966a4266ec7b2461e"
+    old_bios:
+      url: "https://dl.dell.com/FOLDER12877253M/1/BIOS_0HY8N_WN64_1.17.2.EXE"
+      sha256: "5bdc28d958cfbec48ff6a83a92bdb38c09c13e7db6fcd34b731b511816ff27e4"
+    latest_idrac:
+      url: "https://dl.dell.com/FOLDER13420063M/2/iDRAC-with-Lifecycle-Controller_Firmware_6CKFT_WN64_7.20.60.50_A00.EXE"
+      sha256: "ca894961e8813405e9ba29eb8a965cb7d0e5bfbbcf5fc8df6a5239c166f97c08"
+    old_idrac:
+      url: "https://dl.dell.com/FOLDER13374049M/1/iDRAC-with-Lifecycle-Controller_Firmware_FGR4H_WN64_7.20.30.55_A00.EXE"
+      sha256: "fcb57bd00121218dd3a9a386c23da1e8463a3494a7ebd72df6bad4af8db3606b"

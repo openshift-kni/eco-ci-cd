@@ -17,8 +17,8 @@
   gather_facts: true
   tasks:
     - name: Load telco-kpis default configuration
-      ansible.builtin.include_role:
-        name: telco_kpis_defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/telco_kpis_defaults/defaults/main.yml"
 
     - name: Validate spoke_cluster parameter
       ansible.builtin.fail:

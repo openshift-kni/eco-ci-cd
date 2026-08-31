@@ -3,10 +3,13 @@
 This script is not officially supported and comes with no guarantees.
 Use it at your own risk. Test thoroughly in your environment before use.
 
-Upload XML files to Google Drive using service account key.
+Upload a local directory tree to Google Drive using service account key.
+
+All files under the source directory are uploaded, mirroring the nested
+folder structure (subdirectories are recreated in Drive).
 
 Environment variables:
-  XML_DIR: Directory containing XML files to upload
+  LOCAL_XML_REPORT_DIR: Directory whose contents (all files, recursively) are uploaded
   GDRIVE_FOLDER_ID: Google Drive folder ID (from folder URL)
   GOOGLE_SERVICE_ACCOUNT_KEY: Service account JSON key as string
 
@@ -27,12 +30,13 @@ Usage example:
     python scripts/slcm/upload_to_gdrive.py
 """
 
-from os import getenv
+from os import getenv, walk
 from sys import exit, stderr
 from json import loads, dumps, JSONDecodeError
 from time import time, sleep
 from logging import getLogger, basicConfig, INFO
 from pathlib import Path
+from mimetypes import guess_type
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 from urllib.error import HTTPError
@@ -170,20 +174,24 @@ def upload_file_to_drive(folder_id: str, file_path: Path, access_token: str) -> 
     with open(file_path, "rb") as f:
         file_content = f.read()
 
-    # Build multipart body
-    body_parts = [
-        f"--{boundary}",
-        "Content-Type: application/json; charset=UTF-8",
-        "",
-        dumps(metadata),
-        f"--{boundary}",
-        "Content-Type: application/xml",
-        "",
-        file_content.decode("utf-8", errors="replace"),
-        f"--{boundary}--",
-    ]
+    # Guess the content type; fall back to binary so non-text files
+    # (json, logs, tar.gz, images, ...) upload without corruption.
+    mime_type = guess_type(file_name)[0] or "application/octet-stream"
 
-    body = "\r\n".join(str(part) for part in body_parts).encode("utf-8")
+    # Build the multipart body as raw bytes to preserve binary content.
+    body = b"\r\n".join(
+        [
+            f"--{boundary}".encode("utf-8"),
+            b"Content-Type: application/json; charset=UTF-8",
+            b"",
+            dumps(metadata).encode("utf-8"),
+            f"--{boundary}".encode("utf-8"),
+            f"Content-Type: {mime_type}".encode("utf-8"),
+            b"",
+            file_content,
+            f"--{boundary}--".encode("utf-8"),
+        ]
+    )
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -252,28 +260,44 @@ def upload_xml_files():
         logger.error(f"Error generating access token: {e}", file=stderr)
         exit(1)
 
-    # Find all XML files recursively
-    xml_files = list(xml_dir_path.glob("**/*.xml"))
+    # Recreate the JOB_NAME folder fresh, then mirror the local tree into it.
+    root_folder_id = find_or_create_folder(folder_id, job_name, access_token)
 
-    if not xml_files:
-        logger.error(f"No XML files found in {xml_dir}")
-        return
+    # Map each local directory to its corresponding Drive folder id.
+    folder_ids = {xml_dir_path: root_folder_id}
 
-    logger.info(f"Found {len(xml_files)} XML file(s) in {xml_dir}")
-
-    # Upload each file
     uploaded = 0
     failed = 0
 
-    folder_id = find_or_create_folder(folder_id, job_name, access_token)
-    for xml_file in xml_files:
-        try:
-            file_id = upload_file_to_drive(folder_id, xml_file, access_token)
-            logger.info(f"Uploaded: {xml_file.name} (ID: {file_id})")
-            uploaded += 1
-        except Exception as e:
-            logger.error(f"Failed to upload {xml_file.name}: {e}", file=stderr)
-            failed += 1
+    # os.walk is top-down, so a directory's parent is always created first.
+    for dirpath, dirnames, filenames in walk(xml_dir_path):
+        current = Path(dirpath)
+        parent_drive_id = folder_ids[current]
+
+        # Recreate sub-directories in Drive (sorted for stable ordering).
+        for dirname in sorted(dirnames):
+            sub_dir = current / dirname
+            folder_ids[sub_dir] = create_folder(
+                parent_drive_id, dirname, access_token
+            )
+
+        # Upload every file in this directory into the matching Drive folder.
+        for filename in sorted(filenames):
+            file_path = current / filename
+            rel_path = file_path.relative_to(xml_dir_path)
+            try:
+                file_id = upload_file_to_drive(
+                    parent_drive_id, file_path, access_token
+                )
+                logger.info(f"Uploaded: {rel_path} (ID: {file_id})")
+                uploaded += 1
+            except Exception as e:
+                logger.error(f"Failed to upload {rel_path}: {e}", file=stderr)
+                failed += 1
+
+    if uploaded == 0 and failed == 0:
+        logger.error(f"No files found in {xml_dir}")
+        return
 
     logger.info(f"Summary: {uploaded} uploaded, {failed} failed")
 

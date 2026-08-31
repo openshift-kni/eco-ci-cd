@@ -1,17 +1,17 @@
 # SLCM Google Drive Scripts
 
-Utilities for uploading and downloading XML test reports to and from Google Drive as part of SLCM workflows.
+Utilities for uploading and downloading test reports to and from Google Drive as part of SLCM workflows.
 
 ## `upload_to_gdrive.py`
 
-Uploads XML files from a local directory to Google Drive, then triggers a downstream CI job via the API.
+Uploads a local directory tree to Google Drive, then triggers a downstream CI job via the API.
 
 ### What it does
 
 1. Authenticates to Google Drive using a service account JSON key (JWT bearer flow).
-2. Recursively finds all `.xml` files under `LOCAL_XML_REPORT_DIR`.
-3. Creates a subfolder named after `JOB_NAME` under the target Drive folder (`GDRIVE_FOLDER_ID`). If a folder with that name already exists, it is moved to trash and recreated.
-4. Uploads each XML file into that subfolder.
+2. Creates a subfolder named after `JOB_NAME` under the target Drive folder (`GDRIVE_FOLDER_ID`). If a folder with that name already exists, it is moved to trash and recreated.
+3. Walks `LOCAL_XML_REPORT_DIR` recursively and mirrors its nested folder structure into that subfolder (each subdirectory is recreated in Drive).
+4. Uploads **all** files (not only `.xml`) into their matching Drive folders. The MIME type is guessed per file, and binary files are preserved.
 5. Triggers a job execution via `API_URL`, passing `JOB_NAME` and optional pod environment overrides.
 
 ### Prerequisites
@@ -37,7 +37,7 @@ pip install pyjwt cryptography
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LOCAL_XML_REPORT_DIR` | Yes | Local directory containing XML files to upload (searched recursively) |
+| `LOCAL_XML_REPORT_DIR` | Yes | Local directory whose contents (all files, recursively) are uploaded, preserving the folder structure |
 | `GDRIVE_FOLDER_ID` | Yes | Google Drive parent folder ID |
 | `GOOGLE_SERVICE_ACCOUNT_KEY` | Yes | Service account JSON key as a single-line string |
 | `JOB_NAME` | Yes | Name of the CI job; also used as the subfolder name in Drive |
@@ -77,7 +77,7 @@ The `:Z` volume flag sets the correct SELinux context for the mounted directory.
 
 ### Exit codes
 
-- `0` — All XML files uploaded successfully and the downstream job was triggered.
+- `0` — All files uploaded successfully and the downstream job was triggered.
 - `1` — Missing or invalid configuration, authentication failure, one or more upload failures, or job trigger failure after retries.
 
 ### Logging

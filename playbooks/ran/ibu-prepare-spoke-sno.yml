@@ -1,11 +1,15 @@
 ---
 # Prepares a spoke SNO for IBU operations (seed image generation or upgrade testing).
 #
+# Spoke SNOs are baremetal nodes. Their container storage (/var/lib/containers)
+# is partitioned declaratively at install time by the
+# 98-var-lib-containers-partitioned MachineConfig shipped in the clusterinstance
+# extra-manifests, so this playbook does not provision any storage at runtime.
+#
 # This playbook:
 #   1. Retrieves the spoke kubeconfig from ACM on the hub cluster
-#   2. Creates and attaches a dedicated container storage disk to the spoke VM
-#      (disk is created automatically if not present — idempotent across runs)
-#   3. Configures shared container storage mount on the spoke SNO
+#   2. Fixes the rhel-coreos-extensions image in the disconnected registry so
+#      the IBU seed generation (MCO) can find it (>= 4.20 only)
 #
 # Prerequisites:
 #   - The spoke SNO must be deployed and managed by ACM on the hub cluster
@@ -13,17 +17,16 @@
 # Usage (seed spoke):
 #   ansible-playbook playbooks/ran/ibu-prepare-spoke-sno.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
-#     --extra-vars 'hub_cluster=kni-qe-108 spoke_cluster=ibu-seed seed_vm_name=master-0.kni-qe-108'
+#     --extra-vars 'hub_cluster=kni-qe-108 spoke_cluster=ibu-seed'
 #
 # Usage (target spoke):
 #   ansible-playbook playbooks/ran/ibu-prepare-spoke-sno.yml \
 #     -i inventories/ocp-deployment/build-inventory.py \
-#     --extra-vars 'hub_cluster=kni-qe-109 spoke_cluster=ibu-target seed_vm_name=master-0.kni-qe-109'
+#     --extra-vars 'hub_cluster=kni-qe-109 spoke_cluster=ibu-target'
 #
 # Parameters:
 #   hub_cluster: Hub cluster name (required)
 #   spoke_cluster: Spoke cluster name (required)
-#   seed_vm_name: VM name on hypervisor (required)
 
 - name: Retrieve spoke kubeconfig from hub cluster
   hosts: bastion
@@ -68,109 +71,6 @@
         content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
         dest: "{{ seed_kubeconfig }}"
         mode: '0600'
-
-- name: Attach container storage disk to seed SNO VM
-  hosts: hypervisor
-  vars:
-    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
-    libvirtd_disk_path: /var/lib/libvirt/images
-    containers_disk_path: "{{ libvirtd_disk_path }}/{{ seed_vm_name }}-containers.qcow2"
-  tasks:
-    - name: Assert required variables are defined
-      ansible.builtin.assert:
-        that:
-          - seed_vm_name is defined
-          - seed_kubeconfig is defined
-        fail_msg: >-
-          Both seed_vm_name and seed_kubeconfig must be provided
-          as extra-vars
-
-    - name: Create containers qcow2 disk if not exists
-      ansible.builtin.command: >-
-        qemu-img create -f qcow2 {{ containers_disk_path }} 100G
-      args:
-        creates: "{{ containers_disk_path }}"
-      become: true
-
-    - name: Set ownership on containers disk
-      ansible.builtin.file:
-        path: "{{ containers_disk_path }}"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: "0644"
-      become: true
-
-    - name: Check current VM disk list
-      ansible.builtin.command: virsh domblklist {{ seed_vm_name }}
-      register: domblklist
-      changed_when: false
-      become: true
-
-    - name: Attach containers disk if not already attached
-      ansible.builtin.command: >-
-        virsh attach-disk {{ seed_vm_name }}
-        {{ containers_disk_path }}
-        vdb
-        --driver qemu --subdriver qcow2 --persistent
-      when: containers_disk_path not in domblklist.stdout
-      changed_when: true
-      become: true
-
-- name: Configure storage partitions on spoke SNO
-  hosts: bastion
-  vars:
-    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
-  tasks:
-    - name: Get SNO node name
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ seed_kubeconfig }}"
-        api_version: v1
-        kind: Node
-      register: sno_nodes
-
-    - name: Create containers partition and XFS filesystem on vdb if not present
-      ansible.builtin.command: >-
-        oc --kubeconfig {{ seed_kubeconfig }}
-        debug node/{{ sno_nodes.resources[0].metadata.name }} --
-        nsenter -a -t 1 -- bash -c
-        "if [ ! -e /dev/disk/by-partlabel/containers ]; then
-        sgdisk -n 1:0:0 -c 1:containers /dev/vdb &&
-        udevadm settle --timeout=30 &&
-        mkfs.xfs -f -L containers /dev/vdb1; fi"
-      changed_when: true
-
-- name: Apply MachineConfig and wait for update
-  hosts: bastion
-  vars:
-    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
-  tasks:
-    - name: Apply var-lib-containers MachineConfig
-      kubernetes.core.k8s:
-        kubeconfig: "{{ seed_kubeconfig }}"
-        state: present
-        definition: "{{ lookup('template', playbook_dir + '/../templates/mc-var-lib-containers.j2') | from_yaml }}"
-
-    - name: Wait for MachineConfigPool to start updating
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ seed_kubeconfig }}"
-        kind: MachineConfigPool
-        name: master
-        wait: true
-        wait_condition:
-          type: Updating
-          status: "True"
-        wait_timeout: 120
-
-    - name: Wait for MachineConfigPool to finish updating
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ seed_kubeconfig }}"
-        kind: MachineConfigPool
-        name: master
-        wait: true
-        wait_condition:
-          type: Updated
-          status: "True"
-        wait_timeout: 1200
 
 - name: Fix extensions image for IBU seed generation (MCO workaround)
   hosts: bastion

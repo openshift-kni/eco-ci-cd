@@ -419,7 +419,7 @@
               {% for mirror_loc in _mirror_rc_v4_mirror_locs %}
 
                 [[registry.mirror]]
-                  location = "{{ mirror_loc }}"
+                  location = "{{ mirror_loc | regex_replace('ocp-v4\\.0-art-dev', _mirror_rc_artdev_repo | trim) }}"
               {% endfor %}
           when: _mirror_rc_v4_mirror_locs | length > 0
 
@@ -469,6 +469,8 @@
                  .spec.imageDigestMirrors | default([])
                  | selectattr('source', 'equalto', 'quay.io/openshift-release-dev/ocp-v4.0-art-dev')
                  | map(attribute='mirrors') | flatten | list }}
+            _versioned_mirrors: >-
+              {{ _v4_mirrors | map('regex_replace', 'ocp-v4\\.0-art-dev', _mirror_rc_artdev_repo | trim) | list }}
           kubernetes.core.k8s_json_patch:
             api_version: config.openshift.io/v1
             kind: ImageDigestMirrorSet
@@ -478,7 +480,7 @@
               - op: add
                 path: /spec/imageDigestMirrors/-
                 value:
-                  mirrors: "{{ _v4_mirrors }}"
+                  mirrors: "{{ _versioned_mirrors }}"
                   source: "{{ _artdev_source }}"
           when:
             - _mirror_rc_idms_artmirror.resources | default([]) | length > 0

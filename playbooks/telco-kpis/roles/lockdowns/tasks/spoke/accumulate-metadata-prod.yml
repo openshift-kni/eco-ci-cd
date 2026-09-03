@@ -27,7 +27,7 @@
 
 - name: Initialize catalog and bundle tracking
   ansible.builtin.set_fact:
-    _lockdown_primary_catalog_image: ""
+    _lockdown_catalog_fbc_map: {}
     _lockdown_mirrored_bundles: []
 
 - name: Parse oc-mirror output for images using Ansible filters
@@ -37,80 +37,79 @@
       ansible.builtin.set_fact:
         _lockdown_oc_mirror_lines: "{{ lockdown_oc_mirror_output.split('\n') }}"
 
-    - name: Find catalog copy line
+    - name: Find all catalog copy lines (redhat, certified, community)
       ansible.builtin.set_fact:
         _lockdown_catalog_lines: >-
           {{
             _lockdown_oc_mirror_lines
-            | select('search', 'Success copying.*redhat-operator-index')
+            | select('search', 'Success copying.*(redhat|certified|community)-operator-index')
             | list
           }}
 
-    - name: Extract catalog tag from copy line
+    - name: DEBUG - Found catalog copy lines
+      ansible.builtin.debug:
+        msg: "Found {{ _lockdown_catalog_lines | length }} catalog copy lines"
+
+    - name: Extract catalog tags from ALL copy lines
       when: _lockdown_catalog_lines | length > 0
       ansible.builtin.set_fact:
-        _lockdown_catalog_tag: >-
+        _lockdown_catalog_tags: >-
           {{
-            _lockdown_catalog_lines[0]
-            | regex_replace('^.*docker://([^ ]+redhat-operator-index[^ ]+).*$', '\1')
+            _lockdown_catalog_lines
+            | map('regex_replace', '^.*docker://([^ ]+(redhat|certified|community)-operator-index[^ ]+).*$', '\1')
+            | list
           }}
 
-    - name: DEBUG - Catalog tag extracted
+    - name: DEBUG - Catalog tags extracted
       ansible.builtin.debug:
-        msg: "Catalog tag: {{ _lockdown_catalog_tag | default('NOT FOUND') }}"
-
-    # Optimization: Reuse frozen FBC digest if available (saves ~4 minutes)
-    - name: Check if frozen FBC digest is available from input lockdown
-      when: ocp_operator_mirror_freeze_fbc_digest | default('') | length > 0
-      ansible.builtin.set_fact:
-        _lockdown_primary_catalog_image: "{{ ocp_operator_mirror_freeze_fbc_digest }}"
-        _lockdown_catalog_digest_reused: true
-
-    - name: DEBUG - FBC digest reuse status
-      ansible.builtin.debug:
-        msg: >-
-          {{
-            'REUSED frozen FBC digest from input lockdown (saves ~4 minutes)'
-            if (_lockdown_catalog_digest_reused | default(false))
-            else 'No frozen digest available, will resolve via skopeo'
-          }}
+        msg: "Catalog tags: {{ _lockdown_catalog_tags | default([]) }}"
 
     - name: Resolve catalog tag to digest using skopeo
-      when: >-
-        not (_lockdown_catalog_digest_reused | default(false))
-        and _lockdown_catalog_tag is defined
-        and _lockdown_catalog_tag | length > 0
+      when: _lockdown_catalog_tags is defined and (_lockdown_catalog_tags | length) > 0
+      loop: "{{ _lockdown_catalog_tags }}"
+      loop_control:
+        loop_var: catalog_tag
+        label: "{{ catalog_tag | regex_replace('@.*', '') }}"
       ansible.builtin.shell:
         cmd: >-
           skopeo inspect
           --authfile {{ ocp_operator_mirror_pull_secret_path }}
-          docker://{{ _lockdown_catalog_tag }}
+          docker://{{ catalog_tag }}
           --format '{{ '{{' }}.Digest{{ '}}' }}'
-      register: _lockdown_catalog_digest_result
+      register: _catalog_digest_results
       failed_when: false
       changed_when: false
 
-    - name: DEBUG - Skopeo catalog digest result
-      when: _lockdown_catalog_digest_result is not skipped
-      ansible.builtin.debug:
-        msg:
-          - "Skopeo RC: {{ _lockdown_catalog_digest_result.rc | default('skipped') }}"
-          - "Digest: {{ _lockdown_catalog_digest_result.stdout | default('') }}"
-          - "Error: {{ _lockdown_catalog_digest_result.stderr | default('') }}"
-
-    - name: Build catalog image with digest (from skopeo)
-      when: >-
-        not (_lockdown_catalog_digest_reused | default(false))
-        and _lockdown_catalog_digest_result is not skipped
-        and _lockdown_catalog_digest_result.rc == 0
-        and _lockdown_catalog_digest_result.stdout | length > 0
+    - name: Build catalog FBC map from skopeo results
+      when:
+        - _catalog_digest_results is defined
+        - _catalog_digest_results.results is defined
+        - result_item.rc == 0
+        - result_item.stdout | length > 0
+      loop: "{{ _catalog_digest_results.results }}"
+      loop_control:
+        loop_var: result_item
+        label: "{{ result_item.catalog_tag | regex_replace('@.*', '') }}"
+      vars:
+        # Detect catalog base name from tag (redhat-operator-index, certified-operator-index, community-operator-index)
+        _catalog_base_name: >-
+          {{
+            'redhat-operators' if 'redhat-operator-index' in result_item.catalog_tag
+            else ('certified-operators' if 'certified-operator-index' in result_item.catalog_tag
+            else ('community-operators' if 'community-operator-index' in result_item.catalog_tag
+            else 'unknown'))
+          }}
       ansible.builtin.set_fact:
-        _lockdown_primary_catalog_image: >-
-          {{ _lockdown_catalog_tag | regex_replace('@.*', '') }}@{{ _lockdown_catalog_digest_result.stdout }}
+        _lockdown_catalog_fbc_map: >-
+          {{
+            _lockdown_catalog_fbc_map | combine({
+              _catalog_base_name: (result_item.catalog_tag | regex_replace('@.*', '')) ~ '@' ~ result_item.stdout
+            })
+          }}
 
-    - name: DEBUG - Catalog with digest
+    - name: DEBUG - Catalog FBC map
       ansible.builtin.debug:
-        msg: "Catalog: {{ _lockdown_primary_catalog_image | default('NOT RESOLVED') }}"
+        msg: "Catalog FBC map: {{ _lockdown_catalog_fbc_map }}"
 
     - name: Find bundle copy lines
       ansible.builtin.set_fact:
@@ -181,6 +180,21 @@
             if (operator.nsname | default('') | length > 0)
             else (_lockdown_operator_namespace_map[operator.name] | default(''))
           }}
+
+        # Normalize catalog name for FBC map lookup (cs-*-operator-index-v* → *-operators)
+        _lockdown_catalog_normalized: >-
+          {{
+            'redhat-operators' if 'redhat-operator' in operator.catalog
+            else ('certified-operators' if 'certified-operator' in operator.catalog
+            else ('community-operators' if 'community-operator' in operator.catalog
+            else operator.catalog))
+          }}
+
+        # Look up correct FBC digest from map based on normalized catalog name
+        _lockdown_operator_fbc: >-
+          {{
+            _lockdown_catalog_fbc_map[_lockdown_catalog_normalized] | default('')
+          }}
       ansible.builtin.set_fact:
         lockdown_metadata_operators: >-
           {{
@@ -192,7 +206,7 @@
                 'channel': operator.channel | default(''),
                 'default_channel': operator.default_channel | default(''),
                 'bundle': _lockdown_bundle_image,
-                'fbc': _lockdown_primary_catalog_image
+                'fbc': _lockdown_operator_fbc
               }
             })
           }}
@@ -245,6 +259,21 @@
             if (operator.nsname | default('') | length > 0)
             else (_lockdown_operator_namespace_map[operator.name] | default(''))
           }}
+
+        # Normalize catalog name for FBC map lookup (cs-*-operator-index-v* → *-operators)
+        _lockdown_catalog_normalized: >-
+          {{
+            'redhat-operators' if 'redhat-operator' in operator.catalog
+            else ('certified-operators' if 'certified-operator' in operator.catalog
+            else ('community-operators' if 'community-operator' in operator.catalog
+            else operator.catalog))
+          }}
+
+        # Look up correct FBC digest from map based on normalized catalog name
+        _lockdown_operator_fbc: >-
+          {{
+            _lockdown_catalog_fbc_map[_lockdown_catalog_normalized] | default('')
+          }}
       ansible.builtin.set_fact:
         lockdown_metadata_operators: >-
           {{
@@ -256,7 +285,7 @@
                 'channel': operator.channel | default(''),
                 'default_channel': operator.default_channel | default(''),
                 'bundle': '',
-                'fbc': _lockdown_primary_catalog_image
+                'fbc': _lockdown_operator_fbc
               }
             })
           }}
@@ -269,7 +298,10 @@
       - "=========================================="
       - "Total operators: {{ lockdown_operators_list | length }}"
       - "Metadata captured: {{ lockdown_metadata_operators | length }}"
-      - "Catalog image: {{ _lockdown_primary_catalog_image | default('unknown') }}"
+      - "Catalog FBC images:"
+      - "  redhat-operators: {{ _lockdown_catalog_fbc_map['redhat-operators'] | default('not found') }}"
+      - "  certified-operators: {{ _lockdown_catalog_fbc_map['certified-operators'] | default('not found') }}"
+      - "  community-operators: {{ _lockdown_catalog_fbc_map['community-operators'] | default('not found') }}"
       - "=========================================="
       - "Operators: {{ lockdown_metadata_operators.keys() | list }}"
       - "=========================================="

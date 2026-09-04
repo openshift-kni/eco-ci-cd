@@ -1,0 +1,161 @@
+---
+# Deploy a minimal Alertmanager in the open-cluster-management-observability
+# namespace so that the o-cloud-manager alarms-server can start up.
+#
+# The alarms-server queries:
+#   alertmanager.open-cluster-management-observability.svc:9095/api/v2/alerts
+#
+# Rather than the full ACM Observability stack (which requires MinIO, Thanos,
+# Grafana, and 6-8 PVCs), this playbook deploys a standalone Alertmanager
+# pod reusing the image already present on the node from openshift-monitoring
+# (no additional image mirroring required).
+#
+# In a full production environment, replace this with the real
+# MultiClusterObservability CR and its required object storage.
+#
+# Usage:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/ran/hub-sno-configure-acm-observability.yml \
+#     --extra-vars "kubeconfig=/path/to/kubeconfig"
+
+- name: Deploy minimal Alertmanager for O-RAN alarms-server
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+
+    - name: Validate required variables are defined
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+        fail_msg: "Variable 'kubeconfig' must be defined"
+
+    - name: Get Alertmanager image from cluster monitoring stack
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-monitoring
+        label_selectors:
+          - "app.kubernetes.io/name=alertmanager"
+      register: alertmanager_pods
+
+    - name: Extract Alertmanager image reference
+      ansible.builtin.set_fact:
+        alertmanager_image: "{{ alertmanager_pods.resources[0].spec.containers
+          | selectattr('name', 'equalto', 'alertmanager') | map(attribute='image') | first }}"
+      when: alertmanager_pods.resources | length > 0
+
+    - name: Fall back to well-known image if cluster monitoring pod not found
+      ansible.builtin.set_fact:
+        alertmanager_image: "quay.io/openshift/origin-prometheus-alertmanager:latest"
+      when: alertmanager_pods.resources | length == 0
+
+    - name: Show Alertmanager image being used
+      ansible.builtin.debug:
+        msg: "Using Alertmanager image: {{ alertmanager_image }}"
+
+    - name: Create open-cluster-management-observability namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: open-cluster-management-observability
+
+    - name: Deploy minimal Alertmanager ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: alertmanager-config
+            namespace: open-cluster-management-observability
+          data:
+            alertmanager.yml: |
+              global:
+                resolve_timeout: 5m
+              route:
+                receiver: default
+                group_by: ['alertname']
+              receivers:
+                - name: default
+
+    - name: Deploy minimal Alertmanager pod
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: alertmanager
+            namespace: open-cluster-management-observability
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: alertmanager
+            template:
+              metadata:
+                labels:
+                  app: alertmanager
+              spec:
+                containers:
+                  - name: alertmanager
+                    image: "{{ alertmanager_image }}"
+                    args:
+                      - --config.file=/etc/alertmanager/alertmanager.yml
+                      - --storage.path=/alertmanager
+                      - --web.listen-address=:9093
+                    ports:
+                      - containerPort: 9093
+                    volumeMounts:
+                      - name: config
+                        mountPath: /etc/alertmanager
+                      - name: data
+                        mountPath: /alertmanager
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                      limits:
+                        memory: 256Mi
+                volumes:
+                  - name: config
+                    configMap:
+                      name: alertmanager-config
+                  - name: data
+                    emptyDir: {}
+
+    - name: Create Alertmanager service on port 9095
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: alertmanager
+            namespace: open-cluster-management-observability
+          spec:
+            selector:
+              app: alertmanager
+            ports:
+              - port: 9095
+                targetPort: 9093
+                protocol: TCP
+
+    - name: Wait for Alertmanager deployment to be available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: alertmanager
+        namespace: open-cluster-management-observability
+      register: alertmanager_deploy
+      until:
+        - alertmanager_deploy.resources | length > 0
+        - alertmanager_deploy.resources[0].status.availableReplicas | default(0) >= 1
+      retries: 30
+      delay: 10

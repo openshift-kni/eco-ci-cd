@@ -45,9 +45,7 @@
 
     - name: Set local volume name
       ansible.builtin.set_fact:
-        local_volume_name:
-          - "vol1"
-          - "vol2"
+        local_volume_name: "{{ lvm_local_volumes | default(['vol1', 'vol2']) }}"
 
     - name: Find empty block devices from facts
       ansible.builtin.set_fact:

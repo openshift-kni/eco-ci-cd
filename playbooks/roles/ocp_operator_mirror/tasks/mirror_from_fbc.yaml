@@ -286,7 +286,11 @@
 - name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
   changed_when: false
   ansible.builtin.set_fact:
-    _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
+    # RHEL base images (rhel8/, rhel9/) are always GA and exist only on prod —
+    # exclude them from the stage rewrite so skopeo pulls from registry.redhat.io.
+    _image_list: "{{ _image_list
+      | map('regex_replace', '^registry\\.redhat\\.io/(?!rhel[89]/)', 'registry.stage.redhat.io/')
+      | list }}"
   when:
     - ((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0
     - not (operator.art_fbc | default(false)) | bool

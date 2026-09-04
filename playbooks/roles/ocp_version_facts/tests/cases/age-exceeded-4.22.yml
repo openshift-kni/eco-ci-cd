@@ -1,0 +1,21 @@
+---
+# An over-age stable candidate on the 4.22 release stream is dynamically
+# classified as nightly.
+ocp_version_facts_release: "4.22"
+ocp_version_release_age_max_days: 100
+ocp_version_facts_query:
+  name: "4.22.1"
+  pullSpec: "quay.io/openshift-release-dev/ocp-release:4.22.1-x86_64"
+  downloadURL: >-
+    https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.22.1
+image_age_days: 101
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.22.1"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "22"
+  ocp_version_facts_z_stream: "1"
+  ocp_version_facts_release_type: "nightly"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

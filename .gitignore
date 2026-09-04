@@ -6,3 +6,4 @@ inventory*
 *__pycache__*
 **/collections
 **/.ansible
+**/.codegraph

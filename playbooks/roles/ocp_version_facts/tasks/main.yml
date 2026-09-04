@@ -38,6 +38,23 @@
     ocp_version_facts_minor: "{{ ocp_version_facts_parsed_release.split('.')[1] | int }}"
     ocp_version_facts_z_stream: "{{ ocp_version_facts_parsed_release.split('.')[2] }}"
 
+- name: Determine whether the release has a configured nightly stream
+  ansible.builtin.set_fact:
+    ocp_version_facts_has_nightly_stream: >-
+      {{ ('%s.%s' | format(ocp_version_facts_major, ocp_version_facts_minor))
+         in ocp_version_facts_nightly_versions }}
+
+- name: Validate image age when no nightly fallback is available
+  when: image_age_days is defined
+  ansible.builtin.assert:
+    that:
+      - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+        or ocp_version_facts_has_nightly_stream | bool
+    fail_msg: >-
+      Image age days {{ image_age_days }} exceeds maximum allowed age
+      {{ ocp_version_release_age_max_days }}, and no nightly release is
+      configured for {{ ocp_version_facts_major }}.{{ ocp_version_facts_minor }}
+
 - name: Set dev version if present and remove z-stream
   when:
     - ocp_version_facts_parsed_release.split(".") | length >= 4
@@ -49,7 +66,11 @@
 - name: Set OpenShift release type
   ansible.builtin.set_fact:
     ocp_version_facts_release_type: >-
-      {%- if ocp_version_facts_dev_version is defined -%}
+      {%- if image_age_days is defined and
+              (image_age_days | int) > (ocp_version_release_age_max_days | int) and
+              ocp_version_facts_has_nightly_stream | bool -%}
+        nightly
+      {%- elif ocp_version_facts_dev_version is defined -%}
         {%- set dev_version_tokens = (ocp_version_facts_dev_version | regex_replace('-', '.')).split('.') -%}
         {%- if 'nightly' in dev_version_tokens -%}
           nightly

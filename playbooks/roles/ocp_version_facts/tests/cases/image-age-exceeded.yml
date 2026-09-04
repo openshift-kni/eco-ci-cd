@@ -1,13 +1,20 @@
 ---
-# Same mocked setup as minor-release-mocked.yml, but image_age_days exceeds
-# the (lowered) max age, so the role's own "Validate image age days" assert
-# should trip.
+# 4.17 has no configured nightly stream, so an over-age image must fail rather
+# than be mislabeled as nightly. The supported fallback cases are 4.22 and 5.0.
 ocp_version_facts_release: "4.17"
 ocp_version_release_age_max_days: 5
 ocp_version_facts_query:
   name: "4.17.23"
   pullSpec: "quay.io/openshift-release-dev/ocp-release:4.17.23-x86_64"
-  downloadURL: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.17.23"
+  downloadURL: >-
+    https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.17.23
 image_age_days: 999
 
 expect_failure: true
+
+expected_facts:
+  ocp_version_facts_parsed_release: "4.17.23"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "23"
+  ocp_version_facts_release_type: "nightly"

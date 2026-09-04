@@ -24,7 +24,7 @@ Each `cases/*.yml` file is a plain vars file with:
 - `expected_undefined_facts`: a list of fact names that must remain unset
   for this case (e.g. `ocp_version_facts_dev_version` for a stable release)
 - `expect_failure: true` for cases that should make the role's own
-  `assert`/`fail` tasks trip (bad input, stale image, etc.) — omit it
+  `assert`/`fail` tasks trip (bad input, etc.) — omit it
   (defaults to `false`) for cases that should succeed
 
 ## Running

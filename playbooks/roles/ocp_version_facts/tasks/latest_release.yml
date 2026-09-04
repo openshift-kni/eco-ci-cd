@@ -1,4 +1,10 @@
 ---
+- name: Reset release candidate for stream lookup
+  when: ocp_version_facts_query is not defined
+  ansible.builtin.set_fact:
+    matching_tags: []
+    ocp_version_match: null
+
 - name: Gather release from stream
   when: ocp_version_facts_query is not defined
   block:
@@ -31,7 +37,10 @@
         - matching_tags | length > 0
 
 - name: Inspect image manifest and derive creation date
-  when: ocp_version_match is defined
+  when:
+    - ocp_version_facts_query is not defined
+    - ocp_version_match is defined
+    - ocp_version_match is not none
   block:
     - name: Get image manifest
       ansible.builtin.uri:
@@ -68,7 +77,10 @@
         image_created: "{{ ocp_version_match.pullSpec.split(':')[-1] | regex_search('\\d{4}-\\d{2}-\\d{2}') }}"
 
 - name: Post-process image creation and compute age
-  when: ocp_version_match is defined
+  when:
+    - ocp_version_facts_query is not defined
+    - ocp_version_match is defined
+    - ocp_version_match is not none
   block:
     - name: Show image creation date
       ansible.builtin.debug:
@@ -100,10 +112,14 @@
       ansible.builtin.debug:
         msg: "Image was created {{ image_age_days }} days ago (on {{ image_created }})"
 
-- name: Select recent accepted tag (nightly/stable cutoff)
+- name: Select accepted tag within the age policy
   when:
+    - ocp_version_facts_query is not defined
     - ocp_version_match is defined
+    - ocp_version_match is not none
     - image_age_days is defined
-    - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+    - >-
+      (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+      or 'nightly' in (release_stream | string)
   ansible.builtin.set_fact:
     ocp_version_facts_query: "{{ ocp_version_match }}"

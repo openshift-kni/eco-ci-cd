@@ -16,8 +16,8 @@ The `ocp_version_facts` Ansible role is responsible for managing and setting Ope
  - Parses nightly/EC/RC formats from pull-specs (e.g., `4.20.0-0.nightly-2025-07-31-063120`).
  - Strips architecture suffixes from pull-specs (e.g., `-x86`, `-x64`, `-x86_64`, `-aarch64`, `-ppc64le`, `-s390x`).
  - Validates input and parsed version, failing fast with clear messages.
- - Computes image age and enforces maximum allowed age via `ocp_version_release_age_max_days`.
- - Sets `ocp_version_facts_release_type` (one of: `nightly`, `engineering-candidate`, `release-candidate`, or `stable`).
+ - Computes image age and changes supported over-age releases to the `nightly` release type via `ocp_version_release_age_max_days`.
+ - Sets `ocp_version_facts_release_type` (one of: `nightly`, `engineering-candidate`, `release-candidate`, `development`, or `stable`).
 
 ## Requirements
 - Ansible 2.9+
@@ -36,7 +36,8 @@ The following variables are used within the role:
 - `ocp_version_facts_z_stream`: Z-stream version number (e.g., `2`).
 - `ocp_version_facts_dev_version`: Development version if present (e.g., `rc1`).
 - `ocp_version_facts_oc_client_pull_link`: Link to pull the OC client.
-- `ocp_version_facts_release_type`: Derived release type (`nightly` | `engineering-candidate` | `release-candidate` | `stable`).
+- `ocp_version_facts_release_type`: Derived release type (`nightly` | `engineering-candidate` | `release-candidate` | `development` | `stable`). An over-age image is classified as `nightly` only when its major/minor version is listed in `ocp_version_facts_nightly_versions`.
+- `ocp_version_facts_nightly_versions`: Major/minor versions with configured nightly fallback streams. Currently `4.22` and `5.0` only.
 - `ocp_version_release_age_max_days`: Maximum allowed age (in days) for a selected release when resolving from streams (default defined in `defaults/main.yml`).
 
 ## Usage
@@ -92,8 +93,9 @@ Outputs debug information for configured facts.
 When resolving the latest release from streams, the role:
 - Retrieves the image creation timestamp from the image config.
 - Computes the image age (in days).
-- Fails if the age exceeds `ocp_version_release_age_max_days`.
-- Only selects a candidate tag when it is newer than `ocp_version_release_age_max_days`.
+- For `4.22` and `5.0`, classifies the release as `nightly` if its age exceeds `ocp_version_release_age_max_days`.
+- Allows an over-age stable/dev candidate to fall through to its configured nightly stream.
+- Fails rather than mislabeling an over-age release when no nightly stream is configured for that version.
 
 ## Dependencies
 

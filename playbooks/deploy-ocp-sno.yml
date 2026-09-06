@@ -107,6 +107,7 @@
     - name: Populate pull secret
       ansible.builtin.set_fact:
         pull_secret: "{{ pull_secret_string | b64decode }}"
+      no_log: true
 
     - name: Prepare disconnected infrastructure
       when: disconnected | bool
@@ -226,10 +227,10 @@
     - name: Render bastion variables from inventory strings
       delegate_to: bastion
       ansible.builtin.set_fact:
-        extra_cluster_networks: "{{ extra_cluster_networks_string | from_yaml }}"
-        cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml }}"
-        extra_machine_networks: "{{ extra_machine_networks_string | from_yaml }}"
-        extra_service_networks: "{{ extra_service_networks_string | from_yaml }}"
+        extra_cluster_networks: "{{ extra_cluster_networks_string | from_yaml | default([]) }}"
+        cluster_network_host_prefix: "{{ cluster_network_host_prefix | from_yaml | default([]) }}"
+        extra_machine_networks: "{{ extra_machine_networks_string | from_yaml | default([]) }}"
+        extra_service_networks: "{{ extra_service_networks_string | from_yaml | default([]) }}"
         api_vips: "{{ api_vips_string | from_yaml }}"
         ingress_vips: "{{ ingress_vips_string | from_yaml }}"
 
@@ -386,14 +387,31 @@
     disconnected: false
   tasks:
 
-    - name: Render masters variables
+    - name: Render master vm spec
+      when: vendor | lower == 'kvm'
       delegate_to: bastion
       ansible.builtin.set_fact:
         vm_spec: "{{ vm_spec_string | from_yaml }}"
         network_interfaces: "{{ network_interfaces_string | from_yaml }}"
+
+    - name: Render masters variables
+      delegate_to: bastion
+      ansible.builtin.set_fact:
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
 
+    - name: Capture node IPv4 default gateway before removing default route (disconnected)
+      delegate_to: bastion
+      when: disconnected | bool
+      ansible.builtin.set_fact:
+        node_ipv4_gateway: >-
+          {{
+            network_config.raw.routes.config
+              | default([])
+              | selectattr('destination', 'equalto', '0.0.0.0/0')
+              | map(attribute='next-hop-address')
+              | first
+          }}
 
     - name: Remove IPv4 default route for dual-stack (disconnected)
       delegate_to: bastion
@@ -433,19 +451,19 @@
                     (network_config.raw.routes.config | default([])) + [
                       {
                         "destination": "192.168.0.0/16",
-                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-address": node_ipv4_gateway,
                         "next-hop-interface": network_config.raw.interfaces[0].name,
                         "table-id": 254
                       },
                       {
                         "destination": "172.16.0.0/12",
-                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-address": node_ipv4_gateway,
                         "next-hop-interface": network_config.raw.interfaces[0].name,
                         "table-id": 254
                       },
                       {
                         "destination": "10.0.0.0/8",
-                        "next-hop-address": hostvars['bastion']['ansible_default_ipv4']['gateway'],
+                        "next-hop-address": node_ipv4_gateway,
                         "next-hop-interface": network_config.raw.interfaces[0].name,
                         "table-id": 254
                       },
@@ -631,12 +649,23 @@
         name: redhatci.ocp.generate_agent_iso
 
     - name: Process KVM nodes to set facts
+      when: groups['nodes'] | map('extract', hostvars) | selectattr('vendor', 'defined') |
+        map(attribute='vendor') | map('lower') | select('equalto', 'kvm') | list | length == 0
       ansible.builtin.import_role:
         name: redhatci.ocp.process_kvm_nodes
 
 - name: Set up Virtual Control Plane
   hosts: vm_hosts
+  gather_facts: false
   tasks:
+
+    - name: Skip play if no KVM nodes are defined
+      ansible.builtin.meta: end_play
+      when: groups['masters'] | map('extract', hostvars) | selectattr('vendor', 'defined') |
+        map(attribute='vendor') | map('lower') | select('equalto', 'kvm') | list | length == 0
+
+    - name: Collect facts when kvm nodes are present
+      ansible.builtin.gather_facts:
 
     - name: Mutate SNO node name
       ansible.builtin.set_fact:

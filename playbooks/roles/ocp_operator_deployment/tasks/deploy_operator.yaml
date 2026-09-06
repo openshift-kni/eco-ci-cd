@@ -23,6 +23,10 @@
     starting_csv: "{{ operator_item.starting_csv | default('') }}"
     subscription_name: "{{ operator_item.subscription_name | default(undefined) }}"
     install_approval: "{{ operator_item.install_approval | default('Automatic') }}"
+    # Operators whose operands only become healthy after separate configuration
+    # (e.g. o-cloud-manager, which needs PKI/Keycloak set up by oran-setup)
+    # can opt out of the post-install CSV/pod readiness check via validate_install: false.
+    olm_operator_validate_install: "{{ operator_item.validate_install | default(true) }}"
 
 - name: Apply default operator configuration if exist
   kubernetes.core.k8s:

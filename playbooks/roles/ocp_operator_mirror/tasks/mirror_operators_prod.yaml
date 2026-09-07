@@ -190,7 +190,13 @@
 - name: Assemble operators for ImageSetConfiguration
   changed_when: false
   vars:
-    _catalog_refs: "{{ catalog_index_by_tag | default(catalog_index_map) }}"
+    # Validation mode (with lockdown URI): use exact FBC digests from lockdown
+    # Generation mode (no lockdown URI): use tag refs for predictable CatalogSource names
+    _catalog_refs: >-
+      {{
+        catalog_index_map if (spoke_lockdown_uri | default('') | length > 0)
+        else (catalog_index_by_tag | default(catalog_index_map))
+      }}
   ansible.builtin.set_fact:
     mirror_ops: >-
       {{

@@ -90,6 +90,7 @@
         - "{{ eco_gotest_base_dir }}_1"
         - "{{ eco_gotest_base_dir }}_2"
         - "{{ eco_gotest_base_dir }}_3"
+        - "{{ eco_gotest_base_dir }}_4"
 
     - name: Ensure test directory is present
       ansible.builtin.file:
@@ -246,10 +247,10 @@
     eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests') }}"
     bastion_report_dir: "{{ ptp_report_dir | default('/tmp/test_reports') }}"
     ptp_cycles:
-      - { index: 0, name: "BC-OC" }
-      - { index: 1, name: "OC2port" }
-      - { index: 2, name: "T-TSC" }
-      - { index: 3, name: "T-BC" }
+      - { index: 0, name: "OC-2-Port" }
+      - { index: 1, name: "T-TSC" }
+      - { index: 2, name: "T-BC" }
+      - { index: 3, name: "Dual-TR-TBC" }
   tasks:
     - name: Remove existing report directory
       ansible.builtin.file:

@@ -649,8 +649,6 @@
         name: redhatci.ocp.generate_agent_iso
 
     - name: Process KVM nodes to set facts
-      when: groups['nodes'] | map('extract', hostvars) | selectattr('vendor', 'defined') |
-        map(attribute='vendor') | map('lower') | select('equalto', 'kvm') | list | length == 0
       ansible.builtin.import_role:
         name: redhatci.ocp.process_kvm_nodes
 

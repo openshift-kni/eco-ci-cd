@@ -247,10 +247,11 @@
     eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests') }}"
     bastion_report_dir: "{{ ptp_report_dir | default('/tmp/test_reports') }}"
     ptp_cycles:
-      - { index: 0, name: "OC-2-Port" }
-      - { index: 1, name: "T-TSC" }
-      - { index: 2, name: "T-BC" }
-      - { index: 3, name: "Dual-TR-TBC" }
+      - { index: 0, name: "BC-OC" }
+      - { index: 1, name: "OC2port" }
+      - { index: 2, name: "T-TSC" }
+      - { index: 3, name: "T-BC" }
+      - { index: 4, name: "Dual-TR-TBC"}
   tasks:
     - name: Remove existing report directory
       ansible.builtin.file:
@@ -266,22 +267,14 @@
         - polarion
         - junit
 
-    - name: Rename testsuite and prepare for ReportPortal
+    - name: Prepare ReportPortal results (and discard Polarion reports)
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_{{ item.index }}/report/ptp_suite_test_junit.xml"
-        dst="{{ bastion_report_dir }}/polarion/testrun_ptp_{{ item.index }}.xml"
+        rp_dst="{{ bastion_report_dir }}/polarion/testrun_ptp_{{ item.index }}.xml"
+        dummy_dst="{{ bastion_report_dir }}/junit/ptp_cycle_{{ item.index }}.xml"
         if [ -f "${src}" ]; then
-          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" \
-            "${src}" > "${dst}"
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" "${src}" > "${rp_dst}"
+          cp "${src}" "${dummy_dst}"
         fi
       loop: "{{ ptp_cycles }}"
       changed_when: false
-
-    - name: Prepare report for Polarion converter
-      ansible.builtin.copy:
-        src: "{{ eco_gotest_base_dir }}_{{ item.index }}/report/report_testrun.xml"
-        dest: "{{ bastion_report_dir }}/junit/ptp_cycle_{{ item.index }}.xml"
-        mode: "0644"
-        remote_src: true
-      loop: "{{ ptp_cycles }}"
-      failed_when: false

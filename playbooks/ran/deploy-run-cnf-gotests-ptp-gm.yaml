@@ -86,6 +86,7 @@
             skopeo copy \
               --policy <(echo "${ACCEPT_POLICY}") \
               --dest-tls-verify=false \
+              --retry-times=5 \
               docker://quay.io/container-perf-tools/oslat:latest \
               docker://{{ mirror_registry }}/container-perf-tools/oslat:latest
           changed_when: false
@@ -96,6 +97,7 @@
             skopeo copy \
               --policy <(echo "${ACCEPT_POLICY}") \
               --dest-tls-verify=false \
+              --retry-times=5 \
               docker://quay.io/container-perf-tools/stress-ng:latest \
               docker://{{ mirror_registry }}/container-perf-tools/stress-ng:latest
           changed_when: false

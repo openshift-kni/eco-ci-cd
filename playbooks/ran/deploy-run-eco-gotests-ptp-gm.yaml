@@ -187,6 +187,7 @@
           ansible.builtin.command: >
             skopeo copy
             --dest-tls-verify=false
+            --retry-times=5
             docker://{{ eco_gotests_image }}:{{ eco_gotests_tag }}
             docker://{{ mirror_registry }}/{{ eco_gotests_image.split('/')[1:] | join('/') }}:{{ eco_gotests_tag }}
           register: skopeo_result
@@ -208,6 +209,7 @@
             skopeo copy
             --dest-tls-verify=false
             --all
+            --retry-times=5
             docker://quay.io/redhat-cne/cloud-event-consumer:4.18
             docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v1
           register: skopeo_v1_result
@@ -218,6 +220,7 @@
             skopeo copy
             --dest-tls-verify=false
             --all
+            --retry-times=5
             docker://quay.io/redhat-cne/cloud-event-consumer:latest
             docker://{{ mirror_registry }}/ran-test/cloud-event-consumer:v2
           register: skopeo_v2_result
@@ -237,6 +240,7 @@
             skopeo copy
             --dest-tls-verify=false
             --all
+            --retry-times=5
             --authfile {{ pull_secret_file | default('/tmp/auth.json') }}
             docker://{{ ptp_must_gather_src }}
             docker://{{ mirror_registry }}/ran-test/ptp-must-gather:v{{ version }}
@@ -256,6 +260,7 @@
           ansible.builtin.command: >
             skopeo copy
             --dest-tls-verify=false
+            --retry-times=5
             docker://registry.access.redhat.com/ubi9/ubi:latest
             docker://{{ mirror_registry }}/ubi9/ubi:latest
           register: skopeo_ubi_result

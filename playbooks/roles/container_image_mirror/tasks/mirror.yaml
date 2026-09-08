@@ -45,6 +45,7 @@
   ansible.builtin.command:
     cmd: >-
       skopeo copy --all
+      --retry-times=5
       {{ '--authfile ' + container_image_mirror_pull_secret_path if container_image_mirror_use_pull_secret | bool else '' }}
       {{ '--dest-tls-verify=false' if not container_image_mirror_dest_tls_verify else '' }}
       docker://{{ image_item.source }}

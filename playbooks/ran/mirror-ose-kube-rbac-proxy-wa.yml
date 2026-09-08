@@ -128,6 +128,7 @@
       ansible.builtin.command:
         cmd: >-
           skopeo copy --all
+          --retry-times=5
           --authfile {{ pull_secret_path }}
           --dest-tls-verify=false
           docker://{{ _rbac_proxy_image }}

@@ -38,6 +38,7 @@
   ansible.builtin.command:
     cmd: >-
       skopeo copy --all
+      --retry-times=5
       --authfile {{ lockdown_retag_authfile | default('/tmp/auth.json') }}
       docker://{{ lockdown_retag_source_image }}
       docker://{{ lockdown_retag_target_image }}

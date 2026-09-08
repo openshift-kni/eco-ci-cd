@@ -1,0 +1,59 @@
+---
+# Resolve the ironic-agent container image pullspec for a given OCP release.
+#
+# Queries the OpenShift release API for the latest z-stream in the requested
+# minor version, then uses `oc adm release info --image-for=ironic-agent` to
+# extract the ironic-agent image from that release payload.
+#
+# Required variables:
+#   ocp_version - OpenShift version (e.g. "4.17" or "4.17.9")
+#
+# Sets facts:
+#   ironic_agent_image_tag - release pullspec from the release API
+#   ironic_image_pullspec  - ironic-agent image pullspec for the release
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - ocp_version is defined and ocp_version | length > 0
+
+- name: Split ocp_version into major, minor, and patch versions
+  ansible.builtin.set_fact:
+    ocp_version_major: "{{ ocp_version.split('.')[0] }}"
+    ocp_version_minor: "{{ ocp_version.split('.')[1] }}"
+
+- name: Set OpenShift release API version bounds
+  ansible.builtin.set_fact:
+    _ocp_release_lower: "{{ ocp_version_major }}.{{ ocp_version_minor }}.0-0"
+    _ocp_release_upper: "{{ ocp_version_major }}.{{ ocp_version_minor | int + 1 }}.0-0"
+
+- name: Set OpenShift release API URL
+  ansible.builtin.set_fact:
+    _ocp_release_api_base: >-
+      https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/{{ ocp_version_major }}-stable-multi/latest
+    _ocp_release_api_query: "in=%3E{{ _ocp_release_lower }}+%3C{{ _ocp_release_upper }}"
+    _ocp_release_api_url: "{{ _ocp_release_api_base }}?{{ _ocp_release_api_query }}"
+
+- name: Get Ironic agent image from OpenShift Release API
+  ansible.builtin.uri:
+    url: "{{ _ocp_release_api_url }}"
+    method: GET
+  register: ironic_agent_image
+
+- name: Print Ironic agent image
+  ansible.builtin.set_fact:
+    ironic_agent_image_tag: "{{ ironic_agent_image.json.pullSpec }}"
+
+- name: Get Ironic image pullspec
+  ansible.builtin.command: >
+    oc adm release info --image-for=ironic-agent {{ ironic_agent_image_tag }}
+  register: oc_adm_release_info
+  changed_when: false
+
+- name: Set Ironic image pullspec
+  ansible.builtin.set_fact:
+    ironic_image_pullspec: "{{ oc_adm_release_info.stdout }}"
+
+- name: Print Ironic image pullspec
+  ansible.builtin.debug:
+    msg: "Ironic image pullspec: {{ ironic_image_pullspec }}"

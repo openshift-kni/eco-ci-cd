@@ -1,0 +1,20 @@
+---
+ocp_version_facts_release: "4.17"
+ocp_version_facts_arch: multi
+ocp_version_facts_query:
+  name: "4.17.23"
+  pullSpec: "quay.io/openshift-release-dev/ocp-release:4.17.23-multi"
+  downloadURL: "https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/4.17.23"
+image_age_days: 5
+
+expected_facts:
+  ocp_version_facts_pull_spec: "quay.io/openshift-release-dev/ocp-release:4.17.23-multi"
+  ocp_version_facts_parsed_release: "4.17.23"
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "17"
+  ocp_version_facts_z_stream: "23"
+  ocp_version_facts_release_type: "stable"
+  ocp_version_facts_oc_client_pull_link: "https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/4.17.23/openshift-client-linux-4.17.23.tar.gz"
+
+expected_undefined_facts:
+  - ocp_version_facts_dev_version

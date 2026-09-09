@@ -38,6 +38,8 @@
 # - ipv6_only (bool): enable IPv6-only network configuration
 # - ipv4_only (bool): enable IPv4-only network configuration
 # - cpu_partitioning (bool): enable partitioning of the disk
+# - arch: architecture of the cluster default x86_64.
+#         Available architectures: multi, aarch64, s390x and ppc64le
 
 ## Roles Requirements
 # The playbook uses role:
@@ -91,6 +93,7 @@
     ipv6_only: false
     ipv4_only: false
     disconnected: false
+    arch: x86_64
   tasks:
     - name: Fail if IPv6-only is requested without disconnected mode
       ansible.builtin.fail:
@@ -512,7 +515,7 @@
       vars:
         ocp_version_facts_release: "{{ release }}"
         ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
-
+        ocp_version_facts_arch: "{{ arch }}"
     - name: Clean HTTP storage directory
       become: true
       ansible.builtin.file:

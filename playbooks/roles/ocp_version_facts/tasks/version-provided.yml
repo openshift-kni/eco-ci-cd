@@ -1,4 +1,28 @@
 ---
+- name: Resolve release stream suffix for target architecture
+  ansible.builtin.set_fact:
+    _ocp_version_facts_arch_stream_suffix: >-
+      {%- if ocp_version_facts_arch in ocp_version_facts_arch_stream_suffixes -%}
+      {{ ocp_version_facts_arch_stream_suffixes[ocp_version_facts_arch] }}
+      {%- else -%}
+      -{{ ocp_version_facts_arch }}
+      {%- endif -%}
+
+- name: Resolve release stream host for target architecture
+  ansible.builtin.set_fact:
+    _ocp_version_facts_arch_stream_host: >-
+      {{ ocp_version_facts_arch_release_hosts[ocp_version_facts_arch] | default(ocp_version_facts_arch_release_hosts['x86_64']) }}
+
+- name: Configure release streams for target architecture
+  ansible.builtin.set_fact:
+    ocp_release_streams: >-
+      {{
+        ocp_release_streams
+        | map('regex_replace', '^https://[^/]+', _ocp_version_facts_arch_stream_host)
+        | map('regex_replace', '(/releasestream/[^/]+)(/)', '\1' + _ocp_version_facts_arch_stream_suffix + '\2')
+        | list
+      }}
+
 - name: Filter release streams for nightly when requested
   when:
     - ocp_version_facts_dev_version is defined

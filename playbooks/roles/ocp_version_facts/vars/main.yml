@@ -1,5 +1,24 @@
 ---
 # vars file for ocp_version
+# Non-x86_64 release streams are served from architecture-specific hosts
+# (e.g. multi -> multi.ocp.releases.ci.openshift.org), not from the default
+# x86_64 host. Unlisted architectures default to the x86_64 host.
+ocp_version_facts_arch_release_hosts:
+  x86_64: https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com
+  amd64: https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com
+  multi: https://multi.ocp.releases.ci.openshift.org
+  aarch64: https://arm64.ocp.releases.ci.openshift.org
+  arm64: https://arm64.ocp.releases.ci.openshift.org
+  ppc64le: https://ppc64le.ocp.releases.ci.openshift.org
+  s390x: https://s390x.ocp.releases.ci.openshift.org
+# Optional overrides for release-stream name suffixes. Unlisted architectures
+# default to "-<arch>" (e.g. ppc64le -> -ppc64le). x86_64 uses no suffix.
+ocp_version_facts_arch_stream_suffixes:
+  x86_64: ''
+  amd64: ''
+  multi: '-multi'
+  aarch64: '-arm64'
+  arm64: '-arm64'
 ocp_version_facts_artifacts_link: https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com
 ocp_version_facts_client_prefix: openshift-client-linux-
 registry: quay.io

@@ -68,6 +68,7 @@
     - name: Mirror ztp-site-generator image to disconnected registry
       ansible.builtin.shell: |
         skopeo copy --all \
+          --retry-times=5 \
           docker://{{ site_generate_image }} \
           docker://{{ disconnected_registry_url }}:{{ disconnected_registry_port }}/ztp/ztp-site-generator:{{ site_generate_image.split(':')[-1] }}
       environment:

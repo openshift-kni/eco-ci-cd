@@ -138,6 +138,7 @@
             --authfile={{ _pull_secret_path }}
             --src-tls-verify=false
             --dest-tls-verify=false
+            --retry-times=5
             {{ _src }}
             {{ _dest }}
           register: _ext_copy

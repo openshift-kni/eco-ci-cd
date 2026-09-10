@@ -1,0 +1,156 @@
+---
+# Deploy real ACM Observability for O-RAN testing.
+#
+# The o-cloud-manager alarms-server queries Alertmanager at
+# alertmanager.open-cluster-management-observability.svc:9095 to serve
+# the O2IMS alarms API. This playbook wires up the full stack:
+#
+#   1. MinIO on the bastion (Podman) — S3-compatible object storage for Thanos
+#   2. MultiClusterObservability CR — deploys Thanos + Grafana + Alertmanager
+#      using local-sc PVCs (small CI sizes) and MinIO as the backend
+#   3. Waits for the Alertmanager service to be ready
+#
+# Prerequisites:
+#   - Local Storage Operator installed with local-sc StorageClass
+#   - PVs available on local-sc for Thanos components (vol4-vol9)
+#   - ACM (MultiClusterHub) installed and Running
+#   - Valid kubeconfig for the hub cluster
+#
+# MinIO credentials are CI-internal fixed values; MinIO is only accessible
+# within the lab network via the bastion host.
+
+# ── Phase 1: Deploy MinIO on the bastion ──────────────────────────────────────
+- name: Import MinIO deployment playbook
+  ansible.builtin.import_playbook: ibu-deploy-minio.yml
+  vars:
+    # Fixed CI credentials — MinIO is lab-internal only.
+    minio_root_user: acmadmin
+    minio_root_password: acmadmin123
+    minio_access_key: acm-access-key
+    minio_secret_key: acm-secret-key
+    minio_bucket_name: acm-thanos
+    minio_work_dir: /home/telcov10n/minio-acm
+    minio_container_name: minio_acm
+
+# ── Phase 2: Apply MCO on the hub cluster ────────────────────────────────────
+- name: Configure MultiClusterObservability
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    minio_endpoint: "http://{{ ansible_host }}:9000"
+    minio_access_key: acm-access-key
+    minio_secret_key: acm-secret-key
+    minio_bucket_name: acm-thanos
+    mco_namespace: open-cluster-management-observability
+    mco_storage_class: local-sc
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined and kubeconfig | length > 0
+        fail_msg: "Variable 'kubeconfig' must be defined"
+
+    - name: Create open-cluster-management-observability namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ mco_namespace }}"
+
+    - name: Create object storage secret for Thanos
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ playbook_dir }}/templates/acm-observability-secret.yaml.j2"
+      no_log: true
+
+    - name: Wait for MultiClusterObservability CRD to be available
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: multiclusterobservabilities.observability.open-cluster-management.io
+      register: mco_crd
+      until: mco_crd.resources | length > 0
+      retries: 60
+      delay: 20
+
+    - name: Apply MultiClusterObservability CR
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ playbook_dir }}/templates/acm-observability-cr.yaml.j2"
+
+    # local-sc uses WaitForFirstConsumer binding mode: PVCs won't bind until
+    # a pod is scheduled, but the pod won't schedule until the PVC is bound.
+    # Break the deadlock by force-assigning Available PVs to Pending PVCs.
+    - name: Wait for MCO PVCs to be created by the StatefulSets
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: "{{ mco_namespace }}"
+      register: mco_pvcs
+      until: mco_pvcs.resources | length > 0
+      retries: 30
+      delay: 20
+
+    - name: Get Available local-sc PVs
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolume
+      register: all_pvs
+
+    - name: Identify Pending PVCs and Available PVs
+      ansible.builtin.set_fact:
+        pending_mco_pvcs: "{{ mco_pvcs.resources
+          | selectattr('status.phase', 'equalto', 'Pending')
+          | map(attribute='metadata.name') | list }}"
+        available_local_pvs: "{{ all_pvs.resources
+          | selectattr('status.phase', 'equalto', 'Available')
+          | selectattr('spec.storageClassName', 'equalto', mco_storage_class)
+          | map(attribute='metadata.name') | list }}"
+
+    - name: Force-bind Pending MCO PVCs to Available PVs
+      kubernetes.core.k8s:
+        state: patched
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: "{{ mco_namespace }}"
+        name: "{{ item.0 }}"
+        merge_type: merge
+        definition:
+          spec:
+            volumeName: "{{ item.1 }}"
+      loop: "{{ pending_mco_pvcs | zip(available_local_pvs) | list }}"
+      when:
+        - pending_mco_pvcs | length > 0
+        - available_local_pvs | length >= pending_mco_pvcs | length
+
+    - name: Wait for MultiClusterObservability to be ready
+      ansible.builtin.shell: |
+        oc wait --timeout=20m --for=condition=Ready \
+          multiclusterobservabilities observability
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Verify Alertmanager service is reachable from cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: alertmanager
+        namespace: "{{ mco_namespace }}"
+      register: alertmanager_svc
+      until:
+        - alertmanager_svc.resources | length > 0
+      retries: 30
+      delay: 20
+
+    - name: Confirm Alertmanager endpoint for o-cloud-manager alarms-server
+      ansible.builtin.debug:
+        msg: >-
+          Alertmanager ready at
+          alertmanager.{{ mco_namespace }}.svc:9095
+          — o-cloud-manager alarms-server will use this endpoint.

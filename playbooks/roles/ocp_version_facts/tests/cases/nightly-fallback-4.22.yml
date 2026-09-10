@@ -1,0 +1,40 @@
+---
+# The stable candidate is too old, so the role must continue to the configured
+# nightly stream and select its recent candidate.
+ocp_version_facts_release: "4.22"
+ocp_version_release_age_max_days: 100
+nightly_date: "{{ now(utc=true, fmt='%Y-%m-%d') }}"
+registry: "127.0.0.1"
+ocp_release_streams:
+  - "http://127.0.0.1:1/stable"
+  - "http://127.0.0.1:1/nightly"
+
+# Extra vars take precedence over the uri register result. The response varies
+# by release_stream so the first stream is stale and the second is acceptable.
+api_response:
+  status: 200
+  json:
+    tags: >-
+      {{
+        ([{
+          'name': '4.22.1',
+          'pullSpec': 'quay.io/openshift-release-dev/ocp-release:4.22.1-2020-01-01',
+          'downloadURL': 'https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.22.1',
+          'phase': 'Accepted'
+        }] if 'stable' in (release_stream | string) else [{
+          'name': '4.22.0-0.nightly-' ~ nightly_date ~ '-000000',
+          'pullSpec': 'quay.io/openshift-release-dev/ocp-release:4.22.0-0.nightly-' ~ nightly_date ~ '-000000',
+          'downloadURL': 'https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.22.0-0.nightly-' ~ nightly_date ~ '-000000',
+          'phase': 'Accepted'
+        }])
+      }}
+
+expected_facts:
+  ocp_version_facts_parsed_release: >-
+    {{ '4.22.0-0.nightly-' ~ nightly_date ~ '-000000' }}
+  ocp_version_facts_major: "4"
+  ocp_version_facts_minor: "22"
+  ocp_version_facts_release_type: "nightly"
+  ocp_version_facts_dev_version: >-
+    {{ '0-0.nightly-' ~ nightly_date ~ '-000000' }}
+  ocp_version_facts_z_stream: null

@@ -14,7 +14,8 @@ The `ocp_version_facts` Ansible role is responsible for managing and setting Ope
 - Ensures all required version facts are configured.
 - Provides debug output for all configured facts.
  - Parses nightly/EC/RC formats from pull-specs (e.g., `4.20.0-0.nightly-2025-07-31-063120`).
- - Strips architecture suffixes from pull-specs (e.g., `-x86`, `-x64`, `-x86_64`, `-aarch64`, `-ppc64le`, `-s390x`).
+ - Strips architecture suffixes from pull-specs (e.g., `-x86`, `-x64`, `-x86_64`, `-aarch64`, `-ppc64le`, `-s390x`, `-multi`).
+ - Resolves short release versions from architecture-specific release streams (`x86_64` by default, or `multi`).
  - Validates input and parsed version, failing fast with clear messages.
  - Computes image age and enforces maximum allowed age via `ocp_version_release_age_max_days`.
  - Sets `ocp_version_facts_release_type` (one of: `nightly`, `engineering-candidate`, `release-candidate`, or `stable`).
@@ -29,6 +30,7 @@ The `ocp_version_facts` Ansible role is responsible for managing and setting Ope
 The following variables are used within the role:
 
 - `ocp_version_facts_release`: Release version provided as input (e.g., `4.17.1`,`4.15`, `quay.io/openshift-release-dev/ocp-release:4.15.1-x86_64`).
+- `ocp_version_facts_arch`: Architecture for release-stream lookup when resolving short versions (default `x86_64`). Uses `ocp_version_facts_arch_stream_suffixes` when set, otherwise appends `-<arch>` to the stream name (e.g. `multi` -> `4-stable-multi`). Ignored when a full pull spec is provided.
 - `ocp_version_facts_parsed_release`: Parsed release version (e.g., `4.17.1`).
 - `ocp_version_facts_pull_spec`: Pull spec for the OCP image.
 - `ocp_version_facts_major`: Major version number (e.g., `4`).
@@ -48,6 +50,17 @@ To use this role, include it in your playbook as follows:
     - role: ocp_version_facts
       vars:
         ocp_version_facts_release: "4.17.1"
+```
+
+Multi-arch release stream:
+
+```yaml
+- hosts: localhost
+  roles:
+    - role: ocp_version_facts
+      vars:
+        ocp_version_facts_release: "4.17"
+        ocp_version_facts_arch: multi
 ```
 ## Tasks Description
 

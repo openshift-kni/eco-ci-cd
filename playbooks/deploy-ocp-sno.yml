@@ -34,6 +34,8 @@
 # Optional variables:
 # - ipv4_only, ipv6_only, disconnected (booleans; defaults are false)
 # - disconnected_registry_url, disconnected_registry_port
+# - arch: architecture of the cluster default x86_64
+#         Available architectures: multi, aarch64, s390x and ppc64le
 # - share_http_iso_port, dest_iso_dir, repo_root_path
 # - extra_manifests_folder: folder containing extra manifests for Day0 installation
 # - disable_insights (boolean; default is false): removes cloud.openshift.com from pull secret to opt out of remote health reporting
@@ -95,6 +97,7 @@
     registry_service_name: container-registry
     ipv6_only: false
     ipv4_only: false
+    arch: x86_64
   tasks:
 
     - name: Fail if IPv6-only is requested without disconnected mode
@@ -287,6 +290,7 @@
       vars:
         ocp_version_facts_release: "{{ release }}"
         ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
+        ocp_version_facts_arch: "{{ arch }}"
       ansible.builtin.import_role:
         name: ocp_version_facts
 

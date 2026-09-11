@@ -31,8 +31,10 @@
 
 - name: Compute operator-registry mirror values
   ansible.builtin.set_fact:
-    operator_registry_mirror_image: "{{ operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url) }}"
-    operator_registry_mirror_repo: "{{ (operator_registry_image | regex_replace('^[^/]+', ocp_operator_mirror_registry_url)).split('@')[0] }}"
+    # Mirror path should match where oc adm release mirror actually puts the images (ocp4/openshift)
+    # not the full quay.io repository structure (openshift-release-dev/ocp-v4.0-art-dev)
+    operator_registry_mirror_image: "{{ ocp_operator_mirror_registry_url }}/ocp4/openshift@{{ operator_registry_image.split('@')[1] }}"
+    operator_registry_mirror_repo: "{{ ocp_operator_mirror_registry_url }}/ocp4/openshift"
 
 - name: Check operator-registry image on mirror # noqa: command-instead-of-shell
   ansible.builtin.shell: >-

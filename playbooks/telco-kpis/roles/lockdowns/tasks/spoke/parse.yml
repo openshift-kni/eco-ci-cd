@@ -52,6 +52,10 @@
         spoke_ocp_pull_spec: "{{ spoke_lockdown_data.deployment.ocp_pull_spec }}"
         spoke_ocp_version: "{{ spoke_lockdown_data.deployment.ocp_version }}"
 
+    - name: Extract operator_source from legacy format
+      ansible.builtin.set_fact:
+        spoke_operator_source: "{{ spoke_lockdown_data.deployment.operator_source | default('production') }}"
+
     - name: Extract architecture from OCP pull spec (legacy format)
       ansible.builtin.set_fact:
         spoke_architecture: "{{ spoke_ocp_pull_spec.split(':')[-1].split('-')[-1] }}"
@@ -65,6 +69,7 @@
           - "OCP Version: {{ spoke_ocp_version }}"
           - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
           - "Architecture: {{ spoke_architecture }}"
+          - "Operator Source: {{ spoke_operator_source }}"
           - "Operators Count: {{ spoke_lockdown_operators | length }}"
           - "Hub Name: {{ spoke_lockdown_data.metadata.hub_name | default('N/A') }}"
           - "Mirror Timestamp: {{ spoke_lockdown_data.metadata.mirror_timestamp | default('N/A') }}"
@@ -88,6 +93,10 @@
         spoke_ocp_pull_spec: "{{ spoke_lockdown_data.spoke.ocp.pull_spec }}"
         spoke_ocp_version: "{{ spoke_lockdown_data.spoke.ocp.major_version }}.{{ spoke_lockdown_data.spoke.ocp.minor_version }}"
 
+    - name: Extract operator_source from new format
+      ansible.builtin.set_fact:
+        spoke_operator_source: "{{ spoke_lockdown_data.spoke.deployment.operator_source | default('production') }}"
+
     - name: Extract architecture from OCP pull spec (new format)
       ansible.builtin.set_fact:
         spoke_architecture: "{{ spoke_ocp_pull_spec.split(':')[-1].split('-')[-1] }}"
@@ -101,6 +110,7 @@
           - "OCP Version: {{ spoke_ocp_version }}"
           - "OCP Pull Spec: {{ spoke_ocp_pull_spec }}"
           - "Architecture: {{ spoke_architecture }}"
+          - "Operator Source: {{ spoke_operator_source }}"
           - "Operators Count: {{ spoke_lockdown_operators | length }}"
           - "Cluster Name: {{ spoke_lockdown_data.spoke.metadata.cluster_name }}"
           - "Capture Timestamp: {{ spoke_lockdown_data.spoke.metadata.capture_timestamp }}"

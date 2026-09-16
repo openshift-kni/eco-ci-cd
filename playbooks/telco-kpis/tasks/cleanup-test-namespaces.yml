@@ -1,0 +1,90 @@
+---
+# Cleanup test namespaces before running tests
+# Deletes specified namespaces to free up cluster resources (CPU, memory)
+#
+# Required variables:
+#   - spoke_kubeconfig: Path to spoke cluster kubeconfig
+#
+# Optional variables:
+#   - cleanup_namespaces: List of namespaces to delete (default: telco_kpis_cleanup_namespaces)
+#
+# Usage:
+#   ansible.builtin.import_tasks: cleanup-test-namespaces.yml
+#   vars:
+#     cleanup_namespaces:
+#       - test-ztp
+#       - ran-test
+#       - custom-namespace
+
+- name: Set cleanup namespaces from defaults if not provided
+  ansible.builtin.set_fact:
+    _cleanup_namespaces: "{{ cleanup_namespaces | default(telco_kpis_cleanup_namespaces) }}"
+
+- name: Display cleanup configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Test Namespace Cleanup"
+      - "=========================================="
+      - "Spoke Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Namespaces to cleanup: {{ _cleanup_namespaces | join(', ') }}"
+      - "=========================================="
+
+- name: Get existing namespaces on spoke cluster
+  kubernetes.core.k8s_info:
+    kind: Namespace
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: existing_namespaces
+  failed_when: false
+
+- name: Parse existing namespaces into list
+  ansible.builtin.set_fact:
+    _existing_ns_list: "{{ existing_namespaces.resources | map(attribute='metadata.name') | list }}"
+
+- name: Filter namespaces that exist and need cleanup
+  ansible.builtin.set_fact:
+    _namespaces_to_delete: "{{ _cleanup_namespaces | intersect(_existing_ns_list) }}"
+
+- name: Display namespaces found for deletion
+  ansible.builtin.debug:
+    msg:
+      - "Found {{ _namespaces_to_delete | length }} namespace(s) to delete: {{ _namespaces_to_delete | join(', ') }}"
+  when: _namespaces_to_delete | length > 0
+
+- name: Display no cleanup needed message
+  ansible.builtin.debug:
+    msg: "No cleanup needed - none of the target namespaces exist"
+  when: _namespaces_to_delete | length == 0
+
+- name: Delete test namespaces
+  kubernetes.core.k8s:
+    kind: Namespace
+    name: "{{ item }}"
+    state: absent
+    kubeconfig: "{{ spoke_kubeconfig }}"
+    wait: false
+  loop: "{{ _namespaces_to_delete }}"
+  when: _namespaces_to_delete | length > 0
+
+- name: Wait for namespaces to be fully removed
+  kubernetes.core.k8s_info:
+    kind: Namespace
+    name: "{{ item }}"
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  loop: "{{ _namespaces_to_delete }}"
+  when: _namespaces_to_delete | length > 0
+  register: wait_result
+  until: wait_result.resources | length == 0
+  retries: 60
+  delay: 5
+  failed_when: false
+
+- name: Display cleanup completion summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Cleanup completed successfully"
+      - "Deleted {{ _namespaces_to_delete | length }} namespace(s)"
+      - "Cluster resources freed for test execution"
+      - "=========================================="
+  when: _namespaces_to_delete | length > 0

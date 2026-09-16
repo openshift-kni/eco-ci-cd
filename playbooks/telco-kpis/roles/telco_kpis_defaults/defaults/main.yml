@@ -43,6 +43,14 @@ telco_kpis_default_spirent_port1: "//spt-n4u-mgmt/2/6"
 telco_kpis_default_spirent_port2: "//spt-n4u-mgmt/2/7"
 telco_kpis_default_spirent_config: "spirent_testcfg.xml"
 
+# Test Cleanup Configuration
+# Namespaces to delete before running tests to free up cluster resources
+telco_kpis_cleanup_namespaces:
+  - test-ztp
+  - ran-test
+  - cnfgotestpriv
+  - workload
+
 # Environment Variables
 telco_kpis_git_ssl_no_verify: "true"
 telco_kpis_ran_metrics_url: "https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/"

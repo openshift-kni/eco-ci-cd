@@ -44,13 +44,17 @@
     mode: '0600'
   no_log: "{{ ansible_verbosity < 3 }}"
 
-- name: Build augmented CA bundle including ran-metrics certificate chain
+- name: Build augmented CA bundle including ran-metrics and disconnected registry certificates
   ansible.builtin.shell: |
     set -o pipefail
     {
       cat /etc/pki/tls/certs/ca-bundle.crt
       openssl s_client -showcerts \
         -connect pushgateway.ran-metrics.telco5g.corp.redhat.com:443 \
+        < /dev/null 2>/dev/null \
+        | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/'
+      openssl s_client -showcerts \
+        -connect {{ disconnected_registry_url | default('disconnected.registry.local') }}:{{ disconnected_registry_port | default('5000') }} \
         < /dev/null 2>/dev/null \
         | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/'
     } > /tmp/telco-kpis-ca-bundle.pem

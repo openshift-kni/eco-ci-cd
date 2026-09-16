@@ -45,11 +45,8 @@ set -x
 git clone --depth 1 {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }} /workspace/ran-integration --branch {{ ran_integration_branch | default('master') }}
 set +x
 
-# WORKAROUND: Patch ran-integration's set_ran_test_image() to use correct registry regex
-# The original grep pattern 'registry.*500.' is too loose and causes authentication failures
-# We replace it with the actual disconnected registry FQDN pattern from vault
-echo "Patching ran-integration's set_ran_test_image() function for correct registry detection..."
-sed -i "s|grep -E \"registry\.\*500\.\"|grep -E \"{{ test_disconnected_registry }}\"|g" /workspace/ran-integration/scripts/ranStageUtils.sh
+# Set disconnected registry pattern for ran-integration's set_ran_test_image() function
+export DISCONNECTED_REGISTRY_PATTERN="{{ test_disconnected_registry }}"
 
 cd /workspace/ran-integration{% if test_working_subdir is defined %}/{{ test_working_subdir }}{% endif %}
 

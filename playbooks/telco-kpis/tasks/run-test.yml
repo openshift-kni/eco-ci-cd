@@ -22,6 +22,9 @@
 - name: Ensure test-runner container image exists on bastion
   ansible.builtin.import_tasks: setup-test-runner.yml
 
+- name: Cleanup test namespaces to free cluster resources
+  ansible.builtin.import_tasks: cleanup-test-namespaces.yml
+
 - name: Apply workarounds before reboot test
   when: test_name == 'reboot'
   ansible.builtin.include_role:

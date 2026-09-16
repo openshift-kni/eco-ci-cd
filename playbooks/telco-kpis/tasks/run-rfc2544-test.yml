@@ -219,6 +219,11 @@
       - "RFC2544_PARAMS: {{ rfc2544_params }}"
       - "=========================================="
 
+- name: Gather network facts for container etc_hosts configuration
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
 - name: Ensure kubeconfig is readable by podman container
   ansible.builtin.file:
     path: "{{ spoke_kubeconfig }}"
@@ -272,7 +277,7 @@
       - "/tmp/telco-kpis-disconnected-auth.json:/run/containers/0/auth.json:ro,Z"
       - "/tmp/telco-kpis-ca-bundle.pem:/etc/pki/tls/certs/ca-bundle.crt:ro,Z"
     etc_hosts:
-      disconnected.registry.local: "{{ ansible_host }}"
+      disconnected.registry.local: "{{ ansible_default_ipv4.address }}"
   register: rfc2544_result
   failed_when: false
   changed_when: false

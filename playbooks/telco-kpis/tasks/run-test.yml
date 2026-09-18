@@ -25,6 +25,9 @@
 - name: Cleanup test namespaces to free cluster resources
   ansible.builtin.import_tasks: cleanup-test-namespaces.yml
 
+- name: Cleanup test pods to free cluster resources
+  ansible.builtin.import_tasks: cleanup-test-pods.yml
+
 - name: Apply workarounds before reboot test
   when: test_name == 'reboot'
   ansible.builtin.include_role:

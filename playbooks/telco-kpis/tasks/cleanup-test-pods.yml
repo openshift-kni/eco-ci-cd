@@ -1,0 +1,81 @@
+---
+# Cleanup test pods before running tests
+# Deletes pods matching specified patterns to free up cluster resources (CPU, SR-IOV VFs)
+#
+# Required variables:
+#   - spoke_kubeconfig: Path to spoke cluster kubeconfig
+#
+# Optional variables:
+#   - cleanup_pods: List of pod patterns to delete (default: telco_kpis_cleanup_pods)
+#     Each item should have:
+#       - pod_name_pattern: Regex pattern to match pod names
+#       - namespace: Namespace where pods run
+#
+# Usage:
+#   ansible.builtin.import_tasks: cleanup-test-pods.yml
+#   vars:
+#     cleanup_pods:
+#       - pod_name_pattern: "^dpdk-testpmd-"
+#         namespace: "openshift-sriov-network-operator"
+#
+# NOTE: Only use pod cleanup for namespaces that are NOT in the namespace
+#       cleanup list. If the entire namespace is deleted, all pods are removed
+#       automatically - no need for pod-level cleanup.
+
+- name: Set cleanup pods from defaults if not provided
+  ansible.builtin.set_fact:
+    _cleanup_pods: "{{ cleanup_pods | default(telco_kpis_cleanup_pods | default([])) }}"
+
+- name: Display cleanup configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Test Pod Cleanup"
+      - "=========================================="
+      - "Spoke Kubeconfig: {{ spoke_kubeconfig }}"
+      - "Pod patterns to cleanup:"
+      - "{% for pod in _cleanup_pods %}  - {{ pod.pod_name_pattern }} in {{ pod.namespace }}{% endfor %}"
+      - "=========================================="
+  when: _cleanup_pods | length > 0
+
+- name: Display no cleanup needed message
+  ansible.builtin.debug:
+    msg: "No pod cleanup configured - skipping"
+  when: _cleanup_pods | length == 0
+
+- name: Find and delete pods matching patterns (fast shell approach)
+  ansible.builtin.shell: |
+    set -o pipefail
+    # Find pods matching pattern {{ item.pod_name_pattern }} in namespace {{ item.namespace }}
+    PODS=$(oc get pods -n {{ item.namespace }} \
+      --kubeconfig={{ spoke_kubeconfig }} \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+      2>/dev/null | grep -E '{{ item.pod_name_pattern }}' || true)
+
+    if [ -n "$PODS" ]; then
+      echo "Found pods: $PODS"
+      echo "$PODS" | xargs -r oc delete pod -n {{ item.namespace }} \
+        --kubeconfig={{ spoke_kubeconfig }} \
+        --ignore-not-found=true \
+        --wait=true \
+        --timeout=300s
+    else
+      echo "No pods found matching pattern {{ item.pod_name_pattern }}"
+    fi
+  loop: "{{ _cleanup_pods }}"
+  register: pod_cleanup_results
+  failed_when: false
+  changed_when: "'deleted' in pod_cleanup_results.stdout"
+  when: _cleanup_pods | length > 0
+
+- name: Display cleanup completion summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Pod cleanup completed"
+      - "Results:"
+      - "{% for result in pod_cleanup_results.results %}  - {{ result.item.namespace }}: {{ result.stdout_lines | join(', ') }}{% endfor %}"
+      - "=========================================="
+  when:
+    - _cleanup_pods | length > 0
+    - pod_cleanup_results is defined

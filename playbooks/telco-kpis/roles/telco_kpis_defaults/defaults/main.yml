@@ -51,6 +51,12 @@ telco_kpis_cleanup_namespaces:
   - cnfgotestpriv
   - workload
 
+# Pods to delete before running tests to free up cluster resources
+# Each entry specifies a pod name pattern (regex) and namespace
+telco_kpis_cleanup_pods:
+  - pod_name_pattern: "^dpdk-testpmd-"
+    namespace: "openshift-sriov-network-operator"
+
 # Environment Variables
 telco_kpis_git_ssl_no_verify: "true"
 telco_kpis_ran_metrics_url: "https://pushgateway.ran-metrics.telco5g.corp.redhat.com/metrics/job/pipeline1/"

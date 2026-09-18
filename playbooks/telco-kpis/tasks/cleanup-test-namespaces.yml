@@ -30,61 +30,22 @@
       - "Namespaces to cleanup: {{ _cleanup_namespaces | join(', ') }}"
       - "=========================================="
 
-- name: Get existing namespaces on spoke cluster
-  kubernetes.core.k8s_info:
-    kind: Namespace
-    kubeconfig: "{{ spoke_kubeconfig }}"
-  register: existing_namespaces
+- name: Delete test namespaces (fast - single command)
+  ansible.builtin.shell: |
+    oc delete namespace {{ _cleanup_namespaces | join(' ') }} \
+      --kubeconfig={{ spoke_kubeconfig }} \
+      --ignore-not-found=true \
+      --wait=true \
+      --timeout=300s
+  register: namespace_deletion
   failed_when: false
-
-- name: Parse existing namespaces into list
-  ansible.builtin.set_fact:
-    _existing_ns_list: "{{ existing_namespaces.resources | map(attribute='metadata.name') | list }}"
-
-- name: Filter namespaces that exist and need cleanup
-  ansible.builtin.set_fact:
-    _namespaces_to_delete: "{{ _cleanup_namespaces | intersect(_existing_ns_list) }}"
-
-- name: Display namespaces found for deletion
-  ansible.builtin.debug:
-    msg:
-      - "Found {{ _namespaces_to_delete | length }} namespace(s) to delete: {{ _namespaces_to_delete | join(', ') }}"
-  when: _namespaces_to_delete | length > 0
-
-- name: Display no cleanup needed message
-  ansible.builtin.debug:
-    msg: "No cleanup needed - none of the target namespaces exist"
-  when: _namespaces_to_delete | length == 0
-
-- name: Delete test namespaces
-  kubernetes.core.k8s:
-    kind: Namespace
-    name: "{{ item }}"
-    state: absent
-    kubeconfig: "{{ spoke_kubeconfig }}"
-    wait: false
-  loop: "{{ _namespaces_to_delete }}"
-  when: _namespaces_to_delete | length > 0
-
-- name: Wait for namespaces to be fully removed
-  kubernetes.core.k8s_info:
-    kind: Namespace
-    name: "{{ item }}"
-    kubeconfig: "{{ spoke_kubeconfig }}"
-  loop: "{{ _namespaces_to_delete }}"
-  when: _namespaces_to_delete | length > 0
-  register: wait_result
-  until: wait_result.resources | length == 0
-  retries: 60
-  delay: 5
-  failed_when: false
+  changed_when: "'deleted' in namespace_deletion.stdout"
 
 - name: Display cleanup completion summary
   ansible.builtin.debug:
     msg:
       - "=========================================="
-      - "Cleanup completed successfully"
-      - "Deleted {{ _namespaces_to_delete | length }} namespace(s)"
-      - "Cluster resources freed for test execution"
+      - "Namespace cleanup completed"
+      - "Command: oc delete namespace {{ _cleanup_namespaces | join(' ') }}"
+      - "Output: {{ namespace_deletion.stdout_lines | default(['No output']) | join(', ') }}"
       - "=========================================="
-  when: _namespaces_to_delete | length > 0

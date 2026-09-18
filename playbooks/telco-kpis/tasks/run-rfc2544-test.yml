@@ -7,6 +7,12 @@
 - name: Ensure test-runner container image exists on bastion
   ansible.builtin.import_tasks: setup-test-runner.yml
 
+- name: Cleanup test namespaces to free cluster resources
+  ansible.builtin.import_tasks: cleanup-test-namespaces.yml
+
+- name: Cleanup dpdk-testpmd pods to free cluster resources
+  ansible.builtin.import_tasks: cleanup-test-pods.yml
+
 - name: Create artifacts directory on bastion
   ansible.builtin.tempfile:
     state: directory

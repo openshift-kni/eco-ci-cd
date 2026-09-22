@@ -7,6 +7,8 @@ metadata:
         {{ annotations }}
 {% endif %}
 spec:
+    additionalKernelArgs:
+        - module_blacklist=irdma
     cpu:
         isolated: {{ cpu_isolated | default("4-23") }}
         reserved: {{ cpu_reserved | default("0-3") }}
@@ -25,6 +27,8 @@ spec:
     machineConfigPoolSelector:
         machineconfiguration.openshift.io/role: {{ 'master' if (is_sno | bool) else 'worker-cnf' }}
     net:
+        devices:
+        - interfaceName: '!eno*'
         userLevelNetworking: true
     nodeSelector:
         node-role.kubernetes.io/{{ 'master' if (is_sno | bool) else 'worker-cnf' }}: ""

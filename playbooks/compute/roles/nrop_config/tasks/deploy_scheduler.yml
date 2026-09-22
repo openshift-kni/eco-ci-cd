@@ -78,9 +78,9 @@
               - name: SCHEDULER_IMAGE_DIGESTS
                 value: "{{ scheduler_image_sha.stdout.split('@')[1] }}"
 
-- name: Set image name
-  ansible.builtin.set_fact:
-    scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
+    - name: Set image name
+      ansible.builtin.set_fact:
+        scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
 
 - name: Overwrite scheduler image uri
   ansible.builtin.set_fact:

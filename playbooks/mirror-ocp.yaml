@@ -1,0 +1,75 @@
+- name: Mirror OpenShift release ( disconnected )
+  hosts: bastion
+  gather_facts: true
+  vars:
+    release: "4.22"
+    arch: "x86_64"
+    pull_secret_file: "/tmp/pull-secret.json"
+  tasks:
+    - name: Set OCP version facts
+      ansible.builtin.import_role:
+        name: ocp_version_facts
+      vars:
+        ocp_version_facts_release: "{{ release }}"
+        ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
+        ocp_version_facts_arch: "{{ arch }}"
+
+    - name: Clean /opt/cache directory before mirroring
+      become: true
+      ansible.builtin.file:
+        path: /opt/cache
+        state: "{{ item }}"
+        mode: '0755'
+      with_items:
+        - absent
+        - directory
+
+    - name: Set pull secret fact
+      ansible.builtin.set_fact:
+        pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+
+    - name: Add registry credentials to pull secret
+      ansible.builtin.set_fact:
+        pull_secret: >-
+          {{
+            pull_secret | combine({
+              'auths': pull_secret.auths | combine({
+                (disconnected_registry_url ~ ':' ~ disconnected_registry_port): {
+                  'auth': ((ansible_user ~ ':' ~ ansible_password) | b64encode)
+                }
+              })
+            }, recursive=True)
+          }}
+
+    - name: Write pull secret to file
+      ansible.builtin.copy:
+        content: "{{ pull_secret | to_json }}"
+        dest: "{{ pull_secret_file }}"
+        mode: "0600"
+
+    - name: Mirror OpenShift release (disconnected)
+      vars:
+        _ocp_use_major_registry_path: >-
+          {{
+            ocp_version_facts_major | int > 4
+            or (ocp_version_facts_major | int == 4 and ocp_version_facts_minor | int >= 20)
+          }}
+        mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
+        mor_version: "{{ ocp_version_facts_parsed_release }}"
+        mor_pull_url: "{{ ocp_version_facts_pull_spec }}"
+        mor_cache_dir: "/opt/cache"
+        mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
+        mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        mor_registry_path: >-
+          {{ 'ocp' ~ ocp_version_facts_major
+            if _ocp_use_major_registry_path
+            else 'ocp4/openshift' }}
+        mor_auths_file: "{{ pull_secret_file }}"
+        mor_force: true
+        mor_install_type: "acm"
+        mor_is_type: "idms"
+        mor_mirror_disk_images: true
+        mor_mirror_container_images: true
+        mor_write_custom_config: true
+      ansible.builtin.include_role:
+        name: redhatci.ocp.mirror_ocp_release

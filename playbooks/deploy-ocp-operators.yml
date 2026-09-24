@@ -27,6 +27,7 @@
 # - redhatci.ocp.catalog_source
 
 ## Variables
+# - arch (str): target architecture used when resolving the OCP version pull spec (e.g., "x86_64", "multi", "aarch64"), default is "x86_64"
 # - disconnected (bool): set true to mirror & use internal registry, default is false
 # - mirror_only (bool): set true to only mirror operators without installing them, default is false
 # - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
@@ -81,6 +82,7 @@
   gather_facts: true
   # Refer to the variables below as an example.
   vars:
+    arch: "x86_64"
     disconnected: false
     mirror_only: false  # Set to true to only mirror operators without installing
       # version: "4.17"
@@ -154,6 +156,7 @@
                 name: ocp_version_facts
               vars:
                 ocp_version_facts_release: "{{ version_string }}"
+                ocp_version_facts_arch: "{{ arch }}"
 
             - name: Set extracted version for operator mirror
               ansible.builtin.set_fact:

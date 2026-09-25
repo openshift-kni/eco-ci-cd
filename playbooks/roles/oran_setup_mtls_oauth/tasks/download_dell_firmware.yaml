@@ -1,0 +1,19 @@
+- name: Download Dell {{ oran_firmware_server_model }} firmware {{ item }}
+  ansible.builtin.get_url:
+    url: "{{ oran_dell_firmware[oran_firmware_server_model][item].url }}"
+    dest: "/opt/cached_disconnected_images"
+    mode: "0644"
+    checksum: "sha256:{{ oran_dell_firmware[oran_firmware_server_model][item].sha256 }}"
+    http_agent: "{{ oran_dell_firmware_user_agent }}"
+  register: firmware_download_result
+  retries: 3
+  delay: 60
+  until: firmware_download_result is success
+  when:
+    - oran_dell_firmware[oran_firmware_server_model][item].url is defined
+    - oran_dell_firmware[oran_firmware_server_model][item].sha256 is defined
+  loop:
+    - latest_bios
+    - old_bios
+    - latest_idrac
+    - old_idrac

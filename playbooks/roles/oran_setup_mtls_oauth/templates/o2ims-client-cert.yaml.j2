@@ -1,0 +1,24 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: o2ims-client-tls-certificate
+  namespace: {{ oran_o2ims_deploy_namespace }}
+spec:
+  secretName: o2ims-client-tls-certificate
+  subject:
+    countries: [US]
+    provinces: [NC]
+    localities: [Raleigh]
+    organizations: [Red Hat]
+    organizationalUnits: [Telco Verification]
+  # The Inventory resource says the CN **and** the DNS SAN must match exactly
+  # the hostname, so we set the CN even though dnsNames configures the SAN.
+  commonName: o2ims.apps.{{ oran_hub_domain }}
+  dnsNames:
+    - o2ims.apps.{{ oran_hub_domain }}
+  issuerRef:
+    name: root-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---

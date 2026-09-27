@@ -1,5 +1,5 @@
 # jinja2: trim_blocks: True, lstrip_blocks: True
-{% if ocp_version_major | int == 5 or ocp_version_minor | int <= 17 %}
+{% if ocp_version_major | int == 5 or ocp_version_minor | int >= 18 %}
 apiVersion: nodetopology.openshift.io/v1
 kind: NUMAResourcesOperator
 metadata:

@@ -19,4 +19,7 @@ jobs:
       - name: Install dependencies
         run: pip install ansible ansible-lint
       - name: Run ansible-lint
+        env:
+          ANSIBLE_DEPRECATION_WARNINGS: 'False'
+          ANSIBLE_ACTION_WARNINGS: 'False'
         run: ansible-lint

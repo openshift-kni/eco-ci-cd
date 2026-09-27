@@ -3,10 +3,8 @@
   ansible.builtin.set_fact:
     _ocp_version_facts_arch_stream_suffix: >-
       {%- if ocp_version_facts_arch in ocp_version_facts_arch_stream_suffixes -%}
-      {{ ocp_version_facts_arch_stream_suffixes[ocp_version_facts_arch] }}
-      {%- else -%}
-      -{{ ocp_version_facts_arch }}
-      {%- endif -%}
+      {{ ocp_version_facts_arch_stream_suffixes[ocp_version_facts_arch] }}{%- else -%}
+      -{{ ocp_version_facts_arch }}{%- endif -%}
 
 - name: Resolve release stream host for target architecture
   ansible.builtin.set_fact:

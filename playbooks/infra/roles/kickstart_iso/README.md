@@ -46,6 +46,11 @@ kickstart_iso_net_config:
   gw: "192.168.1.1"
   dns: "8.8.8.8"
 ```
+
+All keys except `hostname` are required. When `hostname` is set it is rendered as
+`--hostname` on the Kickstart `network` line; when it is omitted or empty the option
+is left out and the installed system keeps the default `localhost.localdomain`.
+
 ## Handlers
 The role includes handlers to clean up temporary files and directories:
 - Remove mount directory.

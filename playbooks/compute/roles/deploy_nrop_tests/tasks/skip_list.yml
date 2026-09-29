@@ -79,8 +79,13 @@
     - ginkgo_label is undefined or ginkgo_label | length == 0
     - test_env == "prod"
 
-- name: Save test script
+- name: Save test scripts
   ansible.builtin.template:
-    src: nrop_test_script.sh.j2
-    dest: "{{ tmp_workdir }}/{{ scope }}_nrop_test_script.sh"
+    src: "{{ item.src }}"
+    dest: "{{ tmp_workdir }}/{{ scope }}_nrop_test_script{{ item.suffix }}.sh"
     mode: '0776'
+  loop:
+    - { src: nrop_test_script.sh.j2, suffix: '' }
+    - { src: nrop_test_script_schedrst.sh.j2, suffix: '_schedrst' }
+    - { src: nrop_test_script_mustgather.sh.j2, suffix: '_mustgather' }
+  when: item.suffix == '' or not (run_reboot_tests_only | bool)

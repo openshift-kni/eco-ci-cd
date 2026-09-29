@@ -1,4 +1,10 @@
 ---
+- name: Save pull secret
+  ansible.builtin.copy:
+    content: "{{ pull_secret_string | b64decode }}"
+    dest: /tmp/pull_secret
+    mode: '0660'
+
 - name: Get FBC image sha
   when: test_env == "stage"
   environment:
@@ -6,15 +12,10 @@
   ansible.builtin.shell: |
     set -o pipefail
     POD_NAME=$(oc -n openshift-marketplace get pods -o name | grep numaresource | head -n 1)
-    oc -n openshift-marketplace get "$POD_NAME" -o json | jq -r '.status.containerStatuses[0].imageID'
+    IMAGE=$(oc -n openshift-marketplace get "$POD_NAME" -o jsonpath='{.spec.containers[0].image}')
+    skopeo inspect --no-tags --authfile /tmp/pull_secret --format '{% raw %}{{.Digest}}{% endraw %}' "docker://${IMAGE}"
   changed_when: fbc_image_sha.rc == 0
   register: fbc_image_sha
-
-- name: Save pull secret
-  ansible.builtin.copy:
-    content: "{{ pull_secret_string | b64decode }}"
-    dest: /tmp/pull_secret
-    mode: '0660'
 
 - name: Get must gather sha
   ansible.builtin.shell: >

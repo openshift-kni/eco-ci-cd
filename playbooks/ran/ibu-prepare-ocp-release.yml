@@ -39,7 +39,8 @@
 #   mirror_ocp_release_cache_dir:        Working directory for oc-mirror cache
 #                                        (default: /opt/cache)
 #   mirror_ocp_release_registry_path:    Repository path inside the registry
-#                                        (default: ocp4/openshift)
+#                                        (ocp4 for 4.20+, ocp4/openshift for
+#                                        earlier releases)
 #   mirror_ocp_release_pull_secret_path: Temp path to write the pull secret
 #                                        (default: /tmp/pull-secret.json)
 #
@@ -57,7 +58,6 @@
 
   vars:
     mirror_ocp_release_cache_dir: /opt/cache
-    mirror_ocp_release_registry_path: ocp4/openshift
     mirror_ocp_release_pull_secret_path: /tmp/pull-secret.json
 
   tasks:
@@ -85,6 +85,15 @@
         name: ocp_version_facts
       vars:
         ocp_version_facts_release: "{{ release | string }}"
+
+    - name: Select release mirror registry path
+      ansible.builtin.set_fact:
+        _mirror_uses_oc_mirror_v2: >-
+          {{ ocp_version_facts_parsed_release is version('4.20', '>=') }}
+        mirror_ocp_release_registry_path: >-
+          {{ 'ocp' ~ ocp_version_facts_major
+             if ocp_version_facts_parsed_release is version('4.20', '>=')
+             else 'ocp4/openshift' }}
 
     - name: Reset oc-mirror cache directory
       become: true
@@ -143,22 +152,31 @@
             -a {{ mirror_ocp_release_pull_secret_path }}
             quay.io/openshift-release-dev/ocp-release:{{ _release_digest }}.sig
             {{ _mirror_registry }}/{{ mirror_ocp_release_registry_path
-            }}:{{ _release_digest }}.sig
+            }}/openshift/release-images:{{ _release_digest }}.sig
           register: _sig_mirror_result
           changed_when: _sig_mirror_result.rc == 0
 
   post_tasks:
-    - name: Remove pull secret temp file
-      ansible.builtin.file:
-        path: "{{ mirror_ocp_release_pull_secret_path }}"
-        state: absent
-
     - name: Set ClusterImageSet release image fact
       ansible.builtin.set_fact:
         _cis_release_image: >-
           {{ disconnected_registry_url }}:{{ disconnected_registry_port
-          }}/{{ mirror_ocp_release_registry_path
-          }}:{{ ocp_version_facts_parsed_release }}
+          }}/{{ mirror_ocp_release_registry_path }}{{
+          '/openshift/release-images@' ~ mor_release_image_digest
+          if _mirror_uses_oc_mirror_v2 | bool
+          else ':' ~ ocp_version_facts_parsed_release }}
+
+    - name: Verify mirrored release image is pullable
+      ansible.builtin.command: >-
+        skopeo inspect --no-tags --tls-verify=false
+        --authfile {{ mirror_ocp_release_pull_secret_path }}
+        docker://{{ _cis_release_image }}
+      changed_when: false
+
+    - name: Remove pull secret temp file
+      ansible.builtin.file:
+        path: "{{ mirror_ocp_release_pull_secret_path }}"
+        state: absent
 
     - name: Create or update ClusterImageSet for mirrored OCP version
       when:

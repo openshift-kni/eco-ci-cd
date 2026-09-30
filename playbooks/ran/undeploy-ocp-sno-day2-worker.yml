@@ -42,7 +42,9 @@
   vars:
     sno_branch: "sno_day2_worker"
     openshift_gitops_namespace: "openshift-gitops"
-    day2_cgu_name: "day2-worker-cgu"
+    # Keep in sync with deploy-ocp-sno-day2-worker.yml.
+    day2_cgu_name: "d2-worker"
+    legacy_day2_cgu_name: "day2-worker-cgu"
   tasks:
     - name: Define a unique id for this playbook session
       ansible.builtin.set_fact:
@@ -86,17 +88,22 @@
           delay: 30
 
         # ── Phase 1: Delete any existing CGU to avoid interference ──
-        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade # noqa: ignore-errors
+        - name: Delete pre-existing day2 worker ClusterGroupUpgrades # noqa: ignore-errors
           kubernetes.core.k8s:
             api_version: ran.openshift.io/v1alpha1
             kind: ClusterGroupUpgrade
-            name: "{{ day2_cgu_name }}"
+            name: "{{ item }}"
             namespace: default
             kubeconfig: "{{ kubeconfig }}"
             state: absent
             wait: true
             wait_timeout: 120
           ignore_errors: true
+          loop:
+            - "{{ day2_cgu_name }}"
+            - "{{ legacy_day2_cgu_name }}"
+          loop_control:
+            label: "{{ item }}"
 
         # ── Phase 2: Revert the clusters application to SNO-only branch ──
         - name: Patch the ArgoCD clusters application to revert to SNO-only branch

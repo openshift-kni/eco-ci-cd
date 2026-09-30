@@ -48,12 +48,26 @@
   vars:
     day2_branch: "day2-worker"
     openshift_gitops_namespace: "openshift-gitops"
-    day2_cgu_name: "day2-worker-cgu"
+    # CGU-generated placement labels combine this name with the managed policy
+    # name; keep it short to stay within Kubernetes' 63-character label limit.
+    day2_cgu_name: "d2-worker"
+    legacy_day2_cgu_name: "day2-worker-cgu"
     day2_managed_policies:
       - common-config-policy
       - common-subscriptions-policy
       - group-du-standard-config-policy
       - group-du-standard-site-config-policy
+    operator_subscriptions:
+      - name: ptp-operator-subscription
+        namespace: openshift-ptp
+      - name: sriov-network-operator-subscription
+        namespace: openshift-sriov-network-operator
+      - name: cluster-logging
+        namespace: openshift-logging
+      - name: local-storage-operator
+        namespace: openshift-local-storage
+      - name: sriov-fec-subscription
+        namespace: vran-acceleration-operators
     operator_configs:
       - name: PTP Operator
         api_version: ptp.openshift.io/v1
@@ -151,41 +165,101 @@
               Spoke cluster did not finish bootstrapping within 30 minutes.
               ClusterVersion is not yet Available or is still Progressing.
 
-        - name: Get the configs from spoke cluster for each operator
+        - name: Get operator subscriptions from the spoke cluster
           kubernetes.core.k8s_info:
-            api_version: "{{ item.api_version }}"
-            kind: "{{ item.kind }}"
-            name: "{{ item.resource_name }}"
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: "{{ item.name }}"
             namespace: "{{ item.namespace }}"
             kubeconfig: "{{ spoke_kubeconfig }}"
-          loop: "{{ operator_configs }}"
+          loop: "{{ operator_subscriptions }}"
           loop_control:
-            label: "{{ item.name }}"
-          register: operator_config_results
+            label: "{{ item.namespace }}/{{ item.name }}"
+          register: operator_subscription_results
 
-        - name: Assert that the operator configs were found
+        - name: Assert that all expected operator subscriptions were found
           ansible.builtin.assert:
             that:
               - item.resources | length > 0
-            fail_msg: "{{ item.item.kind }}/{{ item.item.resource_name }} not found in namespace {{ item.item.namespace }}"
-            success_msg: "{{ item.item.name }} config found"
-          loop: "{{ operator_config_results.results }}"
+            fail_msg: >-
+              Subscription {{ item.item.name }} not found in namespace
+              {{ item.item.namespace }}.
+          loop: "{{ operator_subscription_results.results }}"
           loop_control:
-            label: "{{ item.item.name }}"
+            label: "{{ item.item.namespace }}/{{ item.item.name }}"
 
-        - name: Assert that the daemon node selector is not set to master
+        - name: Approve pending operator InstallPlans
+          kubernetes.core.k8s:
+            api_version: operators.coreos.com/v1alpha1
+            kind: InstallPlan
+            name: "{{ item.resources[0].status.installplan.name }}"
+            namespace: "{{ item.item.namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+            state: patched
+            merge_type: merge
+            definition:
+              spec:
+                approved: true
+          when:
+            - item.resources[0].status.state | default('') == 'UpgradePending'
+            - >-
+              item.resources[0].status.installplan.name | default('') |
+              length > 0
+          loop: "{{ operator_subscription_results.results }}"
+          loop_control:
+            label: "{{ item.item.namespace }}/{{ item.item.name }}"
+
+        - name: Wait for operator subscriptions to install their requested CSVs
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: "{{ item.name }}"
+            namespace: "{{ item.namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: installed_operator_subscription
+          until: >-
+            installed_operator_subscription.resources is defined and
+            installed_operator_subscription.resources | length > 0 and
+            installed_operator_subscription.resources[0].status.installedCSV |
+              default('') | length > 0 and
+            installed_operator_subscription.resources[0].status.installedCSV ==
+              installed_operator_subscription.resources[0].status.currentCSV
+          retries: 60
+          delay: 30
+          loop: "{{ operator_subscriptions }}"
+          loop_control:
+            label: "{{ item.namespace }}/{{ item.name }}"
+
+        - name: Wait for each operator CSV to finish installing
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            name: "{{ item.resources[0].status.installedCSV }}"
+            namespace: "{{ item.item.namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: operator_csv_results
+          until: >-
+            operator_csv_results.resources is defined and
+            operator_csv_results.resources | length > 0 and
+            operator_csv_results.resources[0].status.phase in
+              ['Succeeded', 'Failed']
+          retries: 60
+          delay: 30
+          loop: "{{ installed_operator_subscription.results }}"
+          loop_control:
+            label: "{{ item.item.namespace }}/{{ item.item.name }}"
+
+        - name: Assert all operator CSVs succeeded
           ansible.builtin.assert:
             that:
-              - "'node-role.kubernetes.io/master' not in (item.resources[0].spec[item.item.selector_field] | default({}))"
+              - item.resources | length > 0
+              - item.resources[0].status.phase == 'Succeeded'
             fail_msg: >-
-              {{ item.item.name }} {{ item.item.selector_field }} is set to 'master'.
-              The spoke was deployed with an older GitOps ZTP plugin version
-              that requires node selector changes before proceeding with the
-              worker DU profile configuration.
-            success_msg: "{{ item.item.name }} {{ item.item.selector_field }} is not set to 'master'"
-          loop: "{{ operator_config_results.results }}"
+              Operator CSV for subscription {{ item.item.item.name }} in
+              namespace {{ item.item.item.namespace }} did not succeed.
+          loop: "{{ operator_csv_results.results }}"
           loop_control:
-            label: "{{ item.item.name }}"
+            label: "{{ item.item.item.namespace }}/{{ item.item.item.name }}"
 
         # ── Phase 1: Enforce day2 worker policies before provisioning ──
         - name: Patch the ArgoCD policies application to switch to the day2-worker branch
@@ -217,17 +291,21 @@
           retries: 30
           delay: 20
 
-        - name: Delete any pre-existing day2 worker ClusterGroupUpgrade # noqa: ignore-errors
+        - name: Delete pre-existing day2 worker ClusterGroupUpgrades
           kubernetes.core.k8s:
             api_version: ran.openshift.io/v1alpha1
             kind: ClusterGroupUpgrade
-            name: "{{ day2_cgu_name }}"
+            name: "{{ item }}"
             namespace: default
             kubeconfig: "{{ kubeconfig }}"
             state: absent
             wait: true
             wait_timeout: 120
-          ignore_errors: true
+          loop:
+            - "{{ day2_cgu_name }}"
+            - "{{ legacy_day2_cgu_name }}"
+          loop_control:
+            label: "{{ item }}"
 
         - name: Create ClusterGroupUpgrade to enforce day2 worker policies via TALM
           kubernetes.core.k8s:
@@ -278,6 +356,76 @@
             fail_msg: >-
               ClusterGroupUpgrade '{{ day2_cgu_name }}' failed to enforce
               day2 worker policies on cluster '{{ spoke_cluster_name }}'
+
+        - name: Wait for the PTP Operator default config to be created
+          kubernetes.core.k8s_info:
+            api_version: ptp.openshift.io/v1
+            kind: PtpOperatorConfig
+            name: default
+            namespace: openshift-ptp
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: ptp_operator_config
+          until: >-
+            ptp_operator_config.resources is defined and
+            ptp_operator_config.resources | length > 0
+          retries: 60
+          delay: 30
+
+        - name: Wait for the SR-IOV Operator default config to be created
+          kubernetes.core.k8s_info:
+            api_version: sriovnetwork.openshift.io/v1
+            kind: SriovOperatorConfig
+            name: default
+            namespace: openshift-sriov-network-operator
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: sriov_operator_config
+          until: >-
+            sriov_operator_config.resources is defined and
+            sriov_operator_config.resources | length > 0
+          retries: 60
+          delay: 30
+
+        - name: Get the configs from spoke cluster for each operator
+          kubernetes.core.k8s_info:
+            api_version: "{{ item.api_version }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.resource_name }}"
+            namespace: "{{ item.namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          loop: "{{ operator_configs }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: operator_config_results
+
+        - name: Assert that the operator configs were found
+          ansible.builtin.assert:
+            that:
+              - item.resources | length > 0
+            fail_msg: >-
+              {{ item.item.kind }}/{{ item.item.resource_name }} not found in
+              namespace {{ item.item.namespace }}.
+            success_msg: "{{ item.item.name }} config found"
+          loop: "{{ operator_config_results.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+
+        - name: Assert that the daemon node selector is not set to master
+          ansible.builtin.assert:
+            that:
+              - >-
+                'node-role.kubernetes.io/master' not in
+                (item.resources[0].spec[item.item.selector_field] | default({}))
+            fail_msg: >-
+              {{ item.item.name }} {{ item.item.selector_field }} is set to
+              'master'. The spoke was deployed with an older GitOps ZTP plugin
+              version that requires node selector changes before proceeding
+              with the worker DU profile configuration.
+            success_msg: >-
+              {{ item.item.name }} {{ item.item.selector_field }} is not set
+              to 'master'.
+          loop: "{{ operator_config_results.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
 
         # ── Phase 2: Provision the worker node ──
         - name: Patch the ArgoCD clusters application to switch to the day2-worker branch

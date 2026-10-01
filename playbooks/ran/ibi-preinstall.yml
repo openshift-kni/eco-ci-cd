@@ -131,4 +131,4 @@
         msg:
           - "Launcher ready: {{ ibi_work_dir }}/eco-gotests-ibi-preinstall-run.sh"
           - "Reports: {{ ibi_work_dir }}/report"
-          
+

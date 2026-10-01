@@ -1,0 +1,134 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Prepare IBI preinstall test launcher
+# Description  : This playbook prepares a target bastion host to run eco-gotests
+#                IBI (Image-Based Install) preinstall tests. It validates all
+#                required inputs, pulls the eco-gotests container, and generates
+#                a self-contained bash script that provisions the target host
+#                via IBI and runs the preinstall test suite.
+#                The playbook does not execute the preinstall itself; run the
+#                generated launcher only when the target is ready to be
+#                provisioned, before its final ClusterInstance deployment.
+#
+# Prerequisites:
+#   - ibi_hub_kubeconfig, ibi_openshift_install_path and ibi_ssh_private_key_path
+#     must be accessible as regular readable files on the bastion
+#   - An HTTP server must already be running and serving ibi_http_dir
+#   - The seed image and installation-config template URL must already exist
+#   - bmc_user and bmc_password must be provided (preferably via inventory)
+#   - Serialize runs that share ibi_http_dir: the suite uses a fixed ISO name
+#
+# Key Tasks:
+#   - Validate all required and optional inputs
+#   - Verify required files exist and are readable/executable on the bastion
+#   - Pull and verify the eco-gotests container image
+#   - Write a private BMC credentials environment file
+#   - Generate the IBI preinstall launcher script from a Jinja2 template
+
+# Usage:
+# Run this playbook using Ansible:
+#   ansible-playbook ./playbooks/ran/ibi-preinstall.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "ibi_hub_kubeconfig=/path/to/kubeconfig \
+#       ibi_seed_image=quay.io/example/seed:latest \
+#       ibi_cluster_instance_url=https://raw.example.com/clusterinstance.yaml \
+#       ibi_config_template_url=https://raw.example.com/install-config.yaml.tmpl \
+#       ibi_openshift_install_path=/usr/local/bin/openshift-install \
+#       ibi_http_dir=/var/www/html/ibi \
+#       ibi_http_base_url=http://bastion.example.com/ibi \
+#       ibi_ssh_private_key_path=/home/telcov10n/.ssh/id_rsa \
+#       bmc_user=admin \
+#       bmc_password=secret"
+#
+# Available extra-vars:
+# ibi_hub_kubeconfig          # string: Absolute path to the hub kubeconfig file on bastion (required)
+# ibi_seed_image              # string: Seed image reference available to the target (required)
+# ibi_cluster_instance_url    # string: Raw HTTP(S) URL to the target ClusterInstance manifest (required)
+# ibi_config_template_url     # string: Raw HTTP(S) URL to the Go installation-config template (required)
+# ibi_openshift_install_path  # string: Absolute path to a compatible openshift-install binary (required)
+# ibi_http_dir                # string: Absolute path to writable HTTP server document directory (required)
+# ibi_http_base_url           # string: HTTP URL serving ibi_http_dir, reachable by provisioning (required)
+# ibi_ssh_private_key_path    # string: Absolute path to key matching the hub's 99-master-ssh public key (required)
+# bmc_user                    # string: BMC username; supply via inventory (required)
+# bmc_password                # string: BMC password; supply via inventory (required)
+# eco_gotests_image           # string: Full image reference including tag or digest (default: quay.io/ocp-edge-qe/eco-gotests:latest)
+# ibi_seed_version            # string: Seed image OCP version override (default: "")
+# ibi_preinstall_registry     # string: Disconnected registry for IBI preinstall images (default: "")
+# ibi_skip_tls_verify         # bool:   Skip TLS verification for registry connections (default: false)
+# ibi_work_dir                # string: Private working directory on bastion (default: /tmp/eco_gotests_ibi_preinstall)
+# ibi_test_timeout            # string: Test suite timeout, e.g. 3h (default: 3h)
+# pull_container_image        # bool:   Pull eco-gotests image before running (default: true)
+
+- name: Prepare IBI preinstall test launcher on target bastion
+  hosts: bastion
+  gather_facts: false
+  tags: setup
+  vars:
+    eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests:latest
+    ibi_work_dir: /tmp/eco_gotests_ibi_preinstall
+    ibi_test_timeout: 3h
+    ibi_seed_version: ""
+    ibi_preinstall_registry: ""
+    ibi_skip_tls_verify: false
+    pull_container_image: true
+  tasks:
+    - name: Validate required non-secret inputs
+      ansible.builtin.assert:
+        that:
+          - item.value | string | trim | length > 0
+        fail_msg: "Required input {{ item.key }} is missing or empty"
+      loop:
+        - {key: ibi_hub_kubeconfig, value: "{{ ibi_hub_kubeconfig | default('') }}"}
+        - {key: ibi_seed_image, value: "{{ ibi_seed_image | default('') }}"}
+        - {key: ibi_cluster_instance_url, value: "{{ ibi_cluster_instance_url | default('') }}"}
+        - {key: ibi_config_template_url, value: "{{ ibi_config_template_url | default('') }}"}
+        - {key: ibi_openshift_install_path, value: "{{ ibi_openshift_install_path | default('') }}"}
+        - {key: ibi_http_dir, value: "{{ ibi_http_dir | default('') }}"}
+        - {key: ibi_http_base_url, value: "{{ ibi_http_base_url | default('') }}"}
+        - {key: ibi_ssh_private_key_path, value: "{{ ibi_ssh_private_key_path | default('') }}"}
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Create private launcher directory
+      ansible.builtin.file:
+        path: "{{ ibi_work_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Pull configured eco-gotests image
+      ansible.builtin.command:
+        argv:
+          - podman
+          - pull
+          - "{{ eco_gotests_image }}"
+      changed_when: true
+      when: pull_container_image | bool
+
+    - name: Write private BMC environment file
+      ansible.builtin.copy:
+        dest: "{{ ibi_work_dir }}/bmc.env"
+        mode: '0600'
+        content: |
+          ECO_CNF_RAN_BMC_USERNAME={{ bmc_user }}
+          ECO_CNF_RAN_BMC_PASSWORD={{ bmc_password }}
+      no_log: true
+      diff: false
+
+    - name: Generate IBI preinstall launcher
+      ansible.builtin.template:
+        src: run_eco_gotests_ibi_preinstall.sh.j2
+        dest: "{{ ibi_work_dir }}/eco-gotests-ibi-preinstall-run.sh"
+        mode: '0700'
+        validate: /bin/bash -n %s
+
+    - name: Display generated launcher and report paths
+      ansible.builtin.debug:
+        msg:
+          - "Launcher ready: {{ ibi_work_dir }}/eco-gotests-ibi-preinstall-run.sh"
+          - "Reports: {{ ibi_work_dir }}/report"
+          

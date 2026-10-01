@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+work_dir={{ ibi_work_dir | quote }}
+http_dir={{ ibi_http_dir | quote }}
+# Lock the shared ISO directory, including when launchers use different work dirs.
+exec 9>"${http_dir}/.ibi-preinstall.lock"
+flock -n 9 || { echo "Another IBI preinstall is using ${http_dir}" >&2; exit 1; }
+
+mkdir -p "${work_dir}/report"
+
+podman run --rm --pull=never --net=host \
+  --userns=keep-id:uid=1000,gid=1000 \
+  --env-file "${work_dir}/bmc.env" \
+  -e KUBECONFIG=/kubeconfig/config \
+  -e ECO_CNF_RAN_KUBECONFIG_HUB=/kubeconfig/config \
+  -e ECO_TEST_FEATURES=ibipreinstall \
+  -e ECO_TEST_LABELS=preinstall-e2e \
+  -e ECO_REPORTS_DUMP_DIR=/tmp/reports \
+  -e ECO_TEST_VERBOSE=true \
+  -e ECO_VERBOSE_LEVEL=100 \
+  -e ECO_DUMP_FAILED_TESTS=true \
+  -e {{ ('ECO_CNF_RAN_IBI_SEED_IMAGE=' ~ ibi_seed_image) | quote }} \
+  -e {{ ('ECO_CNF_RAN_IBI_SEED_VERSION=' ~ ibi_seed_version) | quote }} \
+  -e {{ ('ECO_CNF_RAN_IBI_CLUSTER_INSTANCE_URL=' ~ ibi_cluster_instance_url) | quote }} \
+  -e {{ ('ECO_CNF_RAN_IBI_CONFIG_TEMPLATE_URL=' ~ ibi_config_template_url) | quote }} \
+  -e {{ ('ECO_CNF_RAN_IBI_PREINSTALL_REGISTRY=' ~ ibi_preinstall_registry) | quote }} \
+  -e ECO_CNF_RAN_IBI_OPENSHIFT_INSTALL=/ibi-bin/openshift-install \
+  -e ECO_CNF_RAN_IBI_PREINSTALL_HTTP_DIR=/ibi-http \
+  -e {{ ('ECO_CNF_RAN_IBI_PREINSTALL_HTTP_BASE_URL=' ~ ibi_http_base_url) | quote }} \
+  -e ECO_CNF_RAN_IBI_PREINSTALL_SSH_KEY=/ibi-ssh/key \
+  -e ECO_CNF_RAN_SKIP_TLS_VERIFY={{ ibi_skip_tls_verify | bool | ternary('true', 'false') }} \
+  -v {{ (ibi_hub_kubeconfig ~ ':/kubeconfig/config:ro,z') | quote }} \
+  -v {{ (ibi_openshift_install_path ~ ':/ibi-bin/openshift-install:ro,z') | quote }} \
+  -v {{ (ibi_ssh_private_key_path ~ ':/ibi-ssh/key:ro,z') | quote }} \
+  -v {{ (ibi_http_dir ~ ':/ibi-http:rw,z') | quote }} \
+  -v "${work_dir}/report:/tmp/reports:rw,Z" \
+  {{ eco_gotests_image | quote }} \
+  {{ ('--timeout=' ~ ibi_test_timeout) | quote }} \
+  --keep-going 2>&1 | tee "${work_dir}/report/console.log"

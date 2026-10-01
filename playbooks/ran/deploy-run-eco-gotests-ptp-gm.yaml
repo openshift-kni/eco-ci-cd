@@ -327,6 +327,41 @@
               -e ECO_TEST_TRACE=true
               -e ECO_VERBOSE_SCRIPT=true
 
+    - name: Get linuxptp-daemon pod name on spoke
+      ansible.builtin.command: >
+        oc --kubeconfig={{ kubeconfig }}
+        get pods -n openshift-ptp -l app=linuxptp-daemon
+        -o jsonpath='{.items[0].metadata.name}'
+      register: linuxptp_pod_name
+      changed_when: false
+      failed_when: linuxptp_pod_name.rc != 0 or linuxptp_pod_name.stdout == ''
+
+    - name: Run GNSS recovery (workaround for simulated GNSS loss leaving GM in FREERUN - CNF-27881)
+      ansible.builtin.command: >
+        oc --kubeconfig={{ kubeconfig }}
+        exec -n openshift-ptp {{ linuxptp_pod_name.stdout }} -c linuxptp-daemon-container
+        -- ubxtool -P 29.20 -w 1 -v 3 -z CFG-NAVSPG-INFIL_NCNOTHRS,0,1
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for GM to reach locked state (s2) after GNSS recovery
+      ansible.builtin.command: >
+        oc --kubeconfig={{ kubeconfig }}
+        logs -n openshift-ptp {{ linuxptp_pod_name.stdout }}
+        -c linuxptp-daemon-container --tail=20
+      register: ptp_logs
+      changed_when: false
+      failed_when: false
+      retries: 30
+      delay: 10
+      until: "'T-GM-STATUS s2' in ptp_logs.stdout"
+
+    - name: Report GM lock status
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'GM reached locked state (s2)' if 'T-GM-STATUS s2' in ptp_logs.stdout
+          else 'WARNING: GM not locked after GNSS recovery — tests may fail in BeforeSuite' }}
+
     - name: Generate PTP GM test execution script
       ansible.builtin.template:
         src: templates/run_eco_gotests_ptp_gm.sh.j2

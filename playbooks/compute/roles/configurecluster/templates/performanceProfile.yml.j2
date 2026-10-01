@@ -28,7 +28,7 @@ spec:
         machineconfiguration.openshift.io/role: {{ 'master' if (is_sno | bool) else 'worker-cnf' }}
     net:
         devices:
-        - interfaceName: '!eno*'
+	- interfaceName: 'eno*np*'
         userLevelNetworking: true
     nodeSelector:
         node-role.kubernetes.io/{{ 'master' if (is_sno | bool) else 'worker-cnf' }}: ""

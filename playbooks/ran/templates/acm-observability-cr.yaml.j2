@@ -1,0 +1,44 @@
+apiVersion: observability.open-cluster-management.io/v1beta2
+kind: MultiClusterObservability
+metadata:
+  name: observability
+spec:
+  enableDownsampling: false
+  observabilityAddonSpec:
+    enableMetrics: true
+    interval: 300
+  availabilityConfig: Basic
+  storageConfig:
+    storageClass: {{ mco_storage_class }}
+    alertmanager:
+      storageSize: 1Gi
+    compact:
+      storageSize: 10Gi
+    rule:
+      storageSize: 1Gi
+    receive:
+      storageSize: 2Gi
+    store:
+      storageSize: 5Gi
+    grafana:
+      storageSize: 1Gi
+    metricObjectStorage:
+      name: thanos-object-storage
+      key: thanos.yaml
+  # Explicitly set single replicas — Basic availabilityConfig alone
+  # does not reliably reduce replica counts in all ACM versions.
+  advanced:
+    alertmanager:
+      replicas: 1
+    compact:
+      replicas: 1
+    rule:
+      replicas: 1
+    receive:
+      replicas: 1
+    store:
+      replicas: 1
+    query:
+      replicas: 1
+    queryFrontend:
+      replicas: 1

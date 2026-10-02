@@ -1,0 +1,292 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: oran-smo
+    app.kubernetes.io/name: namespace
+    app.kubernetes.io/instance: oran-smo
+  name: oran-smo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oran-smo-server
+  namespace: oran-smo
+  labels:
+    app: oran-smo-server
+    app.kubernetes.io/name: deployment
+    app.kubernetes.io/instance: oran-smo
+spec:
+  selector:
+    matchLabels:
+      app: oran-smo-server
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: oran-smo-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: oran-smo-server
+          image: {{ oran_mock_smo_image_mirrored }}
+          imagePullPolicy: Always
+          command:
+            - /usr/bin/oran-mock-smo
+          env:
+            - name: TLS_CLIENT_CERT_FILE
+              value: /secrets/public/tls/tls.crt
+            - name: TLS_CLIENT_KEY_FILE
+              value: /secrets/public/tls/tls.key
+            - name: TLS_CLIENT_CA_BUNDLE
+              value: /secrets/public/tls/ca.crt
+            - name: CLIENT_CERT_REQUIRED
+              value: "False"
+            - name: VERIFY_CLIENT_BINDING
+              value: IfPresent
+            - name: CLIENT_ID
+              value: smo-client
+            # Client secret must match the smo-client secret in the realm export;
+            # derived from it at runtime (see tasks/main.yaml).
+            - name: CLIENT_SECRET
+              value: {{ oran_smo_client_secret }}
+            - name: OAUTH_SCOPES
+              value: openid,profile,role:o2ims-admin
+            - name: TOKEN_URL
+              value: https://keycloak.apps.{{ oran_hub_domain }}/realms/oran/protocol/openid-connect/token
+            - name: ISSUER_URL
+              value: https://keycloak.apps.{{ oran_hub_domain }}/realms/oran
+            - name: GROUPS_CLAIM
+              value: roles
+            - name: SAMPLE_DEPLOYMENT
+              value: /etc/sample-deployment/hello-world.yaml
+            - name: LISTEN_ADDRESS
+              value: 0.0.0.0:8443
+            - name: SMO_URL
+              value: https://smo.apps.{{ oran_hub_domain }}
+            - name: TLS_CERT_FILE
+              value: /secrets/tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /secrets/tls/tls.key
+            - name: TLS_CA_BUNDLE
+              value: /secrets/ca/ca-bundle.crt
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          volumeMounts:
+            - mountPath: /secrets/tls
+              name: service-tls
+            - mountPath: /secrets/ca
+              name: ca-bundle
+            - mountPath: /secrets/public/tls
+              name: public-tls
+          ports:
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+      serviceAccountName: oran-smo-server
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - name: service-tls
+          secret:
+            defaultMode: 420
+            secretName: smo-tls
+        - name: ca-bundle
+          configMap:
+            name: ca-bundle
+        - name: public-tls
+          secret:
+            defaultMode: 420
+            secretName: oran-smo-public-tls-certificate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: smo-tls
+  labels:
+    app: oran-smo-server
+  name: oran-smo-server
+  namespace: oran-smo
+spec:
+  ports:
+    - name: api
+      port: 8443
+      protocol: TCP
+      targetPort: https
+  selector:
+    app: oran-smo-server
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    route.openshift.io/termination: reencrypt
+  name: oran-smo-ingress
+  namespace: oran-smo
+spec:
+  ingressClassName: openshift-default
+  rules:
+    - host: smo.apps.{{ oran_hub_domain }}
+      http:
+        paths:
+          - backend:
+              service:
+                name: oran-smo-server
+                port:
+                  name: api
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - smo.apps.{{ oran_hub_domain }}
+      secretName: oran-smo-public-tls-certificate
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrolebinding
+    app.kubernetes.io/instance: oran-smo-server
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: oran-smo
+    app.kubernetes.io/part-of: oran-smo
+    app.kubernetes.io/managed-by: kustomize
+  name: oran-smo-server-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oran-o2ims-admin-role
+subjects:
+  - kind: ServiceAccount
+    name: oran-smo-server
+    namespace: oran-smo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oran-smo-token-reviewer-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oran-smo-token-reviewer-role
+subjects:
+  - kind: ServiceAccount
+    name: oran-smo-server
+    namespace: oran-smo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oran-smo-ocloud-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oran-smo-ocloud-manager-role
+subjects:
+  - kind: Group
+    name: ocloud-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oran-smo-test-client-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oran-smo-ocloud-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: oran-smo-test-client
+    namespace: oran-smo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oran-smo-token-reviewer-role
+rules:
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      - tokenreviews
+    verbs:
+      - create
+  - apiGroups:
+      - authorization.k8s.io
+    resources:
+      - subjectaccessreviews
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oran-smo-ocloud-manager-role
+rules:
+  - nonResourceURLs:
+      - /mock_smo/v1/*
+    verbs:
+      - get
+      - list
+      - create
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oran-smo-server
+  namespace: oran-smo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oran-smo-test-client
+  namespace: oran-smo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    config.openshift.io/inject-trusted-cabundle: "true"
+  name: ca-bundle
+  namespace: oran-smo
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: public-tls-certificate
+  namespace: oran-smo
+spec:
+  secretName: oran-smo-public-tls-certificate
+  duration: 168h
+  renewBefore: 1h
+  subject:
+    countries: [US]
+    states: [NC]
+    locations: [Raleigh]
+    organizations: [Red Hat]
+    organizationalUnits: [Telco Verification]
+  commonName: smo.apps.{{ oran_hub_domain }}
+  isCA: false
+  privateKey:
+    algorithm: RSA
+    rotationPolicy: Always
+  usages:
+  - server auth
+  - client auth
+  dnsNames:
+  - smo.apps.{{ oran_hub_domain }}
+  issuerRef:
+    name: root-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io

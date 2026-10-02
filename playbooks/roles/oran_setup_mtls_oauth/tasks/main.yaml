@@ -1,0 +1,64 @@
+# Load the Keycloak realm export (Vault-sourced in CI) and derive the client
+# secrets from it so there is a single source of truth. no_log because the file
+# contains client secrets and the realm signing keys.
+- name: Load the oran realm export
+  ansible.builtin.set_fact:
+    oran_realm_json: "{{ lookup('file', oran_realm_json_file) | from_json }}"
+  no_log: true
+
+- name: Derive the o2ims-client and smo-client secrets from the realm
+  ansible.builtin.set_fact:
+    oran_o2ims_client_secret: "{{ oran_realm_json.clients | selectattr('clientId', 'equalto', 'o2ims-client') | map(attribute='secret') | first }}"
+    oran_smo_client_secret: "{{ oran_realm_json.clients | selectattr('clientId', 'equalto', 'smo-client') | map(attribute='secret') | first }}"
+  no_log: true
+
+# Bootstrapping the cluster PKI only needs to happen once, so we check if the root-ca-issuer
+# ClusterIssuer already exists. If it does, we skip the bootstrap.
+- name: Check if root-ca-issuer ClusterIssuer exists
+  ansible.builtin.shell: |
+    oc get clusterissuer root-ca-issuer
+  environment:
+    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  register: root_ca_issuer_exists
+  changed_when: false
+  failed_when: false
+  when: not oran_skip_bootstrap_cluster_pki | default(False) | bool
+
+- name: Set oran_skip_bootstrap_cluster_pki to True is already bootstrapped
+  ansible.builtin.set_fact:
+    oran_skip_bootstrap_cluster_pki: True
+  when:
+    - not oran_skip_bootstrap_cluster_pki | default(False) | bool
+    - root_ca_issuer_exists is success
+    - root_ca_issuer_exists.rc == 0
+
+# Bootstrap the cluster PKI by generating a root CA cert, updating the cluster
+# proxy, and creating a ClusterIssuer.
+- name: Bootstrap cluster PKI
+  ansible.builtin.import_tasks: bootstrap_cluster_pki.yaml
+  when: not oran_skip_bootstrap_cluster_pki | default(False) | bool
+
+# Set up Keycloak by creating the PostgreSQL database, creating the Keycloak
+# instance, and importing the realm.
+- name: Set up Keycloak
+  ansible.builtin.import_tasks: setup_keycloak.yaml
+  when: not oran_skip_keycloak | default(False) | bool
+
+# Set up the oran-mock-smo deployment. This deployment is used to test the SMO
+# functionality in the oran-o2ims operator.
+- name: Set up oran-mock-smo
+  ansible.builtin.import_tasks: setup_oran_mock_smo.yaml
+  when: not oran_skip_oran_mock_smo | default(False) | bool
+
+# Set up oran-o2ims inventory by updating the inventory CR with the SMO and
+# Keycloak URLs. This step also creates the client certificate for the oran-o2ims
+# operator to use with the SMO.
+- name: Set up oran-o2ims Inventory
+  ansible.builtin.import_tasks: setup_oran_o2ims_inventory.yaml
+  when: not oran_skip_oran_o2ims_inventory | default(False) | bool
+
+# Download firmware for the configured Dell server model when requested.
+# The model is set via oran_firmware_server_model (default: r750).
+- name: Download firmware for Dell {{ oran_firmware_server_model }}
+  ansible.builtin.import_tasks: download_dell_firmware.yaml
+  when: oran_setup_firmware is defined and oran_setup_firmware | bool

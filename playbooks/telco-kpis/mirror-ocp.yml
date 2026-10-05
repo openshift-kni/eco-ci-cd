@@ -10,17 +10,43 @@
 #   2. lockdown_uri (hub or spoke lockdown JSON URL) -- auto-detects format
 #   3. Neither -- falls back to hub cluster's own release image
 #
+# Architecture support:
+#   - Defaults to x86_64 for backward compatibility
+#   - Auto-detects architecture from lockdown JSON (deployment.architecture field)
+#   - Accepts explicit ocp_architecture variable for override/fallback
+#   - Supports multi-architecture: x86_64, aarch64, ppc64le, s390x
+#   - AgentServiceConfig allows multiple osImages for same version with different architectures
+#
+# Architecture naming convention:
+#   - Input (ocp_architecture): Uses Linux architecture names (x86_64, aarch64, ppc64le, s390x)
+#     Required for RHCOS stream metadata lookup
+#   - Output (AgentServiceConfig): Uses Kubernetes architecture names
+#     Translation: aarch64 → arm64 (others remain unchanged)
+#     Required for assisted-service compatibility
+#
+# Architecture precedence:
+#   1. Lockdown deployment.architecture (if lockdown provided AND field exists)
+#   2. Explicit ocp_architecture variable (if provided via -e)
+#   3. Default: x86_64
+#
 # Usage with explicit image:
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
 #     playbooks/telco-kpis/mirror-ocp.yml \
 #     -e "kubeconfig=/path/to/kubeconfig \
 #         raw_ocp_release_image=quay.io/openshift-release-dev/ocp-release:4.22.0-x86_64"
 #
-# Usage with lockdown URI:
+# Usage with lockdown URI (architecture auto-detected):
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
 #     playbooks/telco-kpis/mirror-ocp.yml \
 #     -e "kubeconfig=/path/to/kubeconfig \
-#         lockdown_uri=https://gitlab.cee.redhat.com/.../lockdown-hub-x86_64.json"
+#         lockdown_uri=https://gitlab.cee.redhat.com/.../lockdown-spoke-5.0-arm64.json"
+#
+# Usage with explicit architecture override:
+#   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
+#     playbooks/telco-kpis/mirror-ocp.yml \
+#     -e "kubeconfig=/path/to/kubeconfig \
+#         ocp_version=5.0 \
+#         ocp_architecture=aarch64"
 
 - name: Resolve OCP release image to digest format
   hosts: bastion
@@ -60,6 +86,10 @@
           ansible.builtin.set_fact:
             ocp_release_image: "{{ resolved_release_image }}"
 
+        - name: Set default architecture for explicit image path
+          ansible.builtin.set_fact:
+            ocp_architecture: "{{ ocp_architecture | default('x86_64') }}"
+
         - name: Display resolved release image
           ansible.builtin.debug:
             msg:
@@ -68,6 +98,7 @@
               - "=========================================="
               - "Input:    {{ raw_ocp_release_image }}"
               - "Resolved: {{ ocp_release_image }}"
+              - "Architecture: {{ ocp_architecture }}"
               - "=========================================="
 
         - name: Remove temp pull secret file
@@ -112,11 +143,22 @@
                 )
               }}
 
+        - name: Extract architecture from lockdown data
+          ansible.builtin.set_fact:
+            ocp_architecture: >-
+              {{
+                _wrapper_lockdown_data.deployment.architecture
+                if ('deployment' in _wrapper_lockdown_data and
+                    'architecture' in _wrapper_lockdown_data.deployment)
+                else (ocp_architecture | default('x86_64'))
+              }}
+
         - name: Display extracted image from lockdown
           ansible.builtin.debug:
             msg:
               - "Lockdown format: {{ _wrapper_lockdown_format }}"
               - "Extracted image: {{ _wrapper_extracted_image }}"
+              - "Architecture: {{ ocp_architecture }}"
 
         - name: Resolve lockdown image to digest (if tag-based)
           when: "'@sha256:' not in _wrapper_extracted_image"
@@ -177,8 +219,16 @@
       when:
         - (raw_ocp_release_image | default('')) | length == 0
         - (lockdown_uri | default('')) | length == 0
-      ansible.builtin.debug:
-        msg: "No OCP release image override -- will use hub cluster's own release image"
+      block:
+        - name: Set default architecture for hub fallback path
+          ansible.builtin.set_fact:
+            ocp_architecture: "{{ ocp_architecture | default('x86_64') }}"
+
+        - name: Display fallback message
+          ansible.builtin.debug:
+            msg:
+              - "No OCP release image override -- will use hub cluster's own release image"
+              - "Architecture: {{ ocp_architecture }} (default)"
 
 - name: Mirror OCP release image to disconnected registry
   hosts: bastion
@@ -280,20 +330,41 @@
             kubeconfig: "{{ kubeconfig }}"
           register: _asc_info
 
-        - name: Check if OS image version already registered
+        - name: Set default architecture if not already set
           ansible.builtin.set_fact:
-            _existing_os_versions: >-
-              {{ _asc_info.resources[0].spec.osImages
-                 | default([])
-                 | map(attribute='openshiftVersion')
+            ocp_architecture: "{{ ocp_architecture | default('x86_64') }}"
+
+        - name: Check if OS image version+architecture already registered
+          ansible.builtin.set_fact:
+            _existing_os_images: "{{ _asc_info.resources[0].spec.osImages | default([]) }}"
+
+        - name: Map Linux architecture to Kubernetes architecture for lookup
+          ansible.builtin.set_fact:
+            _k8s_architecture_lookup: >-
+              {{
+                'arm64' if ocp_architecture == 'aarch64'
+                else ocp_architecture
+              }}
+
+        - name: Check for matching osImage (version + architecture)
+          ansible.builtin.set_fact:
+            _matching_os_images: >-
+              {{ _existing_os_images
+                 | selectattr('openshiftVersion', 'equalto', ocp_version)
+                 | selectattr('cpuArchitecture', 'equalto', _k8s_architecture_lookup)
                  | list }}
 
-        - name: Display existing OS image versions
+        - name: Display existing OS image version+architecture pairs
           ansible.builtin.debug:
-            msg: "AgentServiceConfig OS image versions: {{ _existing_os_versions }}"
+            msg:
+              - "AgentServiceConfig existing OS images:"
+              - "{{ _existing_os_images | map(attribute='openshiftVersion') | zip(_existing_os_images | map(attribute='cpuArchitecture')) | list }}"
+              - "Requested: version={{ ocp_version }}, architecture={{ _k8s_architecture_lookup }} (Kubernetes naming)"
+              - "Source architecture: {{ ocp_architecture }} (Linux naming)"
+              - "Matching entries: {{ _matching_os_images | length }}"
 
         - name: Add RHCOS OS image for spoke version
-          when: ocp_version not in _existing_os_versions
+          when: _matching_os_images | length == 0
           block:
             - name: Create temp directory for baremetal installer
               ansible.builtin.tempfile:
@@ -333,10 +404,23 @@
               register: _rhcos_stream_json
               changed_when: false
 
+            # Convert Kubernetes architecture naming to Linux naming for RHCOS stream lookup
+            # Input (ocp_architecture) may use either naming convention:
+            #   - Kubernetes: arm64, x86_64, ppc64le, s390x
+            #   - Linux: aarch64, x86_64, ppc64le, s390x
+            # RHCOS stream metadata always uses Linux naming
+            - name: Map architecture to Linux naming for RHCOS stream lookup
+              ansible.builtin.set_fact:
+                _rhcos_architecture: >-
+                  {{
+                    'aarch64' if ocp_architecture == 'arm64'
+                    else ocp_architecture
+                  }}
+
             - name: Parse RHCOS boot images metadata
               vars:
                 _stream: "{{ _rhcos_stream_json.stdout | from_json }}"
-                _metal: "{{ _stream.architectures.x86_64.artifacts.metal }}"
+                _metal: "{{ _stream.architectures[_rhcos_architecture].artifacts.metal }}"
               ansible.builtin.set_fact:
                 _rhcos_iso_remote_url: "{{ _metal.formats.iso.disk.location }}"
                 _rhcos_version: "{{ _metal.release }}"
@@ -353,12 +437,27 @@
                   http://{{ ansible_host }}:{{ share_http_iso_port
                   }}/{{ _rhcos_iso_remote_url | basename }}
 
+            # Convert to Kubernetes architecture naming for AgentServiceConfig
+            # AgentServiceConfig cpuArchitecture field expects Kubernetes naming:
+            #   - arm64 (not aarch64)
+            # Both input conventions are supported: arm64 or aarch64
+            - name: Map architecture to Kubernetes naming for AgentServiceConfig
+              ansible.builtin.set_fact:
+                _k8s_architecture: >-
+                  {{
+                    'arm64' if (ocp_architecture in ['arm64', 'aarch64'])
+                    else ocp_architecture
+                  }}
+
             - name: Display RHCOS ISO details
               ansible.builtin.debug:
                 msg:
                   - "RHCOS version:  {{ _rhcos_version }}"
                   - "Remote ISO URL: {{ _rhcos_iso_remote_url }}"
                   - "Local ISO URL:  {{ _rhcos_local_url }}"
+                  - "Architecture (input):        {{ ocp_architecture }}"
+                  - "Architecture (RHCOS lookup): {{ _rhcos_architecture }}"
+                  - "Architecture (AgentServiceConfig): {{ _k8s_architecture }}"
 
             - name: Check if RHCOS ISO already downloaded
               ansible.builtin.stat:
@@ -382,7 +481,7 @@
                   - op: add
                     path: /spec/osImages/-
                     value:
-                      cpuArchitecture: x86_64
+                      cpuArchitecture: "{{ _k8s_architecture }}"
                       openshiftVersion: "{{ ocp_version }}"
                       rootFSUrl: ""
                       url: "{{ _rhcos_local_url }}"
@@ -391,13 +490,15 @@
             - name: Display registration result
               ansible.builtin.debug:
                 msg: >-
-                  Registered RHCOS {{ _rhcos_version }} for OCP {{ ocp_version }}
-                  in AgentServiceConfig
+                  Registered RHCOS {{ _rhcos_version }} ({{ _k8s_architecture }})
+                  for OCP {{ ocp_version }} in AgentServiceConfig
 
         - name: OS image already registered
-          when: ocp_version in _existing_os_versions
+          when: _matching_os_images | length > 0
           ansible.builtin.debug:
-            msg: "OS image for OCP {{ ocp_version }} already in AgentServiceConfig — skipping"
+            msg: >-
+              OS image for OCP {{ ocp_version }} ({{ _k8s_architecture_lookup }})
+              already in AgentServiceConfig — skipping
 
         - name: Clean up temp pull secret
           ansible.builtin.file:

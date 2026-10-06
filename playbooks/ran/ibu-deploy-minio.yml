@@ -29,7 +29,7 @@
 # Optional variables:
 #   minio_work_dir:         Base working directory  (default: /home/telcov10n/minio)
 #   minio_container_name:   Podman container name   (default: minio_local)
-#   minio_image:            MinIO container image   (default: quay.io/minio/minio:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e)
+#   minio_image:            MinIO container image   (default: quay.io/minio/minio:latest)
 #   minio_api_port:         S3 API port             (default: 9000)
 #   minio_console_port:     Web console port        (default: 9001)
 #   minio_bucket_name:      Bucket to create        (default: s3-bucket)
@@ -43,11 +43,11 @@
     minio_work_dir: /home/telcov10n/minio
     minio_container_name: minio_local
     # Pin to immutable digest -- update via reviewed PR.
-    minio_image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    minio_image: quay.io/minio/minio:latest
     minio_api_port: 9000
     minio_console_port: 9001
     minio_bucket_name: s3-bucket
-    minio_mc_url: https://dl.min.io/client/mc/release/linux-amd64/mc.RELEASE.2025-08-13T08-35-41Z
+    minio_mc_url: https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-08-13T08-35-41Z
     # sha256 of the exact mc release above -- bump together with minio_mc_url.
     minio_mc_sha256: 01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891
 

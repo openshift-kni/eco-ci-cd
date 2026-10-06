@@ -3,6 +3,23 @@
 # Test: Cyclictest (Real-time latency measurement)
 # Purpose: Measure RT kernel latency on isolated CPUs with PerformanceProfile
 # Duration: Configurable via duration parameter (default: 12h)
+#
+# Optional test_options parameter supports multiple execution modifiers:
+#   Available options (can be combined with dots):
+#     - trace: Enable kernel tracing (captures traces when latency > 10μs)
+#     - trace_lower: Use lower threshold for traces instead of 10μs
+#     - worker: Run on worker nodes only
+#     - master: Run on master nodes only
+#     - control-plane: Run on control-plane nodes only
+#     - powersave: Enable powersave mode
+#     - nonrt: Allow testing on non-realtime kernels
+#     - timerlat: Enable timerlat mode
+#
+#   Examples:
+#     test_options="trace"                    -> cyclictest=12h.trace
+#     test_options="worker.trace"             -> cyclictest=12h.worker.trace
+#     test_options="timerlat.powersave"       -> cyclictest=12h.timerlat.powersave
+#     test_options="" (default)               -> cyclictest=12h
 
 - name: Set Cyclictest test variables
   ansible.builtin.set_fact:
@@ -12,10 +29,18 @@
       This script runs the Cyclictest to measure real-time kernel latency on
       isolated CPUs configured with PerformanceProfile. It clones required
       repositories, sets up the test environment, executes the test, and
-      captures results.
+      captures results. Supports optional execution modifiers via test_options.
     test_default_duration: "{{ telco_kpis_default_duration_cyclictest }}"
-    test_command: "bash scripts/test_cyclictest.sh cyclictest={{ duration | default(telco_kpis_default_duration_cyclictest) }}"
-    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_cyclictest) }})"
+    test_command: "bash scripts/test_cyclictest.sh cyclictest={{
+      [ duration
+      | default(telco_kpis_default_duration_cyclictest), test_options
+      | default('')]
+      | select
+      | join('.') }}"
+    test_params_display: " (duration={{
+      duration
+      | default(telco_kpis_default_duration_cyclictest) }}{{
+      ', options=' + test_options if test_options is defined and test_options | length > 0 else '' }})"
     test_additional_repos:
       - name: cyclictest
         url: "{{ telco_kpis_cyclictest_repo | default('https://gitlab.cee.redhat.com/ran/cyclictest.git') }}"

@@ -3,6 +3,20 @@
 # Test: OSLAT (OS-level latency test)
 # Purpose: Measure OS latency on isolated CPUs with PerformanceProfile
 # Duration: Configurable via duration parameter (default: 10m)
+#
+# Optional test_options parameter supports multiple execution modifiers:
+#   Available options (can be combined with dots):
+#     - trace: Enable kernel tracing (captures traces when latency exceeds lower threshold)
+#     - worker: Run on worker nodes only
+#     - master: Run on master nodes only
+#     - control-plane: Run on control-plane nodes only
+#     - powersave: Enable powersave mode
+#
+#   Examples:
+#     test_options="trace"           -> oslat=10m.trace
+#     test_options="worker.trace"    -> oslat=10m.worker.trace
+#     test_options="powersave"       -> oslat=10m.powersave
+#     test_options="" (default)      -> oslat=10m
 
 - name: Set OSLAT test variables
   ansible.builtin.set_fact:
@@ -12,9 +26,18 @@
       This script runs the OSLAT test to measure OS-level latency on isolated
       CPUs configured with PerformanceProfile. It clones required repositories,
       sets up the test environment, executes the test, and captures results.
+      Supports optional execution modifiers via test_options.
     test_default_duration: "{{ telco_kpis_default_duration_oslat }}"
-    test_command: "bash scripts/test_oslat.sh oslat={{ duration | default(telco_kpis_default_duration_oslat) }}"
-    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_oslat) }})"
+    test_command: "bash scripts/test_oslat.sh oslat={{
+      [ duration
+      | default(telco_kpis_default_duration_oslat), test_options
+      | default('')]
+      | select
+      | join('.') }}"
+    test_params_display: " (duration={{
+      duration
+      | default(telco_kpis_default_duration_oslat) }}{{
+      ', options=' + test_options if test_options is defined and test_options | length > 0 else '' }})"
     test_additional_repos:
       - name: oslat
         url: "{{ telco_kpis_oslat_repo | default('https://gitlab.cee.redhat.com/ran/oslat.git') }}"

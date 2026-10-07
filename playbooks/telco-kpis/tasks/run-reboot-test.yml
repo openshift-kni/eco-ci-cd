@@ -3,6 +3,14 @@
 # Test: REBOOT
 # Purpose: Test cluster stability and recovery through multiple reboot cycles
 # Reboot Count: Configurable via reboot_count parameter (default: 6)
+#
+# Optional test_options parameter supports execution modifiers:
+#   Available options (can be combined with dots):
+#     - arm: Run on ARM architecture
+#
+#   Examples:
+#     test_options="arm"           -> reboot=6.arm
+#     test_options="" (default)    -> reboot=6
 
 - name: Set Reboot test variables
   ansible.builtin.set_fact:
@@ -12,9 +20,19 @@
       This script runs the Reboot test to validate cluster stability and recovery
       through multiple reboot cycles. It clones required repositories, sets up
       the test environment, executes the test, and captures results.
+      Supports optional execution modifiers via test_options.
     test_default_reboot_count: "{{ telco_kpis_default_reboot_count }}"
-    test_command: "bash scripts/test_reboot.sh reboot={{ reboot_count | default(telco_kpis_default_reboot_count) }}"
-    test_params_display: " (reboot_count={{ reboot_count | default(telco_kpis_default_reboot_count) }})"
+    test_command: "bash scripts/test_reboot.sh reboot={{
+      [ reboot_count
+      | default(telco_kpis_default_reboot_count)
+      | string, test_options
+      | default('')]
+      | select
+      | join('.') }}"
+    test_params_display: " (reboot_count={{
+      reboot_count
+      | default(telco_kpis_default_reboot_count) }}{{
+      ', options=' + test_options if test_options is defined and test_options | length > 0 else '' }})"
     test_additional_repos:
       - name: cnf-gotests
         url: >-

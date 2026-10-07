@@ -3,6 +3,11 @@
 # Test: PTP validation
 # Purpose: Validate PTP synchronization and offset metrics on spoke cluster
 # Duration: Configurable via duration parameter (default: 10m)
+#
+# Optional test_options parameter supports execution modifiers:
+#   Examples:
+#     test_options="arm"           -> ptp=10m.arm
+#     test_options="" (default)    -> ptp=10m
 
 - name: Set PTP test variables
   ansible.builtin.set_fact:
@@ -12,10 +17,18 @@
       This script runs the PTP (Precision Time Protocol) test to validate PTP
       synchronization and offset metrics on the spoke cluster. It clones required
       repositories, sets up the test environment, executes the test, and
-      captures results.
+      captures results. Supports optional execution modifiers via test_options.
     test_default_duration: "{{ telco_kpis_default_duration_ptp }}"
-    test_command: "bash scripts/test_ptp.sh ptp={{ duration | default(telco_kpis_default_duration_ptp) }}"
-    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_ptp) }})"
+    test_command: "bash scripts/test_ptp.sh ptp={{
+      [ duration
+      | default(telco_kpis_default_duration_ptp), test_options
+      | default('')]
+      | select
+      | join('.') }}"
+    test_params_display: " (duration={{
+      duration
+      | default(telco_kpis_default_duration_ptp) }}{{
+      ', options=' + test_options if test_options is defined and test_options | length > 0 else '' }})"
     test_additional_repos: []
     test_junit_pattern: "*ptp*.xml,*report*.xml"
     ran_integration_repo: "{{ telco_kpis_ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"

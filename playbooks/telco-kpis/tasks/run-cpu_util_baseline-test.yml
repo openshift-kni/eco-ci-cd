@@ -4,6 +4,14 @@
 # Purpose: Measure CPU usage under load on isolated CPUs with PerformanceProfile
 # Duration: Configurable via duration parameter (default: 10m)
 # Baseline: Always true for this test variant
+#
+# Optional test_options parameter supports additional execution modifiers:
+#   Available options (can be combined with dots):
+#     - arm: Run on ARM architecture
+#
+#   Examples:
+#     test_options="arm"           -> cpu_util=10m.baseline.arm
+#     test_options="" (default)    -> cpu_util=10m.baseline
 
 - name: Set CPU utilization baseline test variables
   ansible.builtin.set_fact:
@@ -13,11 +21,19 @@
       This script runs the CPU utilization baseline test to measure CPU usage under load
       on isolated CPUs configured with PerformanceProfile. It clones required
       repositories, sets up the test environment, executes the test, and
-      captures results.
+      captures results. Supports optional execution modifiers via test_options.
     test_default_duration: "{{ telco_kpis_default_duration_cpu_util }}"
     test_pre_command: 'export RAN_METRICS_FORMAL_TEST="true"'
-    test_command: "bash scripts/test_cpu_util.sh cpu_util={{ duration | default(telco_kpis_default_duration_cpu_util) }}.baseline"
-    test_params_display: " (duration={{ duration | default(telco_kpis_default_duration_cpu_util) }}, baseline=true)"
+    test_command: "bash scripts/test_cpu_util.sh cpu_util={{
+      [ duration
+      | default(telco_kpis_default_duration_cpu_util), 'baseline', test_options
+      | default('')]
+      | select
+      | join('.') }}"
+    test_params_display: " (duration={{
+      duration
+      | default(telco_kpis_default_duration_cpu_util) }}, baseline=true{{
+      ', options=' + test_options if test_options is defined and test_options | length > 0 else '' }})"
     test_additional_repos:
       - name: cnf-gotests
         url: "{{ telco_kpis_cnf_gotests_repo | default('https://gitlab.cee.redhat.com/cnf/cnf-gotests.git') }}"

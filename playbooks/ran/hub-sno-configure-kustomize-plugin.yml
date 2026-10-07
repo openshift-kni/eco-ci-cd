@@ -11,7 +11,7 @@
 # Usage:
 #   ansible-playbook -i inventories/ocp-deployment/build-inventory.py \
 #     playbooks/ran/configure_kustomize_plugin.yml \
-#     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=v4.19"
+#     --extra-vars "kubeconfig=/path/to/kubeconfig ocp_version=4.19"
 #
 # What it does:
 #   1. Mirrors ztp-site-generator image to disconnected registry
@@ -33,13 +33,16 @@
           - ocp_version | length > 0
         fail_msg: |
           Variables 'kubeconfig' and 'ocp_version' must be defined.
-          Pass them with --extra-vars 'kubeconfig=/path/to/kubeconfig ocp_version=v4.xy'
+          Pass them with --extra-vars 'kubeconfig=/path/to/kubeconfig ocp_version=4.xy'
 
 - name: Configure kustomize plugin
   hosts: bastion
   gather_facts: true
   vars:
-    site_generate_image: 'registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8:v{{ ocp_version }}'
+    site_generate_image: >-
+      {{ 'registry.stage.redhat.io/openshift5/ztp-site-generate-rhel9'
+         if (ocp_version is version('5.0', '>='))
+         else 'registry.stage.redhat.io/openshift4/ztp-site-generate-rhel8' }}:v{{ ocp_version }}
     container_registry_service_name: "container-registry"
     ztp_workdir_path: "/tmp/ztp-workdir"
     ztp_workdir_out_path: "{{ ztp_workdir_path }}/out"

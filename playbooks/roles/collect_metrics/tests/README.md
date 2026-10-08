@@ -55,13 +55,11 @@ would have returned it, e.g. `{resources: [...]}` or `{images: [...]}`)
 skips the live call and exercises only the deterministic string-building
 logic downstream.
 
-`containers_digests.yml`'s `image_facts` guard is only safe for fixtures
-with a single-item `collect_containers_list` — `tasks/main.yml` loops
-`include_tasks: containers_digests.yml` per image, and since each inclusion
-re-runs the guarded task, a second loop iteration would see `image_facts`
-already defined from the first and skip its own live call. Don't add a
-multi-image fixture without addressing that; the existing fixtures only
-ever exercise one image at a time.
+`containers_digests.yml` uses separate variables for the fixture mock and
+the live module result. Fixtures can pre-seed `image_facts` to skip the live
+call. Normal runs register results as `container_image_info`, so each image
+in the loop is queried. Keep fixture mocks named `image_facts`; a mock is
+reused for every image in that fixture.
 
 **The N/A/rescue path needs no guard or mocking at all.** Every category is
 wrapped in `block/rescue` without `failed_when: false`, so pointing a

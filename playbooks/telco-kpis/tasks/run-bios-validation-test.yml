@@ -16,6 +16,79 @@
     name: test_duration
     tasks_from: start.yml
 
+- name: Auto-detect vendor and architecture for profile selection (if not manually specified)
+  when: bios_profile_path is not defined and bios_profile_url is not defined
+  block:
+    - name: Get master node from inventory
+      ansible.builtin.set_fact:
+        _master_node: "{{ groups['masters'][0] if 'masters' in groups and groups['masters'] | length > 0 else 'master0' }}"
+
+    - name: Get spoke cluster architecture from node info
+      ansible.builtin.shell: |
+        set -o pipefail
+        oc --kubeconfig {{ spoke_kubeconfig }} get nodes -o json | \
+        python3 -c "import sys, json; nodes = json.load(sys.stdin)['items']; print(nodes[0]['status']['nodeInfo']['architecture'] if nodes else 'unknown')"
+      register: _arch_detect
+      changed_when: false
+      failed_when: false
+
+    - name: Extract BMC IP from master node vault
+      ansible.builtin.set_fact:
+        _bmc_ip: "{{ hostvars[_master_node].bmc_address | urlsplit('hostname') }}"
+        _bmc_user: "{{ hostvars[_master_node].bmc_user | default('') }}"
+        _bmc_pass: "{{ hostvars[_master_node].bmc_password | default('') }}"
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Query Redfish Systems endpoint to get system path
+      ansible.builtin.uri:
+        url: "https://{{ _bmc_ip }}/redfish/v1/Systems"
+        method: GET
+        user: "{{ _bmc_user }}"
+        password: "{{ _bmc_pass }}"
+        force_basic_auth: true
+        validate_certs: false
+        timeout: 15
+      register: _bmc_systems
+      no_log: "{{ ansible_verbosity < 3 }}"
+      failed_when: false
+      when: _bmc_ip != '' and _bmc_user != '' and _bmc_pass != ''
+
+    - name: Query Redfish System info to get hardware vendor
+      ansible.builtin.uri:
+        url: "https://{{ _bmc_ip }}{{ _bmc_systems.json.Members[0]['@odata.id'] }}"
+        method: GET
+        user: "{{ _bmc_user }}"
+        password: "{{ _bmc_pass }}"
+        force_basic_auth: true
+        validate_certs: false
+        timeout: 15
+      register: _bmc_system_info
+      no_log: "{{ ansible_verbosity < 3 }}"
+      failed_when: false
+      when:
+        - _bmc_systems is defined
+        - _bmc_systems.json is defined
+        - _bmc_systems.json.Members is defined
+
+    - name: Determine BIOS profile path based on vendor and architecture
+      ansible.builtin.set_fact:
+        bios_profile_path: >-
+          {%- set vendor = _bmc_system_info.json.Manufacturer | default('Unknown')
+                if (_bmc_system_info is defined and _bmc_system_info.json is defined)
+                else 'Unknown' -%}
+          {%- set arch = _arch_detect.stdout | default('x86_64') | trim -%}
+          {%- if 'Supermicro' in vendor or 'Super Micro' in vendor -%}
+            {%- if arch == 'aarch64' or arch == 'arm64' -%}
+              supermicro-arm64/bios-profile.yaml
+            {%- else -%}
+              supermicro/bios-profile.yaml
+            {%- endif -%}
+          {%- elif 'HPE' in vendor or 'Hewlett Packard' in vendor -%}
+            hpe/bios-profile.yaml
+          {%- else -%}
+            dell/bios-profile.yaml
+          {%- endif -%}
+
 - name: Display BIOS validation configuration
   ansible.builtin.debug:
     msg:
@@ -214,14 +287,21 @@
 
     - name: Compare BIOS settings and build validation report
       ansible.builtin.set_fact:
-        validation_results: >-
+        _validation_results_json: |
           {% set results = [] -%}
           {% for key, value in expected_bios_settings.items() -%}
             {% set current_value = current_bios_settings.get(key, 'NOT_FOUND') -%}
-            {% set status = 'PASS' if (current_value | string) == (value | string) else 'FAIL' -%}
+            {# Normalize both values to lowercase strings for comparison #}
+            {% set expected_str = (value | string | lower) -%}
+            {% set current_str = (current_value | string | lower) -%}
+            {% set status = 'PASS' if current_str == expected_str else 'FAIL' -%}
             {% set _ = results.append({'key': key, 'value': value, 'current_value': current_value, 'status': status}) -%}
           {% endfor -%}
-          {{ results }}
+          {{ results | to_json }}
+
+    - name: Parse validation results from JSON
+      ansible.builtin.set_fact:
+        validation_results: "{{ _validation_results_json | from_json }}"
 
     - name: Count validation statistics
       ansible.builtin.set_fact:

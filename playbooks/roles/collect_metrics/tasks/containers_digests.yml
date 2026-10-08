@@ -1,15 +1,15 @@
 ---
 - name: Collect containers digests
   block:
+    - name: Set Container metric tag
+      ansible.builtin.set_fact:
+        container_metric_tag: "{{ container_item.split('/')[-1] | replace(':', '_') }}"
+
     - name: Gather facts about the image
       containers.podman.podman_image_info:
         name: "{{ container_item }}"
       register: container_image_info
       when: image_facts is not defined
-
-    - name: Set Container metric tag
-      ansible.builtin.set_fact:
-        container_metric_tag: "{{ container_item.split('/')[-1] | replace(':', '_') }}"
 
     - name: Print ztp-site-generator image digest
       ansible.builtin.set_fact:

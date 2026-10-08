@@ -43,6 +43,14 @@ ansible-playbook playbooks/roles/collect_metrics/tests/test.yml \
   -e "@playbooks/roles/collect_metrics/tests/cases/general-ocp-happy-path.yml"
 ```
 
+Run container digest regressions with a fake Podman CLI and the installed
+`containers.podman.podman_image_info` module. The test makes no registry
+requests or pulls:
+
+```bash
+python3 playbooks/roles/collect_metrics/tests/test_container_digest_regression.py
+```
+
 ## Mocking the live calls
 
 Every metric category's live query is a single, unlooped `register:`'d task

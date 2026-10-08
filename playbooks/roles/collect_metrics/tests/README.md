@@ -55,13 +55,10 @@ would have returned it, e.g. `{resources: [...]}` or `{images: [...]}`)
 skips the live call and exercises only the deterministic string-building
 logic downstream.
 
-`containers_digests.yml`'s `image_facts` guard is only safe for fixtures
-with a single-item `collect_containers_list` — `tasks/main.yml` loops
-`include_tasks: containers_digests.yml` per image, and since each inclusion
-re-runs the guarded task, a second loop iteration would see `image_facts`
-already defined from the first and skip its own live call. Don't add a
-multi-image fixture without addressing that; the existing fixtures only
-ever exercise one image at a time.
+Non-empty `collect_containers_list` values invoke Podman image inspection
+directly, so they require a Podman environment with the requested image
+available and are not covered by these unit fixtures. The empty-list case
+still verifies that no container digest metrics are added.
 
 **The N/A/rescue path needs no guard or mocking at all.** Every category is
 wrapped in `block/rescue` without `failed_when: false`, so pointing a

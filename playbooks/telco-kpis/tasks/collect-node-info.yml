@@ -90,7 +90,7 @@
 
 - name: Parse microcode version from cpuinfo
   ansible.builtin.set_fact:
-    microcode_version: "{{ (cpuinfo_result.stdout | default('')) | regex_search('microcode\\s+:\\s+(\\S+)', '\\1') | first | default('unknown', true) }}"
+    microcode_version: "{{ (cpuinfo_result.stdout | default('')) | regex_search('microcode\\s+:\\s+(\\S+)', '\\1') | default([], true) | first | default('unknown', true) }}"
   when: cpuinfo_result.stdout is defined
 
 - name: Set microcode version to unknown if cpuinfo failed

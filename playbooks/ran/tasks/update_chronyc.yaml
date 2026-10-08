@@ -1,0 +1,46 @@
+---
+- name: Check the selected hypervisor Chrony source
+  ansible.builtin.command:
+    argv: ['chronyc', '-N', 'sources']
+  register: _chrony_sources
+  changed_when: false
+  failed_when: false
+
+- name: Set Chrony source pattern
+  ansible.builtin.set_fact:
+    _chrony_source_pattern: '(?m)^\^\*\s+clock\.redhat\.com\s+'
+
+- name: Configure and restart chronyd when not synchronized to clock.redhat.com
+  when: >-
+    _chrony_sources.rc != 0 or
+    not (_chrony_sources.stdout is search(_chrony_source_pattern))
+  block:
+    - name: Configure clock.redhat.com as the preferred NTP source
+      ansible.builtin.lineinfile:
+        path: /etc/chrony.conf
+        regexp: '^\s*(?:server|pool)\s+clock\.redhat\.com(?:\s|$)'
+        line: 'pool clock.redhat.com iburst prefer'
+        backup: true
+        validate: '/usr/sbin/chronyd -p -f %s'
+
+    - name: Enable and restart chronyd on the hypervisor
+      ansible.builtin.systemd_service:
+        name: chronyd
+        enabled: true
+        state: restarted
+
+- name: Wait for clock.redhat.com to become the selected Chrony source
+  ansible.builtin.command:
+    argv: ['chronyc', '-N', 'sources']
+  register: _chrony_selected_source
+  changed_when: false
+  until: >-
+    _chrony_selected_source.rc == 0 and
+    _chrony_selected_source.stdout is search(_chrony_source_pattern)
+  retries: 30
+  delay: 10
+
+- name: Wait for hypervisor clock correction to fall below 100 milliseconds
+  ansible.builtin.command:
+    argv: ['chronyc', 'waitsync', '30', '0.1', '0', '10']
+  changed_when: false

@@ -247,72 +247,23 @@
   ansible.builtin.set_fact:
     _report_headline: "{{ report_headline | default(ocp_version ~ ' - ' ~ arch) }}"
 
-- name: Define expected BIOS settings for x86_64
+- name: Extract raw BIOS attributes (no validation, just data collection)
   ansible.builtin.set_fact:
-    expected_bios_settings:
-      WorkloadProfile: "TelcoOptimizedProfile"
-      ProcPwrPerf: "SysDbpmTelco"
-      EnergyPerformanceBias: "MaxPower"
-      ProcTurboMode: "Enabled"
-      ProcCStates: "Enabled"
-      PackageCStates: "Disabled"
-      ProcC1E: "Disabled"
-      EnergyEfficientTurbo: "Disabled"
-      CpuInterconnectBusLinkPower: "Disabled"
-      LogicalProc: "Enabled"
-      ProcAvxP1: "Level2"
-      SubNumaCluster: "Disabled"
-      SriovGlobalEnable: "Enabled"
-      SecureBoot: "Enabled"
-      SecureBootMode: "DeployedMode"
-      SecureBootPolicy: "Standard"
-      BootMode: "Uefi"
-  when: node_arch == 'x86_64'
-
-- name: Define expected BIOS settings for arm64
-  ansible.builtin.set_fact:
-    expected_bios_settings:
-      SecureBoot: "Enabled"
-  when: node_arch == 'aarch64' or node_arch == 'arm64'
-
-- name: Build BIOS settings list with validation
-  ansible.builtin.set_fact:
-    bios_settings_list: >-
-      {{ bios_settings_list | default([]) + [{
-        'name': item.key,
-        'expected': item.value | string,
-        'current': (redfish_bios.json.Attributes[item.key] | default('N/A')) | string,
-        'match': ((redfish_bios.json.Attributes[item.key] | default('N/A')) | string) == (item.value | string)
-      }] }}
-  loop: "{{ expected_bios_settings | dict2items }}"
+    bios_raw_attributes: "{{ redfish_bios.json.Attributes | default({}) }}"
   when:
     - redfish_bios is defined
     - redfish_bios.json is defined
     - redfish_bios.json.Attributes is defined
-    - expected_bios_settings is defined
-  no_log: false
 
-- name: Build uncore frequency data for x86_64
-  ansible.builtin.set_fact:
-    uncore_data:
-      UncoreFrequencyCompute: "{{ redfish_bios.json.Attributes.UncoreFrequencyCompute | default('N/A') }}"
-      UncoreFrequencyIO: "{{ redfish_bios.json.Attributes.UncoreFrequencyIO | default('N/A') }}"
-      UncoreFrequencyDomain: "{{ redfish_bios.json.Attributes.UncoreFrequencyDomain | default('N/A') }}"
-  when:
-    - node_arch == 'x86_64'
-    - redfish_bios is defined
-    - redfish_bios.json is defined
-    - redfish_bios.json.Attributes is defined
-
-- name: Build BIOS settings validation structure
+- name: Build BIOS data structure with raw attributes
   ansible.builtin.set_fact:
     bios_settings_struct:
       arch: "{{ node_arch }}"
       bmc_ip: "{{ bmc_ip }}"
-      settings: "{{ bios_settings_list }}"
-      uncore: "{{ uncore_data | default({}) }}"
+      vendor: "{{ hardware_details.vendor | default('N/A') }}"
+      attributes: "{{ bios_raw_attributes | default({}) }}"
   when:
-    - bios_settings_list is defined
+    - bios_raw_attributes is defined
 
 - name: Build node info JSON
   ansible.builtin.set_fact:

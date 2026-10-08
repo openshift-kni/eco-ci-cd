@@ -79,12 +79,15 @@ echo "Cluster: {{ spoke_cluster }}"
 echo "Duration: {{ duration }}"
 echo "Frame Size: {{ frame_size | default(telco_kpis_default_frame_size) }}"
 echo "LAT Rate: {{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+{% if test_options is defined and test_options | length > 0 %}
+echo "Test Options: {{ test_options }}"
+{% endif %}
 TEST_START_TIME=$(date +%s)
 echo "Start time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "=========================================="
 
 set +e
-bash ./run-rfc-2544-tests.sh rfc2544
+bash ./run-rfc-2544-tests.sh rfc2544={{ [duration, test_options | default('')] | select | join('.') }}
 exit_code=$?
 
 TEST_END_TIME=$(date +%s)

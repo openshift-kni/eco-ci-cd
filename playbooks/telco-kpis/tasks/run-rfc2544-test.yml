@@ -3,6 +3,17 @@
 # Test: RFC2544
 # Purpose: Network throughput and latency measurement using Spirent traffic generator
 # Duration: Configurable via duration parameter (default: 1h)
+#
+# Optional test_options parameter supports multiple execution modifiers:
+#   Available options (can be combined with dots):
+#     - arm: Configure for ARM64 architecture (uses hugepages-512Mi instead of hugepages-1Gi)
+#     - powersave: Enable powersave mode
+#
+#   Examples:
+#     test_options="arm"           -> Configures ARM64-specific settings (hugepages-512Mi)
+#     test_options="powersave"     -> Enables powersave mode
+#     test_options="arm.powersave" -> ARM64 with powersave mode
+#     test_options="" (default)    -> Uses default x86_64 settings (hugepages-1Gi)
 
 - name: Ensure test-runner container image exists on bastion
   ansible.builtin.import_tasks: setup-test-runner.yml
@@ -206,6 +217,7 @@
       - "Duration: {{ duration | default(telco_kpis_default_duration_rfc2544) }} ({{ duration_seconds }}s)"
       - "Frame Size: {{ frame_size | default(telco_kpis_default_frame_size) }}"
       - "LAT Rate: {{ lat_rate | default(telco_kpis_default_lat_rate) }}"
+      - "Test Options: {{ test_options | default('(none)') }}"
       - "Disconnected Registry: {{ rfc2544_disconnected_registry }}"
       - "RAN Integration Repo: {{ ran_integration_repo | default('https://gitlab.cee.redhat.com/ran/ran-integration.git') }}"
       - "Artifacts: {{ artifacts_dir.path }}"

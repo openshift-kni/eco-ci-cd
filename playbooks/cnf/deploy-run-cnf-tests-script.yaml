@@ -318,6 +318,20 @@
               - "{{ container_registry }}/dpdk-base-rhel{{ dpdk_tests_rhel }}:v{{ containers_version }}"
               - "{{ container_registry }}/cnf-tests-rhel{{ cnf_tests_rhel }}:v{{ containers_version }}"
 
+        - name: Mirror workload images to disconnected registry
+          when: cluster_disconnected
+          ansible.builtin.command:
+            cmd: >-
+              skopeo copy --all --retry-times=5 --dest-tls-verify=false
+              docker://quay.io/container-perf-tools/{{ item }}:latest
+              docker://{{
+              disconnected_registry_url }}:{{
+              disconnected_registry_port }}/container-perf-tools/{{ item }}:latest
+          changed_when: true
+          loop:
+            - oslat
+            - stress-ng
+
         - name: Prepare execute shell script
           ansible.builtin.template:
             src: run_cnf_tests.j2

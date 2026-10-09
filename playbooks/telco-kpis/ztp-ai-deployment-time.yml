@@ -73,6 +73,52 @@
           - "Test Artifacts: {{ test_artifacts_dir.path }}"
           - "=========================================="
 
+    - name: Construct spoke kubeconfig path
+      ansible.builtin.set_fact:
+        _ztp_spoke_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+
+    - name: Get spoke cluster UUID
+      ansible.builtin.shell: |
+        oc --kubeconfig {{ _ztp_spoke_kubeconfig }} get clusterversion version -o jsonpath='{.spec.clusterID}'
+      register: ztp_cluster_uuid_result
+      failed_when: false
+      changed_when: false
+
+    - name: Get spoke cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+        kubeconfig: "{{ _ztp_spoke_kubeconfig }}"
+      register: ztp_cluster_version_result
+      failed_when: false
+
+    - name: Set cluster info facts
+      ansible.builtin.set_fact:
+        ztp_cluster_name: "{{ spoke_cluster }}"
+        ztp_cluster_version: "{{ ztp_cluster_version_result.resources[0].status.desired.version
+          if (ztp_cluster_version_result.resources | default([]) | length > 0) else 'N/A' }}"
+        ztp_cluster_uuid: "{{ ztp_cluster_uuid_result.stdout | default('N/A') }}"
+
+    - name: Display cluster information
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Fetching info of cluster under test..."
+          - "Cluster name: {{ ztp_cluster_name }}"
+          - "Cluster version: {{ ztp_cluster_version }}"
+          - "Cluster UUID: {{ ztp_cluster_uuid }}"
+          - "=========================================="
+
+    - name: Save cluster info to artifact file
+      ansible.builtin.copy:
+        content: |
+          cluster_name={{ ztp_cluster_name }}
+          cluster_version={{ ztp_cluster_version }}
+          cluster_uuid={{ ztp_cluster_uuid }}
+        dest: "{{ test_artifacts_dir.path }}/cluster-info.txt"
+        mode: '0644'
+
     - name: Collect ZTP deployment timeline
       ansible.builtin.include_role:
         name: ztp_deployment_timeline

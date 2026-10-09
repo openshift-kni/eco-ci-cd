@@ -106,6 +106,48 @@
       - "Artifacts: {{ artifacts_dir.path }}"
       - "=========================================="
 
+- name: Get cluster UUID
+  ansible.builtin.shell: |
+    oc --kubeconfig {{ spoke_kubeconfig }} get clusterversion version -o jsonpath='{.spec.clusterID}'
+  register: cluster_uuid_result
+  failed_when: false
+  changed_when: false
+
+- name: Get cluster version
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: cluster_version_result
+  failed_when: false
+
+- name: Set cluster info facts
+  ansible.builtin.set_fact:
+    cluster_name: "{{ spoke_cluster }}"
+    cluster_version: "{{ cluster_version_result.resources[0].status.desired.version
+      if (cluster_version_result.resources | default([]) | length > 0) else 'N/A' }}"
+    cluster_uuid: "{{ cluster_uuid_result.stdout | default('N/A') }}"
+
+- name: Display cluster information
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Fetching info of cluster under test..."
+      - "Cluster name: {{ cluster_name }}"
+      - "Cluster version: {{ cluster_version }}"
+      - "Cluster UUID: {{ cluster_uuid }}"
+      - "=========================================="
+
+- name: Save cluster info to artifact file
+  ansible.builtin.copy:
+    content: |
+      cluster_name={{ cluster_name }}
+      cluster_version={{ cluster_version }}
+      cluster_uuid={{ cluster_uuid }}
+    dest: "{{ artifacts_dir.path }}/cluster-info.txt"
+    mode: '0644'
+
 - name: Set BIOS profile cache path and API base URL
   ansible.builtin.set_fact:
     _bios_cache_path: >-

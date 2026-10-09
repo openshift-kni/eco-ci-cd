@@ -90,6 +90,8 @@
     command: /workspace/artifacts/run-rds-compare-test.sh
     env:
       KUBECONFIG: /tmp/kubeconfig-ro
+      DISABLE_PUSHGATEWAY_RAN_METRICS_UPLOAD: "true"
+      DISABLE_OPENSEARCH_RAN_METRICS_UPLOAD: "true"
     volume:
       - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
       - "{{ reference_repo_path }}:/workspace/reference:ro,Z"

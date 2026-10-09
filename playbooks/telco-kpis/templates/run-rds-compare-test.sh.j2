@@ -22,6 +22,24 @@ set -euo pipefail
 
 cd /workspace/reference
 
+# Fetch cluster information
+echo "=========================================="
+echo "Fetching info of cluster under test..."
+CLUSTER_NAME="{{ spoke_cluster }}"
+CLUSTER_VERSION=$(oc version -o json 2>/dev/null | jq -r '.openshiftVersion' || echo "N/A")
+CLUSTER_UUID=$(oc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null || echo "N/A")
+echo "Cluster name: ${CLUSTER_NAME}"
+echo "Cluster version: ${CLUSTER_VERSION}"
+echo "Cluster UUID: ${CLUSTER_UUID}"
+echo "=========================================="
+
+# Save cluster info to artifact file
+cat > /workspace/artifacts/cluster-info.txt <<EOF
+cluster_name=${CLUSTER_NAME}
+cluster_version=${CLUSTER_VERSION}
+cluster_uuid=${CLUSTER_UUID}
+EOF
+
 echo '[INFO] Running kubectl-cluster_compare'
 echo '[INFO] Metadata: {{ metadata_relpath }}'
 echo '[INFO] Extra args: {{ compare_extra_args | default('(none)') }}'

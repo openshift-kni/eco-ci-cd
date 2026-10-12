@@ -68,62 +68,121 @@
         sno_cluster: true
       when: nodes_info.resources | length == 1
 
-    - name: Clone NTO repository
-      ansible.builtin.git:
-        repo: "{{ nto_repo }}"
-        dest: "{{ gotest_dir }}"
-        version: "release-{{ ocp_version }}"
+    - name: Get NTO deployment from cluster
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: openshift-cluster-node-tuning-operator
+      register: nto_deployments
 
-    - name: Set base RHEL image to rhel9 for 4.19+
+    - name: Set NTO image fact from deployment
       ansible.builtin.set_fact:
-        base_rhel_image: rhel9
-      when: ocp_version is version('4.19', '>=')
+        nto_image: "{{ nto_deployments.resources[0].spec.template.spec.containers[0].image }}"
 
-    - name: Set base RHEL image to rhel8 for 4.18-
-      ansible.builtin.set_fact:
-        base_rhel_image: rhel8
-      when: ocp_version is version('4.18', '<=')
+    - name: Display NTO image from cluster
+      ansible.builtin.debug:
+        msg: "NTO image from cluster: {{ nto_image }}"
 
-    - name: Create Go test script
-      ansible.builtin.copy:
-        dest: "{{ gotest_dir }}/run_gotests.sh"
-        mode: "0777"
-        content: |
-          #!/bin/bash
-          set -e
-          export PATH=/home/telcov10n/go/bin:/usr/local/go/bin:$PATH
-          export KUBECONFIG="{{ kubeconfig }}"
-          export PERF_TEST_PROFILE=performance
-          export IMAGE_REGISTRY="registry.stage.redhat.io/"
-          export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
-          export NTO_IMAGE=quay.io/openshift/origin-cluster-node-tuning-operator:{{ ocp_version }}
-          export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
-          export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
-          export MUSTGATHER_DIR="/must-gather"
-          export ROLE_WORKER_CNF={% if sno_cluster | bool %}master{% else %}worker-cnf{% endif %}
+    - name: Pull NTO image and run tests
+      block:
+        - name: Create temporary file for pull secret
+          ansible.builtin.tempfile:
+            state: file
+            prefix: pull_secret_
+          register: pull_secret_tempfile
+          no_log: true
+
+        - name: Get cluster pull secret
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: pull-secret
+            namespace: openshift-config
+          register: pull_secret_info
+          no_log: true
+
+        - name: Save pull secret to temporary file
+          ansible.builtin.copy:
+            content: "{{ pull_secret_info.resources[0].data['.dockerconfigjson'] | b64decode }}"
+            dest: "{{ pull_secret_tempfile.path }}"
+            mode: '0600'
+          no_log: true
+
+        - name: Pull NTO image on bastion
+          containers.podman.podman_image:
+            name: "{{ nto_image }}"
+            auth_file: "{{ pull_secret_tempfile.path }}"
+          async: 600
+          poll: 30
+
+        - name: Display pulled NTO image
+          ansible.builtin.debug:
+            msg: "Successfully pulled NTO image: {{ nto_image }}"
+
+        - name: Clone NTO repository
+          ansible.builtin.git:
+            repo: "{{ nto_repo }}"
+            dest: "{{ gotest_dir }}"
+            version: "release-{{ ocp_version }}"
+
+        - name: Set base RHEL image to rhel9 for 4.19+
+          ansible.builtin.set_fact:
+            base_rhel_image: rhel9
+          when: ocp_version is version('4.19', '>=')
+
+        - name: Set base RHEL image to rhel8 for 4.18-
+          ansible.builtin.set_fact:
+            base_rhel_image: rhel8
+          when: ocp_version is version('4.18', '<=')
+
+        - name: Create Go test script
+          ansible.builtin.copy:
+            dest: "{{ gotest_dir }}/run_gotests.sh"
+            mode: "0777"
+            content: |
+              #!/bin/bash
+              set -e
+              export PATH=/home/telcov10n/go/bin:/usr/local/go/bin:$PATH
+              export KUBECONFIG="{{ kubeconfig }}"
+              export PERF_TEST_PROFILE=performance
+              export IMAGE_REGISTRY="registry.stage.redhat.io/"
+              export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
+              export NTO_IMAGE={{ nto_image }}
+              export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
+              export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'
+              export MUSTGATHER_DIR="/must-gather"
+              export ROLE_WORKER_CNF={% if sno_cluster | bool %}master{% else %}worker-cnf{% endif %}
 
 
-          echo "Installing ginkgo and gomega..."
-          go install github.com/onsi/ginkgo/v2/ginkgo@latest
+              echo "Installing ginkgo and gomega..."
+              go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
-          cd {{ gotest_dir }}
-          go mod vendor && go mod tidy
-          {% if ocp_version is version('4.15', '>=') %}
-          make vet
-          {% endif %}
+              cd {{ gotest_dir }}
+              go mod vendor && go mod tidy
+              {% if ocp_version is version('4.15', '>=') %}
+              make vet
+              {% endif %}
 
-          echo "Running gotests..."
-          ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
-          {% if label_filter is defined and label_filter != '' %}
-            --label-filter="{{ label_filter }} && !hypershift" \
-          {% endif %}
-            --timeout=24h \
-            --output-dir={{ artifact_dir }} \
-            --require-suite ${TEST_FOLDER_PATH}/0_config \
-                            ${TEST_FOLDER_PATH}/1_performance \
-                            ${TEST_FOLDER_PATH}/2_performance_update \
-                            ${TEST_FOLDER_PATH}/3_performance_status \
-                            ${TEST_FOLDER_PATH}/6_mustgather_testing \
-                            ${TEST_FOLDER_PATH}/7_performance_kubelet_node \
-                            ${TEST_FOLDER_PATH}/8_performance_workloadhints \
-                            ${TEST_FOLDER_PATH}/10_performance_ppc
+              echo "Running gotests..."
+              ginkgo   -v -r  --keep-separate-reports --keep-going  --flake-attempts=2 --junit-report=_report.xml \
+              {% if label_filter is defined and label_filter != '' %}
+                --label-filter="{{ label_filter }} && !hypershift" \
+              {% endif %}
+                --timeout=24h \
+                --output-dir={{ artifact_dir }} \
+                --require-suite ${TEST_FOLDER_PATH}/0_config \
+                                ${TEST_FOLDER_PATH}/1_performance \
+                                ${TEST_FOLDER_PATH}/2_performance_update \
+                                ${TEST_FOLDER_PATH}/3_performance_status \
+                                ${TEST_FOLDER_PATH}/6_mustgather_testing \
+                                ${TEST_FOLDER_PATH}/7_performance_kubelet_node \
+                                ${TEST_FOLDER_PATH}/8_performance_workloadhints \
+                                ${TEST_FOLDER_PATH}/10_performance_ppc
+
+      always:
+        - name: Clean up pull secret temporary file
+          ansible.builtin.file:
+            path: "{{ pull_secret_tempfile.path }}"
+            state: absent
+          when: pull_secret_tempfile.path is defined
+          no_log: true

@@ -2,6 +2,12 @@
 # Collect Node Info task for Telco-KPIs
 # Purpose: Collect comprehensive node information (BIOS, microcode, kernel, etc.)
 # Output: JSON file with all collected data
+# Design: Gracefully handles unreachable clusters - creates JSON even with incomplete data
+
+- name: Initialize collection status tracking
+  ansible.builtin.set_fact:
+    collection_errors: []
+    collection_status: "complete"
 
 - name: Create artifacts directory on bastion
   ansible.builtin.tempfile:
@@ -28,6 +34,12 @@
   failed_when: false
   changed_when: false
 
+- name: Track cluster UUID fetch error if failed
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Failed to fetch cluster UUID: ' + (cluster_uuid_result.stderr | default('connection error'))] }}"
+    collection_status: "incomplete"
+  when: cluster_uuid_result.rc != 0
+
 - name: Get cluster version
   kubernetes.core.k8s_info:
     api_version: config.openshift.io/v1
@@ -37,12 +49,21 @@
   register: cluster_version_result
   failed_when: false
 
+- name: Track cluster version fetch error if failed
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Failed to fetch ClusterVersion: API unreachable (SSL/network error)'] }}"
+    collection_status: "incomplete"
+  when: >
+    cluster_version_result.failed is defined and cluster_version_result.failed or
+    (cluster_version_result.resources | default([]) | length == 0 and
+     cluster_version_result.api_found is defined and not cluster_version_result.api_found)
+
 - name: Set cluster info facts
   ansible.builtin.set_fact:
     cluster_name: "{{ spoke_cluster }}"
     cluster_version: "{{ cluster_version_result.resources[0].status.desired.version
-      if (cluster_version_result.resources | default([]) | length > 0) else 'N/A' }}"
-    cluster_uuid: "{{ cluster_uuid_result.stdout | default('N/A') }}"
+      if (cluster_version_result.resources | default([]) | length > 0) else 'Unreachable' }}"
+    cluster_uuid: "{{ cluster_uuid_result.stdout if cluster_uuid_result.rc == 0 else 'Unreachable' }}"
 
 - name: Display cluster information
   ansible.builtin.debug:
@@ -74,12 +95,33 @@
     kind: Node
     kubeconfig: "{{ spoke_kubeconfig }}"
   register: nodes_info
-  failed_when: nodes_info.resources | length == 0
+  failed_when: false
 
-- name: Extract node facts
+- name: Track nodes fetch error if failed
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Failed to fetch cluster nodes: API unreachable'] }}"
+    collection_status: "unreachable"
+  when: >
+    nodes_info.failed is defined and nodes_info.failed or
+    (nodes_info.resources | default([]) | length == 0)
+
+- name: Extract node facts (if nodes were retrieved)
   ansible.builtin.set_fact:
     node_name: "{{ nodes_info.resources[0].metadata.name }}"
     kernel_version: "{{ nodes_info.resources[0].status.nodeInfo.kernelVersion }}"
+    node_arch_raw: "{{ nodes_info.resources[0].status.nodeInfo.architecture }}"
+  when:
+    - nodes_info.resources is defined
+    - nodes_info.resources | length > 0
+
+- name: Set default node facts (if nodes were not retrieved)
+  ansible.builtin.set_fact:
+    node_name: "Unreachable"
+    kernel_version: "Unreachable"
+    node_arch_raw: "unknown"
+  when: >
+    nodes_info.resources is not defined or
+    (nodes_info.resources | default([]) | length == 0)
 
 - name: Get machine-config-daemon pod on target node
   kubernetes.core.k8s_info:
@@ -92,11 +134,31 @@
       - "spec.nodeName={{ node_name }}"
     kubeconfig: "{{ spoke_kubeconfig }}"
   register: mcd_pods
-  failed_when: mcd_pods.resources | length == 0
+  failed_when: false
+  when: node_name != "Unreachable"
 
-- name: Extract MCD pod name
+- name: Track MCD pod fetch error if failed
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Failed to fetch MCD pod: API unreachable or pod not found'] }}"
+  when: >
+    node_name == "Unreachable" or
+    (mcd_pods.resources | default([]) | length == 0)
+
+- name: Extract MCD pod name (if retrieved)
   ansible.builtin.set_fact:
     mcd_pod: "{{ mcd_pods.resources[0].metadata.name }}"
+  when:
+    - node_name != "Unreachable"
+    - mcd_pods.resources is defined
+    - mcd_pods.resources | length > 0
+
+- name: Set default MCD pod name (if not retrieved)
+  ansible.builtin.set_fact:
+    mcd_pod: ""
+  when: >
+    node_name == "Unreachable" or
+    mcd_pods.resources is not defined or
+    (mcd_pods.resources | default([]) | length == 0)
 
 - name: Get BIOS version via dmidecode
   ansible.builtin.shell: |
@@ -108,16 +170,24 @@
   register: dmidecode_result
   failed_when: false
   changed_when: false
+  when: mcd_pod != ""
+
+- name: Track BIOS fetch error if MCD pod unavailable
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Cannot fetch BIOS version: MCD pod unavailable'] }}"
+  when: mcd_pod == ""
 
 - name: Parse BIOS version from dmidecode output
   ansible.builtin.set_fact:
     bios_version: "{{ (dmidecode_result.stdout | default('')) | regex_search('Version:\\s+(\\S+)', '\\1') | first | default('unknown', true) }}"
-  when: dmidecode_result.stdout is defined
+  when:
+    - mcd_pod != ""
+    - dmidecode_result.stdout is defined
 
-- name: Set BIOS version to unknown if dmidecode failed
+- name: Set BIOS version to unreachable if dmidecode failed or skipped
   ansible.builtin.set_fact:
-    bios_version: "unknown"
-  when: dmidecode_result.stdout is not defined
+    bios_version: "{{ 'Unreachable' if mcd_pod == '' else 'unknown' }}"
+  when: mcd_pod == "" or dmidecode_result.stdout is not defined
 
 - name: Get microcode version from cpuinfo
   ansible.builtin.shell: |
@@ -129,6 +199,12 @@
   register: cpuinfo_result
   failed_when: false
   changed_when: false
+  when: mcd_pod != ""
+
+- name: Track microcode fetch error if MCD pod unavailable
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Cannot fetch microcode version: MCD pod unavailable'] }}"
+  when: mcd_pod == ""
 
 - name: Parse microcode version from cpuinfo
   ansible.builtin.set_fact:
@@ -136,12 +212,14 @@
       | default(''))
       | regex_search('microcode\\s+:\\s+(\\S+)', '\\1')
       | default([], true) | first | default('unknown', true) }}"
-  when: cpuinfo_result.stdout is defined
+  when:
+    - mcd_pod != ""
+    - cpuinfo_result.stdout is defined
 
-- name: Set microcode version to unknown if cpuinfo failed
+- name: Set microcode version to unreachable if cpuinfo failed or skipped
   ansible.builtin.set_fact:
-    microcode_version: "unknown"
-  when: cpuinfo_result.stdout is not defined
+    microcode_version: "{{ 'Unreachable' if mcd_pod == '' else 'unknown' }}"
+  when: mcd_pod == "" or cpuinfo_result.stdout is not defined
 
 - name: Get CPU information via lscpu
   ansible.builtin.shell: |
@@ -153,16 +231,24 @@
   register: lscpu_result
   failed_when: false
   changed_when: false
+  when: mcd_pod != ""
+
+- name: Track CPU info fetch error if MCD pod unavailable
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Cannot fetch CPU information: MCD pod unavailable'] }}"
+  when: mcd_pod == ""
 
 - name: Parse CPU model from lscpu output
   ansible.builtin.set_fact:
     cpu_type: "{{ (lscpu_result.stdout | default('')) | regex_search('Model name:\\s+(.+)', '\\1') | first | default('unknown', true) }}"
-  when: lscpu_result.stdout is defined
+  when:
+    - mcd_pod != ""
+    - lscpu_result.stdout is defined
 
-- name: Set CPU type to unknown if lscpu failed
+- name: Set CPU type to unreachable if lscpu failed or skipped
   ansible.builtin.set_fact:
-    cpu_type: "unknown"
-  when: lscpu_result.stdout is not defined
+    cpu_type: "{{ 'Unreachable' if mcd_pod == '' else 'unknown' }}"
+  when: mcd_pod == "" or lscpu_result.stdout is not defined
 
 - name: Get kernel cmdline
   ansible.builtin.shell: |
@@ -174,10 +260,16 @@
   register: cmdline_result
   failed_when: false
   changed_when: false
+  when: mcd_pod != ""
+
+- name: Track kernel cmdline fetch error if MCD pod unavailable
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Cannot fetch kernel cmdline: MCD pod unavailable'] }}"
+  when: mcd_pod == ""
 
 - name: Set kernel cmdline fact
   ansible.builtin.set_fact:
-    kernel_cmdline: "{{ cmdline_result.stdout | default('') | trim }}"
+    kernel_cmdline: "{{ 'Unreachable' if mcd_pod == '' else (cmdline_result.stdout | default('') | trim) }}"
 
 - name: Get PerformanceProfiles
   kubernetes.core.k8s_info:
@@ -186,6 +278,14 @@
     kubeconfig: "{{ spoke_kubeconfig }}"
   register: performance_profiles
   failed_when: false
+  when: collection_status != "unreachable"
+
+- name: Track PerformanceProfile fetch error if failed
+  ansible.builtin.set_fact:
+    collection_errors: "{{ collection_errors + ['Failed to fetch PerformanceProfiles: API unreachable'] }}"
+  when: >
+    collection_status == "unreachable" or
+    (performance_profiles.failed is defined and performance_profiles.failed)
 
 - name: Check if master0 vault file exists
   ansible.builtin.stat:
@@ -256,21 +356,31 @@
   no_log: "{{ ansible_verbosity < 3 }}"
   failed_when: false
 
-- name: Set architecture fact from node info
-  ansible.builtin.set_fact:
-    node_arch: "{{ nodes_info.resources[0].status.nodeInfo.architecture }}"
-
 - name: Normalize architecture name (amd64 -> x86_64 for BIOS validation)
   ansible.builtin.set_fact:
-    node_arch: "{{ 'x86_64' if node_arch == 'amd64' else node_arch }}"
+    node_arch: "{{ 'x86_64' if node_arch_raw == 'amd64' else node_arch_raw }}"
 
 - name: Set arch display name (arm64 for aarch64, otherwise keep as-is)
   ansible.builtin.set_fact:
     arch: "{{ 'arm64' if node_arch == 'aarch64' else node_arch }}"
 
 - name: Collect hardware details (vendor, model, iDRAC, memory, storage, NICs)
-  ansible.builtin.include_role:
-    name: hardware_details
+  when: mcd_pod != ""
+  block:
+    - name: Include hardware_details role
+      ansible.builtin.include_role:
+        name: hardware_details
+  rescue:
+    - name: Track hardware details fetch error
+      ansible.builtin.set_fact:
+        collection_errors: "{{ collection_errors + ['Failed to collect hardware details: ' + (ansible_failed_result.msg | default('unknown error'))] }}"
+        hardware_details: {}
+
+- name: Set empty hardware_details if MCD pod unavailable
+  ansible.builtin.set_fact:
+    hardware_details: {}
+    collection_errors: "{{ collection_errors + ['Cannot collect hardware details: MCD pod unavailable'] }}"
+  when: mcd_pod == ""
 
 - name: Get ClusterVersion
   kubernetes.core.k8s_info:
@@ -280,12 +390,14 @@
     kubeconfig: "{{ spoke_kubeconfig }}"
   register: cluster_version_info
   failed_when: false
+  when: collection_status != "unreachable"
 
 - name: Extract OCP version from ClusterVersion
   ansible.builtin.set_fact:
     ocp_version: >-
       {{ cluster_version_info.resources[0].status.desired.version
          if (cluster_version_info.resources | default([]) | length > 0)
+         else 'Unreachable' if collection_status == 'unreachable'
          else 'N/A' }}
 
 - name: Resolve report headline
@@ -314,6 +426,8 @@
   ansible.builtin.set_fact:
     node_info_json:
       spoke: "{{ spoke_cluster }}"
+      collection_status: "{{ collection_status }}"
+      collection_errors: "{{ collection_errors }}"
       node_name: "{{ node_name }}"
       ocp_version: "{{ ocp_version }}"
       cluster_uuid: "{{ cluster_uuid }}"
@@ -334,7 +448,9 @@
              else '' }}
         cluster_version: >-
           {{ (cluster_version_info.resources | to_nice_json | b64encode)
-             if (cluster_version_info.resources | default([]) | length > 0)
+             if (cluster_version_info is defined and
+                 cluster_version_info.resources is defined and
+                 cluster_version_info.resources | default([]) | length > 0)
              else '' }}
         nodes: >-
           {{ (nodes_info.resources | to_nice_json | b64encode)
@@ -395,6 +511,9 @@
       - "=========================================="
       - "Node Info Collection Complete"
       - "=========================================="
+      - "Collection Status: {{ collection_status | upper }}"
+      - "Errors/Warnings: {{ collection_errors | length }}"
+      - "{% if collection_errors | length > 0 %}Issues encountered:{% for error in collection_errors %}  - {{ error }}{% endfor %}{% endif %}"
       - "Cluster: {{ cluster_name }}"
       - "Cluster Version: {{ cluster_version }}"
       - "Cluster UUID: {{ cluster_uuid }}"
@@ -402,5 +521,5 @@
       - "BIOS: {{ bios_version | default('N/A') }}"
       - "Microcode: {{ microcode_version | default('N/A') }}"
       - "Kernel: {{ kernel_version | default('N/A') }}"
-      - "BMC queried: {{ 'Yes' if (bmc_ip != '') else 'No (not configured)' }}"
+      - "BMC queried: {{ 'Yes' if (bmc_ip | default('') != '') else 'No (not configured)' }}"
       - "=========================================="

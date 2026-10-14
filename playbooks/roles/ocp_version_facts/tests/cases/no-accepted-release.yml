@@ -1,0 +1,12 @@
+---
+# No Accepted tag must still fail when no stale fallback candidate exists.
+ocp_version_facts_release: "4.16"
+ocp_release_streams:
+  - "http://127.0.0.1:1/stable"
+
+api_response:
+  status: 200
+  json:
+    tags: []
+
+expect_failure: true

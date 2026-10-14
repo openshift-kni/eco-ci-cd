@@ -1,6 +1,6 @@
 ---
 - name: Gather release from stream
-  when: ocp_version_facts_query is not defined
+  when: ocp_version_facts_query is not defined or ocp_version_facts_query is none
   block:
     - name: Fetch data from release stream {{ release_stream }}
       ansible.builtin.uri:
@@ -31,7 +31,7 @@
         - matching_tags | length > 0
 
 - name: Inspect image manifest and derive creation date
-  when: ocp_version_match is defined
+  when: ocp_version_match is defined and ocp_version_match is not none
   block:
     - name: Get image manifest
       ansible.builtin.uri:
@@ -63,12 +63,12 @@
         image_created: "{{ (config_response.content | from_json).created }}"
   rescue:
     - name: Fallback parse creation date from pullSpec tag
-      when: ocp_version_match is defined
+      when: ocp_version_match is defined and ocp_version_match is not none
       ansible.builtin.set_fact:
         image_created: "{{ ocp_version_match.pullSpec.split(':')[-1] | regex_search('\\d{4}-\\d{2}-\\d{2}') }}"
 
 - name: Post-process image creation and compute age
-  when: ocp_version_match is defined
+  when: ocp_version_match is defined and ocp_version_match is not none
   block:
     - name: Show image creation date
       ansible.builtin.debug:
@@ -102,8 +102,20 @@
 
 - name: Select recent accepted tag (nightly/stable cutoff)
   when:
-    - ocp_version_match is defined
-    - image_age_days is defined
+    - ocp_version_match is defined and ocp_version_match is not none
+    - image_age_days is defined and image_age_days is not none
     - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
   ansible.builtin.set_fact:
     ocp_version_facts_query: "{{ ocp_version_match }}"
+    _ocp_version_facts_query_selected: true
+
+- name: Save first stale accepted tag as fallback
+  ansible.builtin.set_fact:
+    _ocp_version_facts_stale_candidate:
+      query: "{{ ocp_version_match }}"
+      image_age_days: "{{ image_age_days }}"
+  when:
+    - ocp_version_match is defined and ocp_version_match is not none
+    - image_age_days is defined and image_age_days is not none
+    - (image_age_days | int) > (ocp_version_release_age_max_days | int)
+    - _ocp_version_facts_stale_candidate | length == 0

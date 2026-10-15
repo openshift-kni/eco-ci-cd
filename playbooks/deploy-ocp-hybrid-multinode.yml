@@ -516,6 +516,23 @@
         ocp_version_facts_release: "{{ release }}"
         ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
         ocp_version_facts_arch: "{{ arch }}"
+
+    - name: Save OCP version facts to artifacts
+      ansible.builtin.copy:
+        dest: /tmp/artifacts/ocp_version.json
+        mode: '0644'
+        content: |
+          {
+            "requested_version": "{{ release }}",
+            "installed_version": "{{ ocp_version_facts_parsed_release }}",
+            "major": "{{ ocp_version_facts_major }}",
+            "minor": "{{ ocp_version_facts_minor }}",
+            "z_stream": "{{ ocp_version_facts_z_stream | default('N/A') }}",
+            "release_type": "{{ ocp_version_facts_release_type }}",
+            "pull_spec": "{{ ocp_version_facts_pull_spec }}",
+            "dev_version": "{{ ocp_version_facts_dev_version | default('N/A') }}"
+          }
+
     - name: Clean HTTP storage directory
       become: true
       ansible.builtin.file:

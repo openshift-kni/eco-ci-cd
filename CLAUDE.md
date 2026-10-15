@@ -102,7 +102,7 @@ OpenShift deployments follow an agent-based installation pattern with several ke
 
 4. **Node Provisioning and Booting**
    - Boot bare-metal workers and virtual masters using `redhatci.ocp.boot_iso`
-   - Monitor installation with `redhatci.ocp.monitor_agent_based_installer`
+   - Monitor installation with `monitor_agent_based_installer`
 
 5. **Post-Installation Configuration**
    - Configure cluster pull secrets for additional trusted registries

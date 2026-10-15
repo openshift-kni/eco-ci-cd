@@ -21,6 +21,19 @@
         | list
       }}
 
+- name: Initialize stale release fallback
+  ansible.builtin.set_fact:
+    _ocp_version_facts_stale_candidate: {}
+
+- name: Reset previous role-selected release facts
+  ansible.builtin.set_fact:
+    ocp_version_facts_query: null
+    image_age_days: null
+    ocp_version_match: null
+    matching_tags: []
+    _ocp_version_facts_query_selected: false
+  when: _ocp_version_facts_query_selected | default(false)
+
 - name: Filter release streams for nightly when requested
   when:
     - ocp_version_facts_dev_version is defined
@@ -34,10 +47,35 @@
   loop_control:
     loop_var: release_stream
 
+- name: Warn when using stale accepted release
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: No Accepted release is within {{ ocp_version_release_age_max_days }} days.
+      Using {{ _ocp_version_facts_stale_candidate.query.name }} from
+      {{ _ocp_version_facts_stale_candidate.image_age_days }} days ago.
+  when:
+    - ocp_version_facts_query is not defined or ocp_version_facts_query is none
+    - _ocp_version_facts_stale_candidate | length > 0
+
+- name: Use stale accepted release when no fresh release exists
+  ansible.builtin.set_fact:
+    ocp_version_facts_query: "{{ _ocp_version_facts_stale_candidate.query }}"
+    image_age_days: "{{ _ocp_version_facts_stale_candidate.image_age_days }}"
+    _ocp_version_facts_query_selected: true
+  when:
+    - ocp_version_facts_query is not defined or ocp_version_facts_query is none
+    - _ocp_version_facts_stale_candidate | length > 0
+
 - name: Validate image age days
   ansible.builtin.assert:
     that:
-      - (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+      - image_age_days is defined and image_age_days is not none
+      - >-
+        (image_age_days | int) <= (ocp_version_release_age_max_days | int)
+        or (
+          ocp_version_facts_query == _ocp_version_facts_stale_candidate.get('query')
+          and (image_age_days | int) == (_ocp_version_facts_stale_candidate.get('image_age_days', -1) | int)
+        )
     fail_msg: "Image age days {{ image_age_days }} is greater than maximum allowed age {{ ocp_version_release_age_max_days }}"
 
 - name: Set ocp_version_facts_pull_spec,ocp_version_facts_parsed_release and ocp_version_facts_oc_client_pull_link facts

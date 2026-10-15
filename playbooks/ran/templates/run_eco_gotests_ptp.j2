@@ -44,7 +44,13 @@ mkdir -p {{ eco_gotest_base_dir }}_0/report
 echo "Cycle {{ loop.index }}: switching to PTP config '{{ cycle.name }}' ==="
 
 echo "Deleting existing PtpConfigs..."
-KUBECONFIG={{ spoke_kubeconfig }} oc -n openshift-ptp delete --all ptpconfigs
+KUBECONFIG={{ spoke_kubeconfig }} oc -n openshift-ptp delete --all ptpconfigs || exit 1
+
+hardwareconfig_crd=$(KUBECONFIG={{ spoke_kubeconfig }} oc get crd hardwareconfigs.ptp.openshift.io --ignore-not-found -o name) || exit 1
+if [ -n "$hardwareconfig_crd" ]; then
+  echo "Deleting existing HardwareConfigs..."
+  KUBECONFIG={{ spoke_kubeconfig }} oc -n openshift-ptp delete --all hardwareconfigs.ptp.openshift.io || exit 1
+fi
 
 {% for url in cycle.urls %}
 echo "Applying {{ url }}..."

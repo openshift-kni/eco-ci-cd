@@ -59,7 +59,7 @@
 # - redhatci.ocp.destroy_vms
 # - redhatci.ocp.create_vms
 # - redhatci.ocp.boot_iso
-# - redhatci.ocp.monitor_agent_based_installer
+# - monitor_agent_based_installer
 
 ## Usage:
 # - Ensure required variables are defined in inventory or passed as --extra-vars
@@ -724,4 +724,4 @@
         mabi_retry_install_complete_check: true
         cluster: "{{ cluster_name }}"
       ansible.builtin.import_role:
-        name: redhatci.ocp.monitor_agent_based_installer
+        name: monitor_agent_based_installer

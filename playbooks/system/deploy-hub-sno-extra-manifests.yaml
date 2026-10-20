@@ -1,0 +1,195 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Test thoroughly in your environment before production use.
+#
+# This Ansible playbook renders the Day0 extra manifest templates stored next to this
+# playbook (playbooks/system/templates/*.j2) and writes them into a directory on the
+# target host. The resulting directory is meant to be consumed by the hub/SNO
+# deployment playbooks via the 'extra_manifests_folder' variable, which copies every
+# '*.yml' file it finds into generated/<cluster_name>/openshift/ before the agent ISO
+# is built.
+
+## Prerequisites:
+# - SSH access to the target host (defaults to the 'bastion' group)
+#
+# Required variables:
+# - extra_manifests_folder: path to the directory that will hold the rendered manifests.
+#     The directory is created if missing. Existing files with the same name are
+#     overwritten; unrelated files are left untouched unless
+#     'extra_manifests_clean' is enabled.
+#
+# Variables consumed by the templates, read from the host_vars of the node being
+# installed ('master0' by default, see inventories/ocp-deployment/host_vars/master0)
+# because this play targets the bastion and not the node itself. An extra-var still
+# overrides any of them. A template whose inputs are absent is skipped rather than
+# failing the run, so a node can opt out of a manifest by leaving its vars unset:
+# - disk_id_for_partitioning: /dev/disk/by-id/<id> of the disk partitioned for LSO
+#     (used by 97-sno-partition-table.j2)
+# - disk_lso_partitions_count: number of LSO partitions to carve out of that disk
+#     (used by 97-sno-partition-table.j2)
+# - disk_lso_partitions_size: size of each LSO partition, in MiB
+#     (used by 97-sno-partition-table.j2)
+# - console_password: plaintext console password for the 'core' user
+#     (used by 98-master-console-password.j2)
+# - disable_default_catalog_sources (boolean; default true): unlike the values above
+#     this one defaults to enabled, so the manifest is rendered unless a node sets it
+#     to false (used by 99-operatorhub-disable-default-sources.j2)
+#
+# Optional variables:
+# - extra_manifests_hosts (default 'bastion'): inventory hosts to render the manifests on
+# - extra_manifests_clean (boolean; default false): remove the destination directory
+#     before rendering, so stale manifests from a previous run are not picked up
+# - extra_manifests_node (default 'master0'): inventory host whose host_vars hold the
+#     per-node values above
+#
+# LSO partition table (97-sno-partition-table.j2):
+# - disk_id_for_partitioning, disk_lso_partitions_count, disk_lso_partitions_size:
+#     see above - all three come from the node's host_vars. Rendered only when the
+#     disk id is set; when it is, the count and size must be positive or the run
+#     fails rather than emitting an empty partition list.
+#     Labels are hardcoded to 'lso-<index>', 0-based (lso-0, lso-1, ...), and the
+#     manifest always targets the 'master' pool.
+#     Caveat: count * size must fit on the disk - the installer does not validate this
+#     up front, an oversized layout fails at Ignition time on the node.
+#
+# Console password (98-master-console-password.j2):
+# - console_password: see above - hashed into the manifest so the node can be reached
+#   over the BMC console when the network is down. Lab debugging aid; leave it unset
+#   on a node that should not get a console password.
+# - console_password_salt (optional): salt for the SHA-512 crypt hash. Generated at
+#   random when not set, which is fine for Day0 since each deployment installs a fresh
+#   node. Pin it to a fixed string if you need repeated renders to produce a
+#   byte-identical manifest - a new salt means a new hash, so re-applying the manifest
+#   to a live cluster would restart the nodes.
+#   Caveat: hashing needs the 'passlib' python library on the Ansible control node
+#   (python 3.13+ dropped the stdlib 'crypt' module that password_hash used before).
+#
+# OperatorHub (99-operatorhub-disable-default-sources.j2):
+# - disable_default_catalog_sources (default true): disables the default catalog
+#   sources from Day0 so marketplace does not reach out to registry.redhat.io on a
+#   disconnected cluster. Set it to false on a connected cluster that should keep the
+#   Red Hat catalogs.
+#   Caveat: 'OperatorHub/cluster' is a singleton the cluster creates on its own, so
+#   this manifest only sticks if the release payload ships the default instance as
+#   create-only - otherwise the CVO reconciles spec back. The Day2 patch in
+#   playbooks/roles/ocp_operator_mirror sets it regardless; verify with
+#   'oc get operatorhub cluster -o jsonpath={.spec.disableAllDefaultSources}'.
+
+## Usage:
+#   ansible-playbook ./playbooks/system/deploy-hub-sno-extra-manifests.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'extra_manifests_folder=/home/telcov10n/extra-manifests'
+#
+#   Same, with a custom LSO layout (10 partitions of 40 GiB) on a non-default disk:
+#   ansible-playbook ./playbooks/system/deploy-hub-sno-extra-manifests.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'extra_manifests_folder=/home/telcov10n/extra-manifests
+#                   disk_id_for_partitioning=wwn-0x500a07513ba4ccd7
+#                   disk_lso_partitions_count=10 disk_lso_partitions_size=40960'
+#
+#   Then pass the same folder to the deployment playbook:
+#   ansible-playbook ./playbooks/deploy-ocp-sno.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars 'extra_manifests_folder=/home/telcov10n/extra-manifests'
+---
+- name: Render Day0 extra manifests into the extra manifests directory
+  hosts: bastion
+  gather_facts: false
+  vars:
+    extra_manifests_clean: true
+    extra_manifests_node: master0
+    # This play targets the bastion, so per-node values have to be pulled from the
+    # host_vars of the node being installed. An extra-var still wins over these.
+    disk_id_for_partitioning: >-
+      {{ hostvars[extra_manifests_node]['disk_id_for_partitioning'] | default('')
+         if extra_manifests_node in hostvars else '' }}
+    disk_lso_partitions_count: >-
+      {{ hostvars[extra_manifests_node]['disk_lso_partitions_count'] | default('')
+         if extra_manifests_node in hostvars else '' }}
+    disk_lso_partitions_size: >-
+      {{ hostvars[extra_manifests_node]['disk_lso_partitions_size'] | default('')
+         if extra_manifests_node in hostvars else '' }}
+    console_password: >-
+      {{ hostvars[extra_manifests_node]['console_password'] | default('')
+         if extra_manifests_node in hostvars else '' }}
+    disable_default_catalog_sources: >-
+      {{ hostvars[extra_manifests_node]['disable_default_catalog_sources'] | default(true)
+         if extra_manifests_node in hostvars else true }}
+  tasks:
+
+    - name: Ensure extra manifests folder is set
+      ansible.builtin.assert:
+        that:
+          - extra_manifests_folder is defined
+          - extra_manifests_folder | length > 0
+        fail_msg: "Please provide extra_manifests_folder variable to playbook"
+
+    # A random salt is fine here: the manifest is consumed at install time, so a
+    # different hash on every render costs nothing. Set console_password_salt to
+    # pin it instead.
+    - name: Generate a salt for the console password hash
+      when:
+        - (console_password | trim | length) > 0
+        - (console_password_salt | default('') | length) == 0
+      # set_fact echoes the new fact at -v, and the salt is an input to the hash.
+      no_log: true
+      ansible.builtin.set_fact:
+        console_password_salt: >-
+          {{ lookup('ansible.builtin.password', '/dev/null',
+                    chars=['ascii_letters', 'digits'], length=16) }}
+
+    # Only reached when the partition table is going to be rendered: a node with a
+    # disk id but no layout is a mistake, a node with neither just gets no manifest.
+    - name: Ensure LSO partition layout is sane
+      when: (disk_id_for_partitioning | trim | length) > 0
+      ansible.builtin.assert:
+        that:
+          - disk_lso_partitions_count | int > 0
+          - disk_lso_partitions_size | int > 0
+        fail_msg: >-
+          disk_id_for_partitioning is set on '{{ extra_manifests_node }}', so
+          disk_lso_partitions_count and disk_lso_partitions_size must be positive
+          integers too (inventories/ocp-deployment/host_vars/{{ extra_manifests_node }}).
+
+    - name: Remove previously rendered extra manifests
+      when: extra_manifests_clean | bool
+      ansible.builtin.file:
+        path: "{{ extra_manifests_folder }}"
+        state: absent
+
+    - name: Create extra manifests directory
+      ansible.builtin.file:
+        path: "{{ extra_manifests_folder }}"
+        state: directory
+        mode: "0755"
+
+    # Each template guards itself with a '{% raw %}{% if %}{% endraw %}' over its whole body, so one whose
+    # inputs are not set renders to nothing and is skipped here. That keeps the
+    # condition next to the manifest it belongs to - no template names in this play.
+    - name: Render extra manifest templates
+      # The deployment playbooks only pick up '*.yml', so '.j2' is stripped and a
+      # '.yml' suffix is enforced regardless of how the template is named.
+      vars:
+        manifest_content: "{{ lookup('ansible.builtin.template', item) }}"
+      ansible.builtin.copy:
+        content: "{{ manifest_content }}"
+        dest: "{{ extra_manifests_folder }}/{{ item | basename | regex_replace('\\.j2$', '') | regex_replace('\\.ya?ml$', '') }}.yml"
+        mode: "0644"
+      loop: "{{ query('ansible.builtin.fileglob', 'templates/*.j2') | sort }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      diff: false
+      when: manifest_content | trim | length > 0
+
+    - name: List rendered extra manifests
+      ansible.builtin.find:
+        paths: "{{ extra_manifests_folder }}"
+        patterns: "*.yml"
+        file_type: file
+      register: rendered_extra_manifests
+
+    - name: Show rendered extra manifests
+      ansible.builtin.debug:
+        msg: >-
+          Rendered {{ rendered_extra_manifests.files | length }} extra manifest(s) in
+          {{ extra_manifests_folder }}: {{ rendered_extra_manifests.files | map(attribute='path') | map('basename') | sort }}

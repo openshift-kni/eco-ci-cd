@@ -7,9 +7,9 @@ text
 cdrom
 bootloader --append="rhgb quiet crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M"
 user --name={{ kickstart_iso_username }} --password={{ kickstart_iso_password }} --groups=wheel --shell=/bin/bash --gecos="Telco V10N"
-zerombr
-clearpart --all --initlabel
-autopart
+{% for directive in kickstart_iso_partitioning %}
+{{ directive }}
+{% endfor %}
 network --bootproto=static --device={{ kickstart_iso_net_config.interface_name }} --gateway={{ kickstart_iso_net_config.gw }} --ip={{ kickstart_iso_net_config.ip }} --netmask={{ kickstart_iso_net_config.mask }} --nameserver={{ kickstart_iso_net_config.dns }}{% if kickstart_iso_net_config.hostname | default('') %} --hostname={{ kickstart_iso_net_config.hostname }}{% endif %} --activate
 skipx
 firstboot --disable

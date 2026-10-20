@@ -36,6 +36,38 @@ The following variables can be configured please notice some of the variables ar
 |`kickstart_iso_os_install_path`      | `/tmp/os-install`   | Working directory for extracted ISO contents.                                                                            |
 |`kickstart_iso_name`                 | `installation.iso`  | Name of the final bootable ISO.                                                                                          |
 |`kickstart_iso_link`                 | `https://download.fedoraproject.org/pub/fedora/linux/`<br>`releases/41/Workstation/x86_64/iso/`<br>`Fedora-Workstation-Live-x86_64-41-1.4.iso` | URL of the ISO image to download. |
+|`kickstart_iso_partitioning`         | `["zerombr",`<br>`"clearpart --all --initlabel",`<br>`"autopart"]` | List of Kickstart storage directives, rendered verbatim into the Kickstart file in order. See example below. |
+
+### Partitioning
+
+When `kickstart_iso_partitioning` is not set the role keeps its original behaviour: wipe
+the disk and let Anaconda create an automatic layout.
+
+```
+zerombr
+clearpart --all --initlabel
+autopart
+```
+
+Override it to describe a custom layout. Entries are written to the Kickstart file as-is,
+so any Anaconda storage directive is accepted (`ignoredisk`, `part`, `volgroup`, `logvol`,
+`raid`, `btrfs`, ...):
+
+```yaml
+kickstart_iso_partitioning:
+  - "ignoredisk --only-use=sda"
+  - "zerombr"
+  - "clearpart --all --initlabel --drives=sda"
+  - "part /boot/efi --fstype=efi --size=600"
+  - "part /boot --fstype=xfs --size=1024"
+  - "part pv.01 --size=1 --grow"
+  - "volgroup vg0 pv.01"
+  - "logvol / --vgname=vg0 --name=root --fstype=xfs --size=102400"
+  - "logvol /var --vgname=vg0 --name=var --fstype=xfs --size=1 --grow"
+```
+
+The directives are not validated by the role, so a mistake surfaces as an Anaconda failure
+during installation.
 
 ```yaml
 kickstart_iso_net_config:

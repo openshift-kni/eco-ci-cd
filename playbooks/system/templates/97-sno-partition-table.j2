@@ -1,0 +1,28 @@
+{# Renders only for a node that has a disk set aside for local storage. #}
+{% if disk_id_for_partitioning | default('') | trim | length > 0 %}
+# Based on Butane output; partition list is generated from
+# disk_lso_partitions_count / disk_lso_partitions_size.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: master
+  name: 51-sno-partition-table
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      disks:
+        # this points to the disk dedicated to local storage, e.g. /dev/sdb
+        # /dev/disk/by-id/wwn-0x500a07513ba4ccd7 -> ../../sdb
+        #
+        - device: /dev/disk/by-id/{{ disk_id_for_partitioning | trim }}
+          partitions:
+{% for index in range(disk_lso_partitions_count | int) %}
+            - label: lso-{{ index }}
+              sizeMiB: {{ disk_lso_partitions_size | int }}
+              wipePartitionEntry: true
+{% endfor %}
+          wipeTable: true
+{% endif %}

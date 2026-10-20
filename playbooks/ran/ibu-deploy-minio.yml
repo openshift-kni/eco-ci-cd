@@ -9,7 +9,8 @@
 #   5. Downloads and configures the mc (MinIO client) CLI
 #   6. Creates a service account with fixed access/secret keys
 #   7. Creates the target bucket
-#   8. Verifies the console endpoint is reachable
+#   8. Optionally publishes OADP credentials to the target hub for ZTP
+#   9. Verifies the console endpoint is reachable
 #
 # Prerequisites:
 #   - Podman installed on the target host
@@ -34,6 +35,8 @@
 #   minio_console_port:     Web console port        (default: 9001)
 #   minio_bucket_name:      Bucket to create        (default: s3-bucket)
 #   minio_mc_url:           Download URL for mc CLI binary
+#   minio_oadp_hub_kubeconfig: Target hub kubeconfig on the bastion; when supplied,
+#                              creates ztp-group/ibu-target-oadp-credentials
 
 - name: Deploy local MinIO S3 Storage Emulator
   hosts: bastion
@@ -146,6 +149,40 @@
       ansible.builtin.command:
         cmd: /usr/local/bin/mc mb myminio/{{ minio_bucket_name }}
       changed_when: true
+
+    - name: Publish MinIO credentials to the target hub for ZTP
+      when: minio_oadp_hub_kubeconfig | default('') | length > 0
+      block:
+        - name: Ensure OADP credential namespace exists on the target hub
+          kubernetes.core.k8s:
+            kubeconfig: "{{ minio_oadp_hub_kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: ztp-group
+
+        - name: Create or update OADP credentials on the target hub
+          vars:
+            minio_oadp_cloud_credentials: |
+              [default]
+              aws_access_key_id={{ minio_access_key }}
+              aws_secret_access_key={{ minio_secret_key }}
+          kubernetes.core.k8s:
+            kubeconfig: "{{ minio_oadp_hub_kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: ibu-target-oadp-credentials
+                namespace: ztp-group
+              type: Opaque
+              data:
+                cloud: "{{ minio_oadp_cloud_credentials | b64encode }}"
+          no_log: true
+          diff: false
 
     - name: Verify MinIO console is reachable
       ansible.builtin.uri:

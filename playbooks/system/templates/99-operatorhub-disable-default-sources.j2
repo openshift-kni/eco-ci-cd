@@ -1,0 +1,17 @@
+{# Opt out by setting disable_default_catalog_sources to false; defaults to on. #}
+{% if disable_default_catalog_sources | default(true) | bool %}
+# Disables the default OperatorHub catalog sources from Day0, so marketplace never
+# tries to reach registry.redhat.io on a disconnected cluster. Without this the
+# default CatalogSource pods crash-loop between bootstrap and the Day2 patch in
+# playbooks/roles/ocp_operator_mirror (ocp_operator_mirror_disable_default_sources).
+#
+# 'cluster' is a singleton the cluster also creates on its own; this manifest only
+# survives if the release payload ships the default instance as create-only. Verify
+# after install: oc get operatorhub cluster -o jsonpath='{.spec.disableAllDefaultSources}'
+apiVersion: config.openshift.io/v1
+kind: OperatorHub
+metadata:
+  name: cluster
+spec:
+  disableAllDefaultSources: true
+{% endif %}

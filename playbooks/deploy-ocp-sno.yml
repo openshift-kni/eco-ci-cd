@@ -38,6 +38,16 @@
 #         Available architectures: multi, aarch64, s390x and ppc64le
 # - share_http_iso_port, dest_iso_dir, repo_root_path
 # - extra_manifests_folder: folder containing extra manifests for Day0 installation
+#     Caveat: the folder is read on the bastion (remote_src), and only files
+#     matching '*.yml' are picked up - a '.yaml' suffix is silently ignored.
+#     Populate it with ./playbooks/system/deploy-hub-sno-extra-manifests.yaml, which
+#     renders the Day0 templates (console password, LSO partition table,
+#     OperatorHub) onto the bastion.
+#
+# Console access:
+# - The console password MachineConfig ('core' user, password 'redhat', for BMC console
+#   access when the network is down) is one of those templates. It is only installed
+#   when extra_manifests_folder is passed - it is no longer applied unconditionally.
 # - disable_insights (boolean; default is false): removes cloud.openshift.com from pull secret to opt out of remote health reporting
 # - extra_virt_install_options: additional flags passed to virt-install when creating VMs
 #     (e.g., "--boot hd,cdrom" to control UEFI boot order)
@@ -404,7 +414,7 @@
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
 
-    - name: Capture node IPv4 default gateway before removing default route (disconnected)
+    - name: Capture node IPv4 default route details before removing default route (disconnected)
       delegate_to: bastion
       when: disconnected | bool
       ansible.builtin.set_fact:
@@ -415,6 +425,27 @@
               | selectattr('destination', 'equalto', '0.0.0.0/0')
               | map(attribute='next-hop-address')
               | first
+          }}
+        # The IPv4-carrying interface is not necessarily interfaces[0]: on bonded
+        # hosts the first entries are bond ports with IPv4 disabled, and nmstate
+        # rejects routes whose next hop is an IPv4-disabled interface.
+        node_ipv4_interface: >-
+          {{
+            (
+              (
+                network_config.raw.routes.config
+                  | default([])
+                  | selectattr('destination', 'equalto', '0.0.0.0/0')
+                  | map(attribute='next-hop-interface')
+                  | list
+              ) + (
+                network_config.raw.interfaces
+                  | selectattr('ipv4', 'defined')
+                  | selectattr('ipv4.address', 'defined')
+                  | map(attribute='name')
+                  | list
+              ) + [network_config.raw.interfaces[0].name]
+            ) | first
           }}
 
     - name: Remove IPv4 default route for dual-stack (disconnected)
@@ -456,25 +487,25 @@
                       {
                         "destination": "192.168.0.0/16",
                         "next-hop-address": node_ipv4_gateway,
-                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "next-hop-interface": node_ipv4_interface,
                         "table-id": 254
                       },
                       {
                         "destination": "172.16.0.0/12",
                         "next-hop-address": node_ipv4_gateway,
-                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "next-hop-interface": node_ipv4_interface,
                         "table-id": 254
                       },
                       {
                         "destination": "10.0.0.0/8",
                         "next-hop-address": node_ipv4_gateway,
-                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "next-hop-interface": node_ipv4_interface,
                         "table-id": 254
                       },
                       {
                         "destination": "0.0.0.0/0",
                         "next-hop-address": "169.254.0.1",
-                        "next-hop-interface": network_config.raw.interfaces[0].name,
+                        "next-hop-interface": node_ipv4_interface,
                         "table-id": 254
                       }
                     ]
@@ -582,26 +613,6 @@
       ansible.builtin.import_role:
         name: redhatci.ocp.generate_manifests
 
-    - name: Get extra manifests files
-      ansible.builtin.find:
-        paths: "{{ extra_manifests_folder }}"
-        patterns: "*.yml"
-        file_type: file
-      register: extra_manifests_files
-      when: extra_manifests_folder is defined and extra_manifests_folder | length > 0
-
-    - name: Copy extra manifests to generated directory
-      ansible.builtin.copy:
-        src: "{{ item.path }}"
-        remote_src: true
-        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/"
-        mode: "0644"
-      loop: "{{ extra_manifests_files.files }}"
-      loop_control:
-        label: "{{ item.path }}"
-      when:
-        - extra_manifests_folder is defined and extra_manifests_folder | length > 0
-
     - name: Configure trusted CA for internal registry (SNO)
       when: disconnected | bool
       block:
@@ -625,6 +636,29 @@
             gm_image_sources: "{{ lookup('template', 'templates/deploy-ocp-mirrors.j2') | trim }}"
           ansible.builtin.import_role:
             name: redhatci.ocp.generate_manifests
+
+    # Copied after both generate_manifests branches above: the role removes the
+    # whole generated/<cluster_name> tree when it runs, so anything dropped in
+    # earlier is lost.
+    - name: Get extra manifests files
+      ansible.builtin.find:
+        paths: "{{ extra_manifests_folder }}"
+        patterns: "*.yml"
+        file_type: file
+      register: extra_manifests_files
+      when: extra_manifests_folder is defined and extra_manifests_folder | length > 0
+
+    - name: Copy extra manifests to generated directory
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        remote_src: true
+        dest: "{{ repo_root_path }}/generated/{{ cluster_name }}/openshift/"
+        mode: "0644"
+      loop: "{{ extra_manifests_files.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when:
+        - extra_manifests_folder is defined and extra_manifests_folder | length > 0
 
     - name: Disable image policy for nightly/engineering-candidate/release-candidate builds
       when:

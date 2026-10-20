@@ -20,6 +20,9 @@
     kickstart_iso_password: "{{ ansible_password }}"
     kickstart_iso_username: "{{ ansible_user }}"
     kickstart_iso_net_config: "{{ hostvars['bastion'].net_config | from_yaml }}"
+    kickstart_iso_partitioning: >-
+      {{ hostvars['bastion'].partitioning
+         | default(['zerombr', 'clearpart --all --initlabel', 'autopart'], true) }}
 
 - name: Setup http storage
   ansible.builtin.import_role:

@@ -31,6 +31,7 @@ podman run --rm --name nrop-container-tests \
   -v $(which oc):/usr/local/bin/oc:z \
 {{ nrop_test_image_tag }} \
   --report-file /nrop/junit/{{ scope }}_junit_schedrst.xml \
+  --verbose \
 {% if ginkgo_skip | default("") != "" %}
   --skip "{{ ginkgo_skip }}" \
 {% endif %}

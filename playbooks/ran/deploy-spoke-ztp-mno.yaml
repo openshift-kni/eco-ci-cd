@@ -55,7 +55,7 @@
 #
 # Optional variables:
 #   arch: multi (default); use x86_64 for AMD64-only clusters
-#   mirror_ocp_release_registry_path: ocp4 (default, repository prefix)
+#   mirror_ocp_release_registry_path: defaults to ocp<hub-major-version> (e.g. ocp4 or ocp5)
 #   mirror_ocp_release_tag: optional explicit mirrored release tag (otherwise discovered)
 #   mirror_ocp_release_tls_verify: false (default for internal registry; true enables TLS verification)
 #   ztp_workdir_path: /tmp/ztp-workdir (default, on the bastion)
@@ -287,7 +287,8 @@
     - name: Set mirrored release repository
       ansible.builtin.set_fact:
         _mirrored_release_repository: >-
-          {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/{{ mirror_ocp_release_registry_path | default('ocp4') }}/openshift/release-images
+          {{ disconnected_registry_url }}:{{ disconnected_registry_port }}/{{ mirror_ocp_release_registry_path
+            | default('ocp' ~ ocp_full_version.split('.')[0]) }}/openshift/release-images
 
     - name: Resolve mirrored release and mirror Ironic agent with temporary credentials
       block:

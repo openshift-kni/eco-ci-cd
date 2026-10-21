@@ -1,0 +1,41 @@
+- name: Configure secondary interface bridges
+  when: item.value.ifname in ansible_facts.interfaces
+  loop: "{{ secondary_networks | from_yaml | dict2items }}"
+  community.general.nmcli:
+    type: bridge
+    conn_name: "{{ item.key }}"
+    method4: "{{ 'manual' if item.value.ipv4 is defined else 'disabled' }}"
+    method6: "{{ 'manual' if item.value.ipv6 is defined else 'disabled' }}"
+    state: present
+    stp: false
+    ifname: "{{ item.key }}"
+    autoconnect: true
+    ip4: "{{ item.value.ipv4 | default(omit) }}"
+    ip6: "{{ item.value.ipv6 | default(omit) }}"
+
+- name: Set up network connection bridge-slave for secondary connection
+  when: item.value.vlan is not defined
+  loop: "{{ secondary_networks | from_yaml | dict2items }}"
+  community.general.nmcli:
+    type: ethernet
+    slave_type: bridge
+    ifname: "{{ item.value.ifname }}"
+    master: "{{ item.key }}"
+    method4: disabled
+    conn_name: "{{ item.value.ifname }}"
+    state: present
+    autoconnect: true
+
+- name: Configure vlan interfaces for secondary connection
+  when: item.value.ifname in ansible_facts.interfaces and item.value.vlan is defined
+  loop: "{{ secondary_networks | from_yaml | dict2items }}"
+  community.general.nmcli:
+    type: vlan
+    conn_name: "{{ item.value.vlan_ifname | default('vlan' ~ item.value.vlan) }}"
+    state: present
+    ifname: "{{ item.value.vlan_ifname | default('vlan' ~ item.value.vlan) }}"
+    autoconnect: true
+    slave_type: bridge
+    vlanid: "{{ item.value.vlan }}"
+    master: "{{ item.key }}"
+    vlandev: "{{ item.value.ifname }}"

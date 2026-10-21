@@ -1,0 +1,9 @@
+---
+- name: Run the production playbook with isolated guest-only inputs
+  ansible.builtin.import_playbook: ../../configure-vlan-bridge.yml
+  vars:
+    secondary_networks: |
+      br-vlan418:
+        vlan: 418
+        ifname: testuplink
+        vlan_ifname: testuplink.418

@@ -30,3 +30,4 @@ ocp_release_streams:
   - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/5-stable/tags
   - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/5-dev-preview/tags
   - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/5.0.0-0.nightly/tags
+  - https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/releasestream/5.1.0-0.nightly/tags

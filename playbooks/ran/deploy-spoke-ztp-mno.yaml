@@ -449,8 +449,8 @@
       block:
         - name: Download RHCOS image to http store
           ansible.builtin.get_url:
-            url: "https://rhcos.mirror.openshift.com/art/storage/prod/streams/rhel-9.8/builds/9.8.20260715-1/aarch64/rhcos-9.8.20260715-1-live-iso.aarch64.iso"
-            dest: "/opt/http_store/data/rhcos-9.8.20260715-1-live-iso.aarch64.iso"
+            url: "https://mirror.openshift.com/pub/openshift-v4/aarch64/dependencies/rhcos/4.10/4.10.37/rhcos-4.10.37-aarch64-live.aarch64.iso"
+            dest: "/opt/http_store/data/rhcos-4.10.37-aarch64-live.aarch64.iso"
             mode: "0644"
           become: true
           changed_when: true
@@ -472,8 +472,8 @@
                   'cpuArchitecture': 'arm64',
                   'openshiftVersion': ocp_version,
                   'rootFSUrl': '',
-                  'url': 'http://' + ansible_host + ':8081/rhcos-9.8.20260715-1-live-iso.aarch64.iso',
-                  'version': '9.8.20260715-1'
+                  'url': 'http://' + ansible_host + ':8081/rhcos-4.10.37-aarch64-live.aarch64.iso',
+                  'version': '410.84.202210040011-0'
                 }]
               }}
 

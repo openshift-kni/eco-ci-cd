@@ -1,0 +1,285 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# This Ansible playbook prepares an existing OpenShift management cluster to
+# host HyperShift hosted clusters with the Agent (assisted-service) provider.
+# It deploys the required operators, enables the HyperShift components in
+# MultiClusterEngine, sets up LVMS local storage, and applies an
+# AgentServiceConfig with OS images.
+
+## Overview:
+# This playbook automates the preparation of a management cluster for HyperShift. It includes:
+# - Operator deployment: imports deploy-ocp-operators.yml to install multicluster-engine,
+#     advanced-cluster-management, lvms-operator and metallb-operator.
+# - MultiClusterEngine setup: creates the MultiClusterEngine custom resource with the
+#     hypershift and hypershift-local-hosting components enabled and waits for it to
+#     become Available.
+# - LVMS storage: creates an LVMCluster for dynamically provisioned local storage and
+#     waits for it to become Ready and for its StorageClass to be created.
+# - Pull secret: copies the OpenShift pull secret from openshift-config into the
+#     multicluster-engine namespace.
+# - OS images: fetches the assisted-service default OS images list, filters it by arch
+#     and version, and picks the latest version.
+# - AgentServiceConfig: applies the AgentServiceConfig custom resource backed by the LVMS
+#     StorageClass (databaseStorage and filesystemStorage) and the selected OS images,
+#     then waits for its deployments to become healthy.
+
+## Prerequisites:
+# - Ansible 2.10+ installed on the control node.
+# - Ansible control node configured with necessary permissions.
+# - SSH Access to bastion hosts.
+# - An installed OpenShift management cluster reachable via the bastion, with a
+#     kubeconfig file granting administrative access.
+# - pre-configured hosts_vars and grup_vars directories
+# - The management cluster requires an additional unused disk, separate from the OS disk,
+#     on each node selected for LVM storage (including SNO). Existing free space
+#     in the OS filesystem is not sufficient. Default device: /dev/vda2;
+#     override lvm_storage_device_paths for your hardware.
+# - LVMS dynamically provisions multiple PVCs from that disk. The default class
+#     is lvms-vg1. Existing LSO-managed disks must be released and cleaned before
+#     switching to LVMS; this playbook does not wipe or migrate existing storage.
+
+# variables:
+# - kubeconfig: path to the kubeconfig file of the management cluster
+
+# optional variables:
+# - arch: CPU architecture used to select OS images (default: x86_64)
+# - version: OpenShift version used to select OS images for AgentServiceConfig
+#     (default: 5.0)
+# - lvm_storage_device_class: LVMS device class name (default: vg1)
+# - lvm_storage_device_paths: list of block devices for the LVMS volume group
+#     (default: [/dev/vda2])
+# - storage_class_name: StorageClass used for AgentServiceConfig PVCs
+#     (default: lvms-{{ lvm_storage_device_class }})
+# - agent_service_db_storage_size: AgentServiceConfig databaseStorage size (default: 10Gi)
+# - agent_service_fs_storage_size: AgentServiceConfig filesystemStorage size (default: 50Gi)
+# - version: OCP version passed to deploy-ocp-operators.yml for catalog index selection;
+#     if unset, it is extracted from the running cluster
+
+# usage:
+# ansible-playbook ./playbooks/deploy-hypershift.yml \
+#   -i ./inventories/ocp-deployment/build-inventory.py \
+#   --extra-vars 'kubeconfig=/path/to/kubeconfig version=4.17'
+---
+- name: Deploy operators for Hypershift Cluster
+  ansible.builtin.import_playbook: deploy-ocp-operators.yml
+  vars:
+    operators:
+      - name: multicluster-engine
+        catalog: redhat-operators
+        nsname: multicluster-engine
+        deploy_default_config: false
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: multicluster-engine
+
+      - name: advanced-cluster-management
+        catalog: redhat-operators
+        nsname: open-cluster-management
+        deploy_default_config: false
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: open-cluster-management
+
+      - name: lvms-operator
+        catalog: redhat-operators
+        nsname: openshift-storage
+        deploy_default_config: false
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: openshift-storage
+
+      - name: metallb-operator
+        catalog: redhat-operators
+        nsname: metallb-system
+        deploy_default_config: true
+        og_spec: {}
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: metallb-system
+
+- name: Configure Hypershift Cluster
+  hosts: bastion
+  gather_facts: true
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    arch: "x86_64"
+    version: "5.0"
+    lvm_storage_device_class: "vg1"
+    storage_class_name: "lvms-{{ lvm_storage_device_class }}"
+    lvm_storage_device_paths:
+      - /dev/vda2
+  tasks:
+    - name: Create MultiClusterEngine custom resource
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: multicluster.openshift.io/v1
+          kind: MultiClusterEngine
+          metadata:
+            name: multiclusterengine
+          spec:
+            overrides:
+              components:
+                - name: hypershift
+                  enabled: true
+                - name: hypershift-local-hosting
+                  enabled: true
+
+    - name: Wait for MultiClusterEngine to become Available
+      kubernetes.core.k8s_info:
+        api_version: multicluster.openshift.io/v1
+        kind: MultiClusterEngine
+        name: multiclusterengine
+      register: mce_status
+      until:
+        - mce_status.resources | length > 0
+        - >-
+          (mce_status.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Available')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 30
+      delay: 20
+
+    - name: Create LVMCluster for dynamically provisioned local storage
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: lvm.topolvm.io/v1alpha1
+          kind: LVMCluster
+          metadata:
+            name: lvmcluster
+            namespace: openshift-storage
+          spec:
+            storage:
+              deviceClasses:
+                - name: "{{ lvm_storage_device_class }}"
+                  default: true
+                  fstype: xfs
+                  deviceSelector:
+                    paths: "{{ lvm_storage_device_paths }}"
+                  thinPoolConfig:
+                    name: thin-pool-1
+                    sizePercent: 90
+                    overprovisionRatio: 1
+
+    - name: Wait for LVMCluster to become Ready
+      kubernetes.core.k8s_info:
+        api_version: lvm.topolvm.io/v1alpha1
+        kind: LVMCluster
+        name: lvmcluster
+        namespace: openshift-storage
+      register: lvm_cluster_info
+      until:
+        - lvm_cluster_info.resources | length > 0
+        - (lvm_cluster_info.resources[0].status.state | default('')) == 'Ready'
+      retries: 60
+      delay: 10
+
+    - name: Wait for LVM StorageClass to be created
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ storage_class_name }}"
+      register: lvm_storage_class_info
+      until:
+        - lvm_storage_class_info.resources | length > 0
+        - lvm_storage_class_info.resources[0].provisioner == 'topolvm.io'
+      retries: 30
+      delay: 10
+
+    - name: Extract OpenShift pull secret from openshift-config
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+      register: openshift_pull_secret
+
+    - name: Ensure pull-secret exists in multicluster-engine namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pull-secret
+            namespace: multicluster-engine
+          type: "{{ openshift_pull_secret.resources[0].type }}"
+          data: "{{ openshift_pull_secret.resources[0].data }}"
+
+    - name: Fetch OS images list from assisted-service
+      ansible.builtin.uri:
+        url: "https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json"
+        return_content: true
+      register: os_images_response
+
+    - name: Filter OS images matching arch and ocp_version, pick latest by version
+      ansible.builtin.set_fact:
+        latest_os_image: >-
+          {{
+            (os_images_response.content | from_json)
+            | selectattr('cpu_architecture', 'equalto', arch)
+            | selectattr('openshift_version', 'equalto', version)
+            | list
+            | sort(attribute='version')
+            | last
+          }}
+
+    - name: Fail if no matching OS image found
+      ansible.builtin.fail:
+        msg: "No OS image found for arch='{{ arch }}' and ocp_version='{{ version }}'"
+      when: latest_os_image is not defined or latest_os_image | length == 0
+
+    - name: Build osImages list in AgentServiceConfig format
+      ansible.builtin.set_fact:
+        agent_os_images:
+          - cpuArchitecture: "{{ latest_os_image.cpu_architecture }}"
+            openshiftVersion: "{{ latest_os_image.openshift_version }}"
+            version: "{{ latest_os_image.version }}"
+            url: "{{ latest_os_image.url }}"
+
+    - name: Apply AgentServiceConfig custom resource
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: AgentServiceConfig
+          metadata:
+            name: agent
+          spec:
+            databaseStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: "{{ agent_service_db_storage_size | default('10Gi') }}"
+              storageClassName: "{{ storage_class_name }}"
+            filesystemStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: "{{ agent_service_fs_storage_size | default('50Gi') }}"
+              storageClassName: "{{ storage_class_name }}"
+            osImages: "{{ agent_os_images }}"
+
+    - name: Wait for AgentServiceConfig deployments to become ready
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: AgentServiceConfig
+        name: agent
+      register: agent_service_config_status
+      until:
+        - agent_service_config_status.resources | length > 0
+        - >-
+          (agent_service_config_status.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'DeploymentsHealthy')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 30
+      delay: 10

@@ -467,7 +467,7 @@
             _merged_os_images: >-
               {{
                 (_agent_service_config.resources[0].spec.osImages | default([])
-                  | rejectattr('cpuArchitecture', 'equalto', 'aarch64') | list)
+                  | rejectattr('cpuArchitecture', 'in', ['aarch64', 'arm64']) | list)
                 + [{
                   'cpuArchitecture': 'arm64',
                   'openshiftVersion': ocp_version,

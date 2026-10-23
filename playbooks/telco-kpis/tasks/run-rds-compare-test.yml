@@ -3,6 +3,16 @@
 # Purpose: Validate spoke cluster against RAN RDS metadata from telco-reference
 # Output: cluster-compare.log with comparison results
 # Uses: kubectl-cluster_compare in podman container
+#
+# Parameters:
+#   - baseline: (bool, default: false) Data collection mode - always pass regardless of mismatches
+#   - fail_on_rds_mismatch: (bool, default: false) Fail playbook if mismatches found
+#
+# Behavior:
+#   - cluster-compare.log missing: Always fail (infrastructure issue)
+#   - Mismatches found, baseline=true: Always pass (data collection mode)
+#   - Mismatches found, baseline=false, fail_on_rds_mismatch=false (default): Report but continue
+#   - Mismatches found, baseline=false, fail_on_rds_mismatch=true: Fail playbook
 
 - name: Set test name for container naming and artifact management
   ansible.builtin.set_fact:
@@ -109,6 +119,74 @@
   ansible.builtin.set_fact:
     compare_success: "{{ compare_exit_code | int == 0 }}"
 
+- name: Validate RDS compare results were generated
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir.path }}/cluster-compare.log"
+  register: compare_log_file
+
+- name: Fail if RDS compare results not generated
+  ansible.builtin.fail:
+    msg: |
+      ❌ RDS Compare test execution FAILED - Results not generated
+
+      Expected output: {{ artifacts_dir.path }}/cluster-compare.log
+      Container: telco-kpis-rds-compare-{{ spoke_cluster }}
+      Container exit code: {{ compare_exit_code }}
+
+      This indicates kubectl-cluster_compare did not complete successfully.
+      Check container output and test script:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/run-rds-compare-test.sh'
+
+      Review podman container logs:
+        podman logs telco-kpis-rds-compare-{{ spoke_cluster }}
+  when: not compare_log_file.stat.exists
+
+- name: Fail if RDS compare found mismatches (when fail_on_rds_mismatch=true)
+  ansible.builtin.fail:
+    msg: |
+      ❌ RDS Compare test FAILED - Cluster state does not match reference metadata
+
+      Container: telco-kpis-rds-compare-{{ spoke_cluster }}
+      Exit code: {{ compare_exit_code }}
+      Reference: {{ reference_repo_url }} ({{ reference_branch }})
+      Metadata: {{ metadata_relpath }}
+      Comparison log: {{ artifacts_dir.path }}/cluster-compare.log
+      Baseline mode: {{ baseline | default(false) }}
+      Fail on mismatch: {{ fail_on_rds_mismatch | default(false) }}
+
+      Review cluster-compare.log for detailed mismatch information.
+
+      Note: Set baseline=true to collect results without failing.
+      Note: Set fail_on_rds_mismatch=false to report but not fail on mismatches.
+  when:
+    - compare_exit_code | int != 0
+    - not (baseline | default(false) | bool)
+    - fail_on_rds_mismatch | default(false) | bool
+
+- name: Warn about RDS compare mismatches (when not failing on mismatch)
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "⚠️  RDS Compare Warning"
+      - "=========================================="
+      - "Cluster state does not match reference metadata"
+      - "Exit code: {{ compare_exit_code }}"
+      - "Reference: {{ reference_repo_url }} ({{ reference_branch }})"
+      - "Metadata: {{ metadata_relpath }}"
+      - "Baseline mode: {{ baseline | default(false) }}"
+      - "Fail on mismatch: {{ fail_on_rds_mismatch | default(false) }}"
+      - ""
+      - "Mismatches reported in comparison log - playbook continues"
+      - "Set fail_on_rds_mismatch=true to fail on mismatches"
+      - "Set baseline=true for data collection mode"
+      - ""
+      - "Review: {{ artifacts_dir.path }}/cluster-compare.log"
+      - "=========================================="
+  when:
+    - compare_exit_code | int != 0
+    - not (baseline | default(false) | bool)
+    - not (fail_on_rds_mismatch | default(false) | bool)
+
 - name: Display comparison summary
   ansible.builtin.debug:
     msg:
@@ -148,19 +226,16 @@
     path: "{{ reference_repo_path }}"
     state: absent
 
-- name: Warn if comparison found mismatches (unless baseline mode)
-  ansible.builtin.debug:
-    msg: "[WARNING] RDS comparison failed: cluster state does not match reference metadata. Review cluster-compare.log for details."
-  when:
-    - not compare_success
-    - not (baseline | default(false))
-
 - name: Display completion message
   ansible.builtin.debug:
     msg:
       - "=========================================="
       - "RDS Comparison Complete"
       - "=========================================="
-      - "Result: {{ 'PASSED' if compare_success else ('BASELINE COLLECTED' if (baseline | default(false)) else 'FAILED') }}"
+      - >-
+        Result: {{ 'PASSED' if compare_success
+                   else ('BASELINE COLLECTED' if (baseline | default(false))
+                   else ('MISMATCHES REPORTED' if not (fail_on_rds_mismatch | default(false))
+                   else 'FAILED')) }}
       - "Comparison log saved to artifacts"
       - "=========================================="

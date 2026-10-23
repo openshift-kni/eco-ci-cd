@@ -6,14 +6,30 @@
 #   - spoke_cluster: Spoke cluster name
 #   - hub_cluster: Hub cluster name
 #   - hub_kubeconfig: Path to hub cluster kubeconfig on bastion
-#   - threshold_duration: Maximum acceptable deployment time (default: "2h0m" = 120 minutes)
+#
+# Optional parameters (loaded from KPI targets repository if not provided):
+#   - threshold_duration: Maximum acceptable deployment time (default from KPI targets: "2h0m" = 120 minutes)
+#   - threshold_reboot_count: Maximum acceptable reboot count (default from KPI targets: 2)
+#
+# KPI Targets Source:
+#   - Primary: https://gitlab.cee.redhat.com/telcov10n/kpi/-/blob/main/kpi_targets.yaml
+#   - Fallback: Hardcoded defaults in fetch_kpi_targets.yml
+#   - Environment: Set GITLAB_TOKEN or git_repo_token to access private repository
 #
 # Usage:
+#   # Use KPI targets from GitLab (recommended)
+#   ansible-playbook ztp-ai-deployment-time.yml \
+#     -e spoke_cluster=spree-02 \
+#     -e hub_cluster=kni-qe-71 \
+#     -e hub_kubeconfig=/home/telcov10n/project/generated/kni-qe-71/auth/kubeconfig
+#
+#   # Override thresholds if needed
 #   ansible-playbook ztp-ai-deployment-time.yml \
 #     -e spoke_cluster=spree-02 \
 #     -e hub_cluster=kni-qe-71 \
 #     -e hub_kubeconfig=/home/telcov10n/project/generated/kni-qe-71/auth/kubeconfig \
-#     -e threshold_duration=2h0m
+#     -e threshold_duration=3h0m \
+#     -e threshold_reboot_count=3
 
 - name: ZTP AI Deployment Time Validation
   hosts: bastion
@@ -23,6 +39,25 @@
     - name: Load telco-kpis default configuration
       ansible.builtin.include_role:
         name: telco_kpis_defaults
+
+    - name: Fetch KPI targets from GitLab repository
+      ansible.builtin.include_tasks: roles/report_generator/tasks/fetch_kpi_targets.yml
+      vars:
+        kpi_targets_token: "{{ lookup('env', 'GITLAB_TOKEN') | default(git_repo_token | default('', true), true) }}"
+
+    - name: Extract deployment KPI thresholds from KPI targets
+      ansible.builtin.set_fact:
+        threshold_reboot_count_from_kpi: "{{ kpi_targets.deployment.targets.ai_deployment_reboots.value | default(2) | int }}"
+        threshold_duration_minutes_from_kpi: "{{ kpi_targets.deployment.targets.ai_deployment_time.value | default(120) | int }}"
+
+    - name: Convert threshold duration minutes to h:m format
+      ansible.builtin.set_fact:
+        threshold_duration_from_kpi: "{{ (threshold_duration_minutes_from_kpi | int // 60) }}h{{ (threshold_duration_minutes_from_kpi | int % 60) }}m"
+
+    - name: Set thresholds (use KPI targets, allow override via parameters)
+      ansible.builtin.set_fact:
+        threshold_duration: "{{ threshold_duration | default(threshold_duration_from_kpi) }}"
+        threshold_reboot_count: "{{ threshold_reboot_count | default(threshold_reboot_count_from_kpi) | int }}"
 
     - name: Validate required parameters
       ansible.builtin.assert:
@@ -35,7 +70,8 @@
           - hub_kubeconfig | length > 0
           - threshold_duration is defined
           - threshold_duration | length > 0
-        fail_msg: "Required parameters missing: spoke_cluster, hub_cluster, hub_kubeconfig, and threshold_duration must be provided"
+          - threshold_reboot_count is defined
+        fail_msg: "Required parameters missing: spoke_cluster, hub_cluster, and hub_kubeconfig must be provided"
         success_msg: "All required parameters validated"
 
     - name: Create test artifacts directory
@@ -194,10 +230,10 @@
           {% endif %}
         all_boots_info: "{{ journalctl_all_boots.stdout }}"
 
-    - name: Check reboot count threshold (must be <= 2)
+    - name: Check reboot count threshold (must be <= {{ threshold_reboot_count }})
       ansible.builtin.set_fact:
-        reboot_count_pass: "{{ spoke_reboot_count | int <= 2 }}"
-        reboot_count_status: "{{ 'PASS' if (spoke_reboot_count | int <= 2) else 'FAIL' }}"
+        reboot_count_pass: "{{ spoke_reboot_count | int <= threshold_reboot_count | int }}"
+        reboot_count_status: "{{ 'PASS' if (spoke_reboot_count | int <= threshold_reboot_count | int) else 'FAIL' }}"
 
     - name: Save reboot analysis to file
       ansible.builtin.copy:
@@ -212,11 +248,11 @@
           REBOOT COUNT VALIDATION
           -----------------------
           Reboots During ZTP: {{ spoke_reboot_count }}
-          Threshold: <= 2
+          Threshold: <= {{ threshold_reboot_count }}
           Result: {{ reboot_count_status }}
 
-          {% if spoke_reboot_count | int > 2 %}
-          ⚠️  WARNING: Reboot count ({{ spoke_reboot_count }}) exceeds threshold (2)
+          {% if spoke_reboot_count | int > threshold_reboot_count | int %}
+          ⚠️  WARNING: Reboot count ({{ spoke_reboot_count }}) exceeds threshold ({{ threshold_reboot_count }})
           {% endif %}
 
           Boots Within ZTP Deployment Window:
@@ -252,10 +288,10 @@
           {{ ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int }}
         test_passed: >-
           {{ (ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int)
-             and (spoke_reboot_count | int <= 2) }}
+             and (spoke_reboot_count | int <= threshold_reboot_count | int) }}
         test_status: >-
           {{ 'PASS' if ((ztp_deployment_timeline_duration_seconds | int <= threshold_seconds | int)
-                        and (spoke_reboot_count | int <= 2))
+                        and (spoke_reboot_count | int <= threshold_reboot_count | int))
                    else 'FAIL' }}
 
     - name: Save deployment timeline JSON
@@ -275,6 +311,26 @@
         src: ztp-junit-result.xml.j2
         dest: "{{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml"
         mode: '0644'
+
+    - name: Validate ZTP AI deployment time test results were generated
+      ansible.builtin.stat:
+        path: "{{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml"
+      register: ztp_junit_file
+
+    - name: Fail if ZTP AI deployment time test results not generated
+      ansible.builtin.fail:
+        msg: |
+          ❌ ZTP AI Deployment Time test FAILED - Results not generated
+
+          Expected JUnit XML: {{ test_artifacts_dir.path }}/junit_ztp-ai-deployment-time.xml
+          Artifacts: {{ test_artifacts_dir.path }}
+
+          This indicates the ZTP deployment timeline analysis did not complete successfully.
+          This is an infrastructure failure - deployment timeline data could not be collected.
+
+          Check deployment timeline for details:
+            ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ test_artifacts_dir.path }}/deployment-timeline-summary.txt'
+      when: not ztp_junit_file.stat.exists
 
     - name: Record test duration and save metadata
       ansible.builtin.include_role:
@@ -356,33 +412,10 @@
           - ""
           - "Reboot Count Check:"
           - "  Actual: {{ spoke_reboot_count }}"
-          - "  Threshold: <= 2"
+          - "  Threshold: <= {{ threshold_reboot_count }}"
           - "  Status: {{ reboot_count_status }}"
           - ""
           - "Overall Result: {{ test_status }}"
           - "Artifacts: {{ test_artifact_files.files | length }} files"
           - "Location: /home/telcov10n/telco-kpis-artifacts/{{ spoke_cluster }}/{{ test_result_dir }}"
           - "=========================================="
-
-    - name: Report test failure (WARNING - playbook continues successfully)
-      ansible.builtin.debug:
-        msg: |
-          ⚠️  WARNING: ZTP AI Deployment Time test FAILED
-
-          Duration Check:
-            Actual: {{ ztp_deployment_timeline_duration_formatted }} ({{ ztp_deployment_timeline_duration_seconds }}s)
-            Threshold: {{ threshold_duration }} ({{ threshold_seconds }}s)
-            Status: {{ 'PASS' if duration_passed else 'FAIL' }}
-            {{ 'Exceeded by: ' ~ (ztp_deployment_timeline_duration_seconds | int - threshold_seconds | int) ~ ' seconds' if not duration_passed else '' }}
-
-          Reboot Count Check:
-            Actual: {{ spoke_reboot_count }}
-            Threshold: <= 2
-            Status: {{ reboot_count_status }}
-
-          Overall Result: FAIL
-
-          NOTE: Test results and artifacts have been collected.
-                JUnit XML will show this test as FAILED.
-                Playbook completes successfully for artifact processing.
-      when: not test_passed

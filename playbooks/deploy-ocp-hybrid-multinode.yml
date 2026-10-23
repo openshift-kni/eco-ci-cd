@@ -68,7 +68,7 @@
 # - redhatci.ocp.destroy_vms
 # - redhatci.ocp.create_vms
 # - redhatci.ocp.boot_iso
-# - redhatci.ocp.monitor_agent_based_installer
+# - monitor_agent_based_installer
 
 ## Usage:
 # - Ensure all required variables are defined in the inventory or host_vars/group_vars.
@@ -792,7 +792,7 @@
   tasks:
     - name: Monitor agent based installation
       ansible.builtin.import_role:
-        name: redhatci.ocp.monitor_agent_based_installer
+        name: monitor_agent_based_installer
       vars:
         agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
         mabi_retry_install_complete_check: true

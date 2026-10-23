@@ -313,12 +313,75 @@
   ansible.builtin.set_fact:
     rfc2544_exit_code: "{{ rfc2544_result.container.State.ExitCode | default(0) }}"
 
+- name: Validate RFC2544 test results were generated
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir.path }}/rfc2544_report.xml"
+  register: rfc2544_junit_file
+
+- name: Fail if RFC2544 test results not generated
+  ansible.builtin.fail:
+    msg: |
+      ❌ RFC2544 test execution FAILED - Results not generated
+
+      Expected JUnit XML: {{ artifacts_dir.path }}/rfc2544_report.xml
+      Container: telco-kpis-rfc2544-{{ spoke_cluster }}
+      Container exit code: {{ rfc2544_exit_code }}
+
+      This indicates the ran-integration RFC2544 script did not complete successfully.
+      Check container logs for details:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+  when: not rfc2544_junit_file.stat.exists
+
 - name: Record test duration and save metadata
   ansible.builtin.include_role:
     name: test_duration
     tasks_from: stop.yml
   vars:
     test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
+- name: Check if duration validation result file exists
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+  register: duration_validation_file
+
+- name: Read duration validation result
+  ansible.builtin.slurp:
+    src: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+  register: duration_validation_content
+  when: duration_validation_file.stat.exists
+
+- name: Parse duration validation result
+  ansible.builtin.set_fact:
+    duration_validation: "{{ dict(duration_validation_content['content'] | b64decode | regex_findall('^(.+)=(.+)$', multiline=True)) }}"
+  when: duration_validation_file.stat.exists
+
+- name: Fail if test duration suspiciously short (infrastructure failure)
+  ansible.builtin.fail:
+    msg: |
+      ❌ RFC2544 test execution FAILED - Duration suspiciously short (infrastructure failure)
+
+      Container: telco-kpis-rfc2544-{{ spoke_cluster }}
+
+      Expected duration: {{ duration }} ({{ duration_validation.EXPECTED_DURATION }}s)
+      Actual duration: {{ duration_validation.ACTUAL_DURATION }}s
+      Margin: {{ duration_validation.MARGIN }}s
+      Threshold: {{ duration_validation.EXPECTED_DURATION }}s
+
+      Validation failed: {{ duration_validation.ACTUAL_DURATION }}s + {{ duration_validation.MARGIN }}s < threshold
+
+      This indicates an infrastructure failure, not a test failure.
+      Possible causes:
+        - dpdk-testpmd pod failed to reach Ready state
+        - Container startup failure
+        - Cluster unreachable
+        - Spirent connection failure
+        - Test script early exit due to error
+
+      Check container logs for details:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+  when:
+    - duration_validation_file.stat.exists
+    - duration_validation.VALIDATION_STATUS == 'FAILED'
 
 - name: Display test execution result
   ansible.builtin.debug:
@@ -348,11 +411,6 @@
   ansible.builtin.file:
     path: "/tmp/ran-integration-{{ spoke_cluster }}"
     state: absent
-
-- name: Warn if test failed
-  ansible.builtin.debug:
-    msg: "[WARNING] RFC2544 test failed with exit code {{ rfc2544_exit_code }}"
-  when: rfc2544_exit_code | int != 0
 
 - name: Display test completion message
   ansible.builtin.debug:

@@ -113,4 +113,47 @@ echo "{{ test_display_name | default(test_name | upper) }} test completed with e
 echo "End time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Test execution time: ${TEST_DURATION}s ($(printf '%02dh%02dm%02ds' $((TEST_DURATION/3600)) $((TEST_DURATION%3600/60)) $((TEST_DURATION%60))))"
 echo "=========================================="
+
+{% if duration is defined %}
+# Validate test duration to detect infrastructure failures
+EXPECTED_DURATION={{ (duration | community.general.to_seconds) | int }}
+DURATION_MARGIN={{ telco_kpis_duration_margin_seconds | default(600) }}
+
+# Check if test finished too early: test_duration + margin < expected_duration
+# This avoids negative threshold issues and makes the logic clearer
+if [[ $((TEST_DURATION + DURATION_MARGIN)) -lt ${EXPECTED_DURATION} ]]; then
+  echo ""
+  echo "❌ ERROR: Test execution time suspiciously short - likely infrastructure failure"
+  echo "   Expected duration: {{ duration }} (${EXPECTED_DURATION}s)"
+  echo "   Actual duration: ${TEST_DURATION}s ($(printf '%02dh%02dm%02ds' $((TEST_DURATION/3600)) $((TEST_DURATION%3600/60)) $((TEST_DURATION%60))))"
+  echo "   Margin: ${DURATION_MARGIN}s"
+  echo "   Validation: actual + margin = $((TEST_DURATION + DURATION_MARGIN))s < ${EXPECTED_DURATION}s (FAILED)"
+  echo ""
+  echo "Possible causes:"
+  echo "  - Pod failed to reach Ready state"
+  echo "  - Container startup failure"
+  echo "  - Cluster unreachable"
+  echo "  - Test script early exit due to error"
+  echo ""
+
+  # Write validation failure to file for Ansible to check
+  cat > /workspace/artifacts/duration-validation-result.txt <<EOF
+VALIDATION_STATUS=FAILED
+EXPECTED_DURATION=${EXPECTED_DURATION}
+ACTUAL_DURATION=${TEST_DURATION}
+MARGIN=${DURATION_MARGIN}
+EOF
+else
+  echo "✓ Test duration validation passed ($((TEST_DURATION + DURATION_MARGIN))s >= ${EXPECTED_DURATION}s threshold)"
+
+  # Write validation success to file
+  cat > /workspace/artifacts/duration-validation-result.txt <<EOF
+VALIDATION_STATUS=PASSED
+EXPECTED_DURATION=${EXPECTED_DURATION}
+ACTUAL_DURATION=${TEST_DURATION}
+MARGIN=${DURATION_MARGIN}
+EOF
+fi
+{% endif %}
+
 exit $exit_code

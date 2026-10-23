@@ -1,0 +1,187 @@
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# This Ansible playbook is designed for deploying an OpenShift cluster.
+# It includes various roles and tasks necessary to configure a bastion host,
+# deploy virtual machines (VMs), and boot bare-metal (BM) and VM nodes.
+# The playbook also sets up dependencies, generates manifests, and monitors the installation process.
+
+## Overview:
+# This playbook automates the process of deploying an OpenShift cluster. It includes:
+# - Bastion host setup: Installs required dependencies and extracts OpenShift installer.
+# - OCP version facts: Retrieves OpenShift release information.
+# - HTTP storage setup: Configures HTTP-based storage for required artifacts.
+# - Virtual control plane setup: Enables necessary repositories and configures sushy tools.
+# - VM and BM booting: Deploys instances and boots nodes using an agent-based installer.
+# - Installation monitoring: Ensures the installation process completes successfully.
+# - Deploying additional cluster-wide trusted registries.
+# - Optional internal registry flow: when `internal_registry: true`, configure DNS for the
+#     internal registry, add auth to the cluster pull-secret, and trust the registry CA by
+#     creating `openshift-config/<internal_registry_name>` ConfigMap with key `host..port`
+#     (colon replaced by two dots) and patching `image.config.openshift.io/cluster` with
+#     `spec.additionalTrustedCA.name`.
+
+## Prerequisites:
+# - Ansible 2.10+ installed on the control node.
+# - Ansible control node configured with necessary permissions.
+# - SSH Access to hypervisors hosts.
+# - SSH Access to bastion hosts.
+# - ocp version of link to ocp release
+# - pre-configured hosts_vars and grup_vars directories
+
+# variables:
+# - kubeconfig: path to the kubeconfig file
+
+# optional variables:
+# - extra_manifests: list of extra manifests for OCP installation, consumed directly by
+#     redhatci.ocp.generate_manifests. Each item is a mapping - '{template: <path.j2>}'
+
+# usage:
+# ansible-playbook ./playbooks/deploy-hypershift.yml -i ./inventories/hypershift/deploy-hypershift.yml --extra-vars 'release=4.17'
+---
+- name: Deploy operators for Hypershift Cluster
+  ansible.builtin.import_playbook: deploy-ocp-operators.yml
+  vars:
+    operators:
+      - name: multicluster-engine
+        catalog: redhat-operators
+        nsname: multicluster-engine
+        deploy_default_config: true
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: multicluster-engine
+
+      - name: advanced-cluster-management
+        catalog: redhat-operators
+        nsname: open-cluster-management
+        deploy_default_config: true
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: open-cluster-management
+
+      - name: baremetal-operator
+        catalog: redhat-operators
+        nsname: openshift-machine-api
+        deploy_default_config: true
+
+      - name: local-storage-operator
+        catalog: redhat-operators
+        nsname: openshift-local-storage
+        deploy_default_config: true
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: openshift-local-storage
+
+      - name: metallb-operator
+        catalog: redhat-operators
+        nsname: metallb-system
+        deploy_default_config: true
+        ns_labels:
+          workload.openshift.io/allowed: management
+          name: metallb-system
+
+- name: Configure Hypershift Cluster
+  hosts: bastion
+  gather_facts: true
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    arch: "x86_64"
+    ocp_version: "5.0"
+    storage_class_name: "local-storage"
+  tasks:
+    - name: Extract OpenShift pull secret from openshift-config
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pull-secret
+        namespace: openshift-config
+      register: openshift_pull_secret
+
+    - name: Ensure pull-secret exists in multicluster-engine namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pull-secret
+            namespace: multicluster-engine
+          type: "{{ openshift_pull_secret.resources[0].type }}"
+          data: "{{ openshift_pull_secret.resources[0].data }}"
+
+    - name: Fetch OS images list from assisted-service
+      ansible.builtin.uri:
+        url: "https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json"
+        return_content: true
+      register: os_images_response
+
+    - name: Filter OS images matching arch and ocp_version, pick latest by version
+      ansible.builtin.set_fact:
+        latest_os_image: >-
+          {{
+            (os_images_response.content | from_json)
+            | selectattr('cpu_architecture', 'equalto', arch)
+            | selectattr('openshift_version', 'equalto', ocp_version)
+            | list
+            | sort(attribute='version')
+            | last
+          }}
+
+    - name: Fail if no matching OS image found
+      ansible.builtin.fail:
+        msg: "No OS image found for arch='{{ arch }}' and ocp_version='{{ ocp_version }}'"
+      when: latest_os_image is not defined or latest_os_image | length == 0
+
+    - name: Build osImages list in AgentServiceConfig format
+      ansible.builtin.set_fact:
+        agent_os_images:
+          - cpuArchitecture: "{{ latest_os_image.cpu_architecture }}"
+            openshiftVersion: "{{ latest_os_image.openshift_version }}"
+            version: "{{ latest_os_image.version }}"
+            url: "{{ latest_os_image.url }}"
+
+    - name: Apply AgentServiceConfig custom resource
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: AgentServiceConfig
+          metadata:
+            name: agent
+          spec:
+            databaseStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: "{{ agent_service_db_storage_size | default('10Gi') }}"
+              storageClassName: "{{ storage_class_name }}"
+            fileSystemStorage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: "{{ agent_service_fs_storage_size | default('50Gi') }}"
+              storageClassName: "{{ storage_class_name }}"
+            mirrorRegistryRef:
+              name: ""
+            osImages: "{{ agent_os_images }}"
+
+    - name: Wait for AgentServiceConfig deployments to become ready
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: AgentServiceConfig
+        name: agent
+      register: agent_service_config_status
+      until:
+        - agent_service_config_status.resources | length > 0
+        - >-
+          (agent_service_config_status.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'DeploymentsReady')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 30
+      delay: 10

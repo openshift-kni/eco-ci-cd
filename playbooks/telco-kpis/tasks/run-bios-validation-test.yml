@@ -2,7 +2,16 @@
 # BIOS Validation Test task for Telco-KPIs
 # Purpose: Validate BIOS settings against expected profile from GitLab
 # Output: Validation report with pass/fail status for each setting
-# Optional: Apply fixes and reboot if enabled
+#
+# Parameters:
+#   - apply_fixes: (bool, default: false) Apply BIOS setting corrections via Redfish
+#   - reboot_after_apply: (bool, default: false) Reboot after applying fixes
+#   - fail_on_bios_mismatch: (bool, default: false) Fail playbook if mismatches found
+#
+# Behavior:
+#   - JUnit XML always reports actual validation status (pass/fail per setting)
+#   - If fail_on_bios_mismatch=false (default): Report mismatches but continue (no infrastructure failure)
+#   - If fail_on_bios_mismatch=true: Fail playbook on mismatches (unless apply_fixes=true)
 
 - name: Create artifacts directory on bastion
   ansible.builtin.tempfile:
@@ -500,6 +509,68 @@
     dest: "{{ artifacts_dir.path }}/{{ test_name }}-report.xml"
     mode: '0644'
 
+- name: Validate BIOS validation results were generated
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir.path }}/{{ test_name }}-report.xml"
+  register: bios_junit_file
+
+- name: Fail if BIOS validation results not generated
+  ansible.builtin.fail:
+    msg: |
+      ❌ BIOS validation test FAILED - Results not generated
+
+      Expected JUnit XML: {{ artifacts_dir.path }}/{{ test_name }}-report.xml
+      Artifacts: {{ artifacts_dir.path }}
+
+      This indicates the BIOS validation did not complete successfully.
+      Check validation report for details:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/bios-validation-report.json'
+  when: not bios_junit_file.stat.exists
+
+- name: Fail if BIOS validation found mismatches (when fail_on_bios_mismatch=true)
+  ansible.builtin.fail:
+    msg: |
+      ❌ BIOS validation test FAILED - BIOS settings do not match expected profile
+
+      Spoke cluster: {{ spoke_cluster }}
+      BIOS profile: {{ bios_profile_path | default('dell/bios-profile.yaml') }}
+      Failed settings: {{ failed_settings | default(0) }}
+      Total settings: {{ total_settings | default(0) }}
+      Apply fixes: {{ apply_fixes | default(false) }}
+      Fail on mismatch: {{ fail_on_bios_mismatch | default(false) }}
+
+      Review validation report for detailed mismatch information:
+        {{ artifacts_dir.path }}/bios-validation-report.json
+
+      Note: Set apply_fixes=true to automatically apply corrections.
+      Note: Set fail_on_bios_mismatch=false to report but not fail on mismatches.
+  when:
+    - fail_on_bios_mismatch | default(false) | bool
+    - bios_validation_rc | int != 0
+    - not (_bios_profile_fetch_failed | default(false))
+
+- name: Warn about BIOS mismatches (when not failing on mismatch)
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "⚠️  BIOS Validation Warning"
+      - "=========================================="
+      - "BIOS settings do not match expected profile"
+      - "Failed settings: {{ failed_settings | default(0) }}/{{ total_settings | default(0) }}"
+      - "Apply fixes: {{ apply_fixes | default(false) }}"
+      - "Fail on mismatch: {{ fail_on_bios_mismatch | default(false) }}"
+      - ""
+      - "Mismatches reported in JUnit XML - playbook continues"
+      - "Set fail_on_bios_mismatch=true to fail on mismatches"
+      - "Set apply_fixes=true to auto-correct settings"
+      - ""
+      - "Review: {{ artifacts_dir.path }}/bios-validation-report.json"
+      - "=========================================="
+  when:
+    - not (fail_on_bios_mismatch | default(false) | bool)
+    - bios_validation_rc | int != 0
+    - not (_bios_profile_fetch_failed | default(false))
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
@@ -515,11 +586,6 @@
   ansible.builtin.file:
     path: "{{ artifacts_dir.path }}"
     state: absent
-
-- name: Warn if validation found mismatches (unless fixes were applied)
-  ansible.builtin.debug:
-    msg: "[WARNING] BIOS validation failed: {{ failed_settings }} setting(s) do not match expected values. Review validation report for details."
-  when: not (_bios_profile_fetch_failed | default(false)) and failed_settings | int > 0 and not (apply_fixes | bool)
 
 - name: Display validation complete message
   ansible.builtin.debug:

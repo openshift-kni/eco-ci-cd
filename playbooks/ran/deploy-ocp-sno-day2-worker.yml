@@ -165,6 +165,66 @@
               Spoke cluster did not finish bootstrapping within 30 minutes.
               ClusterVersion is not yet Available or is still Progressing.
 
+        # ClusterVersion can finish before day-0 performance tuning reboots the SNO.
+        - name: Wait for the spoke master performance configuration to finish rolling out
+          kubernetes.core.k8s_info:
+            api_version: machineconfiguration.openshift.io/v1
+            kind: MachineConfigPool
+            name: master
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_master_mcp
+          until: >-
+            (spoke_master_mcp is success) and
+            (spoke_master_mcp.resources | default([]) | length == 1) and
+            (
+              ('50-performance-openshift-node-performance-profile' in
+                (spoke_master_mcp.resources[0].spec.configuration.source |
+                 default([]) | map(attribute='name') | list)) and
+              (spoke_master_mcp.resources[0].status.configuration.name ==
+                spoke_master_mcp.resources[0].spec.configuration.name) and
+              (spoke_master_mcp.resources[0].status.machineCount | int > 0) and
+              (spoke_master_mcp.resources[0].status.readyMachineCount ==
+                spoke_master_mcp.resources[0].status.machineCount) and
+              (spoke_master_mcp.resources[0].status.updatedMachineCount ==
+                spoke_master_mcp.resources[0].status.machineCount) and
+              (spoke_master_mcp.resources[0].status.conditions |
+                selectattr('type', 'equalto', 'Updated') |
+                selectattr('status', 'equalto', 'True') | list | length > 0) and
+              (spoke_master_mcp.resources[0].status.conditions |
+                selectattr('type', 'equalto', 'Updating') |
+                selectattr('status', 'equalto', 'False') | list | length > 0) and
+              (spoke_master_mcp.resources[0].status.conditions |
+                selectattr('type', 'equalto', 'Degraded') |
+                selectattr('status', 'equalto', 'False') | list | length > 0)
+            )
+          retries: 60
+          delay: 30
+
+        - name: Wait for the spoke master to run the updated configuration
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+            label_selectors:
+              - node-role.kubernetes.io/master
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_master_nodes
+          until: >-
+            (spoke_master_nodes is success) and
+            (spoke_master_nodes.resources | default([]) | length == 1) and
+            (
+              (spoke_master_nodes.resources[0].metadata.annotations[
+                'machineconfiguration.openshift.io/currentConfig'] | default('') ==
+                spoke_master_mcp.resources[0].status.configuration.name) and
+              (spoke_master_nodes.resources[0].metadata.annotations[
+                'machineconfiguration.openshift.io/desiredConfig'] | default('') ==
+                spoke_master_mcp.resources[0].status.configuration.name) and
+              (spoke_master_nodes.resources[0].status.conditions |
+                selectattr('type', 'equalto', 'Ready') |
+                selectattr('status', 'equalto', 'True') | list | length > 0)
+            )
+          retries: 60
+          delay: 30
+
         - name: Get operator subscriptions from the spoke cluster
           kubernetes.core.k8s_info:
             api_version: operators.coreos.com/v1alpha1
@@ -176,6 +236,9 @@
           loop_control:
             label: "{{ item.namespace }}/{{ item.name }}"
           register: operator_subscription_results
+          until: operator_subscription_results is success
+          retries: 5
+          delay: 10
 
         - name: Assert that all expected operator subscriptions were found
           ansible.builtin.assert:

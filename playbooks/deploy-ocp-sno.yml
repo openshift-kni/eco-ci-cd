@@ -69,7 +69,6 @@
 # - redhatci.ocp.destroy_vms
 # - redhatci.ocp.create_vms
 # - redhatci.ocp.boot_iso
-# - redhatci.ocp.monitor_agent_based_installer
 
 ## Usage:
 # - Ensure required variables are defined in inventory or passed as --extra-vars
@@ -750,12 +749,96 @@
 - name: Monitor installation process of agent-based installer
   hosts: bastion
   gather_facts: false
+  vars:
+    agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
+    manifests_dir: "{{ repo_root_path }}/generated/{{ cluster_name }}"
   tasks:
 
-    - name: Monitor agent‑based installation
-      vars:
-        agent_based_installer_path: "{{ openshift_installer_extract_dest_path }}/openshift-install"
-        mabi_retry_install_complete_check: true
-        cluster: "{{ cluster_name }}"
-      ansible.builtin.import_role:
-        name: redhatci.ocp.monitor_agent_based_installer
+    - name: Wait for API to be available
+      ansible.builtin.uri:
+        url: "https://api.{{ cluster_name }}.{{ base_dns_domain }}:6443/readyz"
+        validate_certs: false
+        return_content: true
+      register: _hub_api_ready
+      until:
+        - "'ok' in _hub_api_ready.content"
+        - _hub_api_ready.status == 200
+      retries: 180
+      delay: 10
+
+    - name: Wait for bootstrap complete
+      ansible.builtin.command:
+        cmd: "{{ agent_based_installer_path }} --log-level=debug agent wait-for bootstrap-complete"
+        chdir: "{{ manifests_dir }}"
+      changed_when: false
+
+    - name: Check installation and gather logs if it fails
+      block:
+        - name: Wait for install complete
+          ansible.builtin.command:
+            cmd: "{{ agent_based_installer_path }} --log-level=debug agent wait-for install-complete"
+            chdir: "{{ manifests_dir }}"
+          register: _hub_install_first
+          failed_when: false
+          changed_when: false
+
+        - name: Preserve first failed install-complete attempt on bastion
+          ansible.builtin.copy:
+            dest: "{{ manifests_dir }}/install-complete-first-attempt.log"
+            content: "{{ _hub_install_first.stdout }}\n{{ _hub_install_first.stderr }}\n"
+            mode: '0600'
+          no_log: true
+          when: _hub_install_first.rc != 0
+
+        - name: Determine whether install-complete timeout is retryable
+          ansible.builtin.set_fact:
+            _hub_install_retryable: >-
+              {{
+                _hub_install_first.rc == 6
+                and 'No events logged from the Agent Rest API' not in _hub_install_first.stderr
+                and 'x509: certificate has expired or is not yet valid' not in _hub_install_first.stderr
+              }}
+
+        - name: Pause before retrying install complete
+          ansible.builtin.pause:
+            seconds: 60
+          when: _hub_install_retryable | bool
+
+        - name: Retry install complete once
+          ansible.builtin.command:
+            cmd: "{{ agent_based_installer_path }} --log-level=debug agent wait-for install-complete"
+            chdir: "{{ manifests_dir }}"
+          register: _hub_install_retry
+          failed_when: false
+          changed_when: false
+          when: _hub_install_retryable | bool
+
+        - name: Fail if installation did not complete
+          ansible.builtin.fail:
+            msg: >-
+              Installation was not completed (first wait rc={{ _hub_install_first.rc }},
+              retry rc={{ _hub_install_retry.rc | default('not attempted') }}).
+              First failure output: {{ manifests_dir }}/install-complete-first-attempt.log
+          when:
+            - _hub_install_first.rc != 0
+            - _hub_install_retry.rc | default(1) != 0
+
+      rescue:
+        - name: Gather logs from installation
+          ansible.builtin.command:
+            cmd: >-
+              {{ agent_based_installer_path }} --log-level=debug gather bootstrap
+              --bootstrap {{ hostvars[agent_based_installer_bootstrap_node | default(groups['masters'][0])][host_ip_keyword | default('ansible_host')] }}
+            chdir: "{{ repo_root_path }}"
+          register: _hub_install_gather
+          until: _hub_install_gather.rc == 0
+          retries: 6
+          delay: 20
+          failed_when: false
+          changed_when: false
+
+        - name: Fail properly because installation was not completed
+          ansible.builtin.fail:
+            msg: >-
+              Installation was not completed. First attempt output:
+              {{ manifests_dir }}/install-complete-first-attempt.log

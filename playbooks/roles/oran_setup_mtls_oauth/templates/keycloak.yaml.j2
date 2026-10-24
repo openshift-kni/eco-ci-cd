@@ -1,0 +1,62 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-cert
+  namespace: rhbk-operator
+spec:
+  secretName: keycloak-cert
+  subject:
+    countries: [US]
+    states: [NC]
+    locations: [Raleigh]
+    organizations: [Red Hat]
+    organizationalUnits: [Telco Verification]
+  dnsNames:
+    - keycloak.apps.{{ oran_hub_domain }}
+  privateKey:
+    algorithm: ECDSA
+  issuerRef:
+    name: root-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: oran-keycloak
+  namespace: rhbk-operator
+spec:
+  instances: 1
+  db:
+    vendor: postgres
+    host: postgres-db
+    usernameSecret:
+      name: postgresql-db-secret
+      key: POSTGRESQL_USER
+    passwordSecret:
+      name: postgresql-db-secret
+      key: POSTGRESQL_PASSWORD
+    database: keycloak
+  http:
+    tlsSecret: keycloak-cert
+  hostname:
+    hostname: keycloak.apps.{{ oran_hub_domain }}
+  additionalOptions:
+    - name: https-client-auth
+      value: request
+    - name: https-trust-store-file
+      value: /mnt/certificates/ca.crt
+  ingress:
+    annotations:
+      route.openshift.io/termination: passthrough
+    className: openshift-default
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: oran-realm-import
+  namespace: rhbk-operator
+spec:
+  keycloakCRName: oran-keycloak
+  realm: {{ oran_realm_json | to_json }}

@@ -1,0 +1,123 @@
+---
+# Playbook Name: Collect eco-gotests artifacts
+# Description  : Lane-agnostic playbook that pulls XML reports and k8sreporter
+#                artifacts from the bastion to the CI pod (artifact_dir), gathers
+#                JUnit XMLs to a unified bastion directory for
+#                telcov10n-verify-junit-reports-bastion, and copies Polarion/JUnit
+#                XMLs to shared_dir with prefixes for the report step.
+#
+# Required vars:
+#   eco_gotests_features  Space-separated list of feature names
+#                         (e.g. "oran-pre-provision oran-provision oran-post-provision")
+#   artifact_dir          Artifact directory on the CI pod (ARTIFACT_DIR)
+#   shared_dir            Shared directory on the CI pod (SHARED_DIR)
+#
+# Optional vars:
+#   eco_gotest_dir_prefix Bastion path prefix for feature dirs. Each feature dir is
+#                         <prefix><feature>. Default: /tmp/eco_gotests_
+#   bastion_junit_dir     Flat directory on bastion for unified JUnit XMLs consumed by
+#                         telcov10n-verify-junit-reports-bastion.
+#                         Default: /tmp/eco_gotests_junit
+
+- name: Collect eco-gotests artifacts
+  hosts: bastion
+  gather_facts: false
+  vars:
+    bastion_junit_dir: /tmp/eco_gotests_junit
+    eco_gotest_dir_prefix: /tmp/eco_gotests_
+  tasks:
+    - name: Build eco_gotests_entries from features
+      ansible.builtin.set_fact:
+        eco_gotests_entries: >-
+          {{ eco_gotests_entries | default([]) +
+             [{'name': item, 'eco_gotest_dir': eco_gotest_dir_prefix + item}] }}
+      loop: "{{ eco_gotests_features.split() }}"
+
+    - name: Gather JUnit XMLs to unified bastion directory
+      ansible.builtin.shell: |
+        mkdir -p {{ bastion_junit_dir }}
+        for f in {{ item.eco_gotest_dir }}/report/*junit*.xml; do
+          [ -f "$f" ] && cp "$f" {{ bastion_junit_dir }}/ || true
+        done
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Find XML report files per entry
+      ansible.builtin.find:
+        paths: "{{ item.eco_gotest_dir }}/report"
+        patterns: "*.xml"
+      register: xml_files_result
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Fetch XML reports to artifact directory
+      ansible.builtin.fetch:
+        src: "{{ file_item.path }}"
+        dest: "{{ artifact_dir }}/junit_eco_gotests_{{ entry_name }}/"
+        flat: true
+        fail_on_missing: false
+      loop: "{{ xml_files_result.results | subelements('files') }}"
+      loop_control:
+        label: "{{ file_item.path }}"
+      vars:
+        entry_name: "{{ item.0.item.name }}"
+        file_item: "{{ item.1 }}"
+
+    - name: Zip k8sreporter artifacts per entry
+      ansible.builtin.shell: |
+        report_dir="{{ item.eco_gotest_dir }}/report"
+        if [ -d "${report_dir}" ]; then
+          cd "${report_dir}" && \
+            find . -mindepth 1 ! -name '*.xml' -type f \
+              | zip /tmp/k8sreporter_{{ item.name }}.zip -@ 2>/dev/null || true
+        fi
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Fetch k8sreporter zips to artifact directory
+      ansible.builtin.fetch:
+        src: "/tmp/k8sreporter_{{ item.name }}.zip"
+        dest: "{{ artifact_dir }}/junit_eco_gotests_{{ item.name }}/"
+        flat: true
+        fail_on_missing: false
+      loop: "{{ eco_gotests_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Copy reports to SHARED directory for telcov10n-functional-report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_remote_tmp: /tmp
+  tasks:
+    - name: Copy Polarion reports to SHARED directory with prefixes
+      ansible.builtin.shell: |
+        for f in "{{ artifact_dir }}/junit_eco_gotests_{{ item.name }}"/report_*.xml; do
+          [ -f "$f" ] || continue
+          cp "$f" "{{ shared_dir }}/polarion_{{ item.name }}_$(basename "$f")"
+        done
+      loop: "{{ hostvars['bastion']['eco_gotests_entries'] }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Copy JUnit reports to SHARED directory with prefixes
+      ansible.builtin.shell: |
+        for f in "{{ artifact_dir }}/junit_eco_gotests_{{ item.name }}"/*.xml; do
+          [ -f "$f" ] || continue
+          filename=$(basename "$f")
+          if [[ "$filename" == *junit*.xml || "$filename" == *_suite_*.xml ]] && \
+             [[ "$filename" != report_*.xml ]]; then
+            cp "$f" "{{ shared_dir }}/junit_{{ item.name }}_${filename}"
+          fi
+        done
+      loop: "{{ hostvars['bastion']['eco_gotests_entries'] }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false

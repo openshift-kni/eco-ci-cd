@@ -133,12 +133,84 @@
   ansible.builtin.set_fact:
     test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
 
+- name: Validate test results were generated (JUnit XML presence check)
+  ansible.builtin.find:
+    paths: "{{ artifacts_dir.path }}"
+    patterns: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
+    file_type: file
+  register: junit_files
+
+- name: Fail if test results not generated
+  ansible.builtin.fail:
+    msg: |
+      ❌ Test execution FAILED - Results not generated
+
+      Expected JUnit XML pattern: {{ test_junit_pattern | default(test_name + '_report.xml') }}
+      Artifacts directory: {{ artifacts_dir.path }}
+      Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+      Container exit code: {{ test_exit_code }}
+
+      This indicates the test script did not complete successfully.
+      Check container logs for details:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+  when: junit_files.matched == 0
+
 - name: Record test duration and save metadata
   ansible.builtin.include_role:
     name: test_duration
     tasks_from: stop.yml
   vars:
     test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+
+- name: Check if duration validation result file exists
+  ansible.builtin.stat:
+    path: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+  register: duration_validation_file
+  when: duration is defined
+
+- name: Read duration validation result
+  ansible.builtin.slurp:
+    src: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+  register: duration_validation_content
+  when:
+    - duration is defined
+    - duration_validation_file.stat.exists
+
+- name: Parse duration validation result
+  ansible.builtin.set_fact:
+    duration_validation: "{{ dict(duration_validation_content['content'] | b64decode | regex_findall('^(.+)=(.+)$', multiline=True)) }}"
+  when:
+    - duration is defined
+    - duration_validation_file.stat.exists
+
+- name: Fail if test duration suspiciously short (infrastructure failure)
+  ansible.builtin.fail:
+    msg: |
+      ❌ Test execution FAILED - Duration suspiciously short (infrastructure failure)
+
+      Test: {{ test_display_name }}
+      Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+
+      Expected duration: {{ duration }} ({{ duration_validation.EXPECTED_DURATION }}s)
+      Actual duration: {{ duration_validation.ACTUAL_DURATION }}s
+      Margin: {{ duration_validation.MARGIN }}s
+      Threshold: {{ duration_validation.EXPECTED_DURATION }}s
+
+      Validation failed: {{ duration_validation.ACTUAL_DURATION }}s + {{ duration_validation.MARGIN }}s < threshold
+
+      This indicates an infrastructure failure, not a test failure.
+      Possible causes:
+        - Pod failed to reach Ready state
+        - Container startup failure
+        - Cluster unreachable
+        - Test script early exit due to error
+
+      Check container logs for details:
+        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+  when:
+    - duration is defined
+    - duration_validation_file.stat.exists
+    - duration_validation.VALIDATION_STATUS == 'FAILED'
 
 - name: Remove temporary auth.json file
   ansible.builtin.file:
@@ -172,11 +244,6 @@
   ansible.builtin.file:
     path: "{{ artifacts_dir.path }}"
     state: absent
-
-- name: Warn if test failed
-  ansible.builtin.debug:
-    msg: "[WARNING] {{ test_display_name }} test failed with exit code {{ test_exit_code }}"
-  when: test_exit_code | int != 0
 
 - name: Display test completion message
   ansible.builtin.debug:

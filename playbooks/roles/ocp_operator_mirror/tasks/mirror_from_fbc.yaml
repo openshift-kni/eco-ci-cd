@@ -33,7 +33,8 @@
     fbc_tag: >-
       {{
         operator.fbc_iib_repo
-        if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
+        if (operator.ocp_operator_mirror_fbc_image_base | default('')
+            or (operator.catalog | default('') is search('acm|mce', ignorecase=True)))
         else 'ocp__' ~ ocp_operator_mirror_version ~ '__' ~ operator.fbc_iib_repo
       }}
 
@@ -288,8 +289,6 @@
   ansible.builtin.set_fact:
     _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
   when:
-    - ((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0
-    - not (operator.art_fbc | default(false)) | bool
     - not (('acm' in ((operator.catalog | default('')) | lower)) or ('mce' in ((operator.catalog | default('')) | lower)))
 
 - name: Collect unique source repositories (strip digests)
@@ -349,11 +348,7 @@
             'src': (
                     (ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')))
                     if ((operator.art_fbc | default(false)) | bool)
-                    else (image
-                          if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
-                          else ((image | regex_search('@sha256:[0-9a-f]{64}'))
-                                | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image))))
-            ,
+                    else image),
             'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder))
           }
         ]

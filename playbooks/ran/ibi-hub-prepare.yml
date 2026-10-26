@@ -1,0 +1,352 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Prepare IBI hub
+# Description  : Configures an already-deployed hub cluster for the IBI (Image-Based
+#                Install) workflow. ACM, MCE and TALM must already be installed by the
+#                hub setup playbooks and operator images must already be mirrored to the
+#                internal registry.
+#                Run once with the seed bastion inventory (ibi_hub_role=seed), then
+#                again with the target bastion inventory (ibi_hub_role=target).
+#
+# Prerequisites:
+#   - ACM, MCE and TALM operators already installed on the hub cluster
+#   - Operator images already mirrored to the internal disconnected registry
+#   - Valid hub kubeconfig file accessible on the bastion
+#   - disconnected_registry_url and disconnected_registry_port defined in the bastion inventory
+#   - oc CLI installed and on PATH on the bastion
+#
+# Key Tasks:
+#   - Validate all required inputs
+#   - Create or update an ImageDigestMirrorSet for ACM and MCE images
+#   - Enable the siteconfig component in the MultiClusterHub
+#   - Enable the image-based-install-operator component in MCE (target hub only)
+#   - Wait for the ClusterInstance CRD to be established
+#   - Configure automatic reimport strategy on the target hub (target hub only)
+#   - Wait for TALM CSV and all operator deployments to be fully available
+#   - Verify TALM service account RBAC permissions
+#
+# Usage:
+#   Seed hub:
+#     ansible-playbook ./playbooks/ran/ibi-hub-prepare.yml \
+#       -i ./inventories/ocp-deployment/build-inventory.py \
+#       --extra-vars "kubeconfig=/path/to/hub/kubeconfig ibi_hub_role=seed"
+#
+#   Target hub:
+#     ansible-playbook ./playbooks/ran/ibi-hub-prepare.yml \
+#       -i ./inventories/ocp-deployment/build-inventory.py \
+#       --extra-vars "kubeconfig=/path/to/hub/kubeconfig ibi_hub_role=target"
+#
+# Required variables:
+#   kubeconfig                  # string: Absolute path to the hub kubeconfig on the bastion (required)
+#   ibi_hub_role                # string: Hub role — "seed" or "target" (required)
+#   disconnected_registry_url   # string: Internal registry hostname without protocol prefix (required, from bastion inventory)
+#   disconnected_registry_port  # string/int: Internal registry port number (required, from bastion inventory)
+
+- name: Prepare IBI hub prerequisites
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    ibi_hub_registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+    ibi_hub_mirrors:
+      - source: registry.redhat.io/rhacm2
+        mirrors: ["{{ ibi_hub_registry }}/operators/rhacm2"]
+      - source: registry.redhat.io/multicluster-engine
+        mirrors: ["{{ ibi_hub_registry }}/operators/multicluster-engine"]
+    ibi_hub_components: >-
+      {{ [{'api_version': 'operator.open-cluster-management.io/v1',
+           'kind': 'MultiClusterHub', 'component': 'siteconfig'}]
+         + ([{'api_version': 'multicluster.openshift.io/v1',
+              'kind': 'MultiClusterEngine', 'component': 'image-based-install-operator'}]
+            if ibi_hub_role == 'target' else []) }}
+  tasks:
+    - name: Validate hub inputs
+      ansible.builtin.assert:
+        that:
+          - kubeconfig | default('') | length > 0
+          - ibi_hub_role | default('') in ['seed', 'target']
+          - disconnected_registry_url | default('') | length > 0
+          - disconnected_registry_port | default('') | string | length > 0
+          - "'://' not in ibi_hub_registry and not (ibi_hub_registry is search('\\s'))"
+        fail_msg: Provide kubeconfig, seed or target hub role, and registry host and port.
+
+    - name: Configure ACM and MCE mirror mappings
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        merge_type: merge
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: ImageDigestMirrorSet
+          metadata:
+            name: ibi-hub-acm-mce
+          spec:
+            imageDigestMirrors: "{{ ibi_hub_mirrors }}"
+
+    - name: Read back ACM and MCE mirror mappings
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ImageDigestMirrorSet
+        name: ibi-hub-acm-mce
+      register: ibi_hub_mirror_status
+
+    - name: Verify mirror mappings match the inventory
+      vars:
+        ibi_hub_applied_mirrors: >-
+          {{ ibi_hub_mirror_status.resources[0].spec.imageDigestMirrors
+             | map('dict2items')
+             | map('selectattr', 'key', 'in', ['source', 'mirrors'])
+             | map('items2dict')
+             | list
+             | sort(attribute='source') }}
+      ansible.builtin.assert:
+        that:
+          - ibi_hub_mirror_status.resources | length == 1
+          - ibi_hub_applied_mirrors == ibi_hub_mirrors | sort(attribute='source') | list
+
+    - name: Discover hub component owners
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+      loop: "{{ ibi_hub_components }}"
+      loop_control:
+        label: "{{ item.kind }}"
+      register: ibi_hub_component_owners
+
+    - name: Require one owner and at most one matching component entry
+      ansible.builtin.assert:
+        that:
+          - item.resources | length == 1
+          - >-
+            (item.resources[0].spec.overrides.components | default([])
+             | selectattr('name', 'equalto', item.item.component) | list | length) <= 1
+        fail_msg: Missing or ambiguous owner or component configuration.
+      loop: "{{ ibi_hub_component_owners.results }}"
+      loop_control:
+        label: "{{ item.item.component }}"
+
+    - name: Enable required hub components while preserving other settings
+      no_log: true
+      vars:
+        ibi_hub_owner: "{{ item.resources[0] }}"
+        ibi_hub_existing_components: "{{ ibi_hub_owner.spec.overrides.components | default([]) }}"
+        ibi_hub_matching_components: >-
+          {{ ibi_hub_existing_components | selectattr('name', 'equalto', item.item.component) | list }}
+        ibi_hub_component_index: >-
+          {{ ibi_hub_existing_components.index(ibi_hub_matching_components[0])
+             if ibi_hub_matching_components | length > 0 else ibi_hub_existing_components | length }}
+      kubernetes.core.k8s:
+        state: present
+        merge_type: merge
+        definition:
+          apiVersion: "{{ item.item.api_version }}"
+          kind: "{{ item.item.kind }}"
+          metadata:
+            name: "{{ ibi_hub_owner.metadata.name }}"
+            namespace: "{{ ibi_hub_owner.metadata.namespace | default(omit) }}"
+          spec:
+            overrides:
+              components: >-
+                {{ ibi_hub_existing_components[:ibi_hub_component_index | int]
+                   + [(ibi_hub_matching_components | first | default({'name': item.item.component}))
+                      | combine({'enabled': true})]
+                   + ibi_hub_existing_components[(ibi_hub_component_index | int) + 1:] }}
+      when: >-
+        ibi_hub_matching_components | length == 0 or
+        not (ibi_hub_matching_components[0].enabled | default(false) | bool)
+      loop: "{{ ibi_hub_component_owners.results }}"
+      loop_control:
+        label: "{{ item.item.component }}"
+
+    - name: Wait for the ClusterInstance CRD to be established
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: clusterinstances.siteconfig.open-cluster-management.io
+      register: ibi_hub_clusterinstance_crd
+      until:
+        - ibi_hub_clusterinstance_crd.resources | length == 1
+        - >-
+          (ibi_hub_clusterinstance_crd.resources[0].status.conditions | default([])
+           | selectattr('type', 'equalto', 'Established')
+           | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 60
+      delay: 10
+
+    - name: Configure automatic reimport on the target hub
+      when: ibi_hub_role == 'target'
+      block:
+        - name: Read the import controller configuration
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: multicluster-engine
+            name: import-controller-config
+          register: ibi_hub_import_config
+
+        - name: Set ImportAndSync while preserving other ConfigMap keys
+          no_log: true
+          kubernetes.core.k8s:
+            state: present
+            merge_type: merge
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: import-controller-config
+                namespace: multicluster-engine
+              data:
+                autoImportStrategy: ImportAndSync
+
+        - name: Read back the target import strategy
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: multicluster-engine
+            name: import-controller-config
+          register: ibi_hub_import_status
+
+        - name: Verify automatic reimport is configured
+          ansible.builtin.assert:
+            that:
+              - ibi_hub_import_status.resources | length == 1
+              - ibi_hub_import_status.resources[0].data.autoImportStrategy == 'ImportAndSync'
+
+    - name: Find the TALM subscription
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: openshift-operators
+      register: ibi_hub_subscriptions
+
+    - name: Require exactly one TALM subscription
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ibi_hub_subscriptions.resources | selectattr('spec.name', 'equalto', 'topology-aware-lifecycle-manager')
+             | list | length) == 1
+
+    - name: Wait for TALM to report its installed CSV
+      no_log: true
+      vars:
+        ibi_hub_talm_subscription: >-
+          {{ ibi_hub_subscriptions.resources | selectattr('spec.name', 'equalto', 'topology-aware-lifecycle-manager') | first }}
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: openshift-operators
+        name: "{{ ibi_hub_talm_subscription.metadata.name }}"
+      register: ibi_hub_talm_status
+      until:
+        - ibi_hub_talm_status.resources | length == 1
+        - ibi_hub_talm_status.resources[0].status.installedCSV | default('') | length > 0
+      retries: 60
+      delay: 10
+
+    - name: Wait for the TALM CSV to succeed
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-operators
+        name: "{{ ibi_hub_talm_status.resources[0].status.installedCSV }}"
+      register: ibi_hub_talm_csv
+      until:
+        - ibi_hub_talm_csv.resources | length == 1
+        - ibi_hub_talm_csv.resources[0].status.phase | default('') == 'Succeeded'
+      retries: 60
+      delay: 10
+
+    - name: Require deployments in the TALM CSV
+      ansible.builtin.assert:
+        that:
+          - ibi_hub_talm_csv.resources[0].spec.install.spec.deployments | default([]) | length > 0
+
+    - name: Wait for full SiteConfig, IBI and TALM rollouts
+      no_log: true
+      vars:
+        ibi_hub_deployments: >-
+          {{ [{'name': 'siteconfig-controller-manager', 'namespace': 'multicluster-engine'}]
+             + ([{'name': 'image-based-install-operator', 'namespace': 'multicluster-engine'}]
+                if ibi_hub_role == 'target' else [])
+             + (ibi_hub_talm_csv.resources[0].spec.install.spec.deployments
+                | map('combine', {'namespace': 'openshift-operators'}) | list) }}
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ item.namespace }}"
+        name: "{{ item.name }}"
+      loop: "{{ ibi_hub_deployments }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.name }}"
+      register: ibi_hub_deployment_status
+      until:
+        - ibi_hub_deployment_status.resources | length == 1
+        - ibi_hub_deployment_status.resources[0].spec.replicas | default(1) | int > 0
+        - >-
+          ibi_hub_deployment_status.resources[0].status.observedGeneration | default(0) | int >=
+          ibi_hub_deployment_status.resources[0].metadata.generation | int
+        - >-
+          ibi_hub_deployment_status.resources[0].status.updatedReplicas | default(0) | int ==
+          ibi_hub_deployment_status.resources[0].spec.replicas | default(1) | int
+        - >-
+          ibi_hub_deployment_status.resources[0].status.replicas | default(0) | int ==
+          ibi_hub_deployment_status.resources[0].spec.replicas | default(1) | int
+        - >-
+          ibi_hub_deployment_status.resources[0].status.availableReplicas | default(0) | int ==
+          ibi_hub_deployment_status.resources[0].spec.replicas | default(1) | int
+      retries: 60
+      delay: 10
+
+    - name: Read back the TALM subscription after rollout
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: openshift-operators
+        name: "{{ ibi_hub_talm_status.resources[0].metadata.name }}"
+      register: ibi_hub_talm_current
+
+    - name: Verify TALM still uses the checked CSV
+      ansible.builtin.assert:
+        that:
+          - ibi_hub_talm_current.resources | length == 1
+          - ibi_hub_talm_current.resources[0].status.installedCSV | default('') == ibi_hub_talm_csv.resources[0].metadata.name
+        fail_msg: TALM installation changed during preparation; rerun against the current CSV.
+
+    - name: Verify TALM service accounts can list policies and upgrades
+      ansible.builtin.command:
+        argv:
+          - oc
+          - "--kubeconfig={{ kubeconfig }}"
+          - --request-timeout=30s
+          - auth
+          - can-i
+          - list
+          - "{{ item.1 }}"
+          - --all-namespaces
+          - "--as=system:serviceaccount:openshift-operators:{{ item.0.resources[0].spec.template.spec.serviceAccountName | default('default') }}"
+      loop: >-
+        {{ ibi_hub_deployment_status.results | selectattr('item.namespace', 'equalto', 'openshift-operators')
+           | product(['policies.policy.open-cluster-management.io', 'clustergroupupgrades.ran.openshift.io']) | list }}
+      loop_control:
+        label: "{{ item.0.item.name }}: {{ item.1 }}"
+      register: ibi_hub_talm_permission
+      changed_when: false
+      failed_when: ibi_hub_talm_permission.rc != 0 or ibi_hub_talm_permission.stdout | trim != 'yes'
+
+    - name: Report completed hub preparation
+      ansible.builtin.debug:
+        msg: "IBI {{ ibi_hub_role }} hub prerequisites verified."

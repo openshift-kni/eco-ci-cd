@@ -155,10 +155,10 @@
           spec:
             overrides:
               components: >-
-                {{ ibi_hub_existing_components[:ibi_hub_component_index | int]
+                {{ (ibi_hub_existing_components[:ibi_hub_component_index | int] | list)
                    + [(ibi_hub_matching_components | first | default({'name': item.item.component}))
                       | combine({'enabled': true})]
-                   + ibi_hub_existing_components[(ibi_hub_component_index | int) + 1:] }}
+                   + (ibi_hub_existing_components[(ibi_hub_component_index | int) + 1:] | list) }}
       when: >-
         ibi_hub_matching_components | length == 0 or
         not (ibi_hub_matching_components[0].enabled | default(false) | bool)

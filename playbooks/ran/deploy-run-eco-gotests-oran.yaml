@@ -1,0 +1,174 @@
+---
+# Playbook Name: Set up eco-gotests for O-RAN
+# Description  : O-RAN-specific eco-gotests setup playbook. Handles:
+#                - Initializing the KUBECONFIG copy that transitions hub→spoke
+#                  during the provision suite (prevents clobbering the hub kubeconfig)
+#                - Fetching hub-specific runtime values (apps domain, OAuth secret)
+#                - Mirroring the o2ims must-gather image to the disconnected registry
+#                  (eco-gotests JustAfterEach runs must-gather pods on the disconnected
+#                  hub cluster, so the image must be reachable from there)
+#                - Generating the eco-gotests run script from the Jinja2 template
+#
+# Usage:
+#   ansible-playbook ./playbooks/ran/deploy-run-eco-gotests-oran.yaml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     --extra-vars "features=oran labels=pre-provision eco_gotest_dir=/tmp/eco_gotests_oran-pre-provision" \
+#     --extra-vars "hub_clusterconfigs_path=/home/telcov10n/project/generated/kni-qe-129" \
+#     --extra-vars "mirror_registry=disconnected.registry.local:5000" \
+#     --extra-vars "additional_test_env_variables='...'"
+#
+# Notable extra vars:
+#   hub_clusterconfigs_path   Path to hub cluster configs dir (contains auth/kubeconfig)
+#   mirror_registry           Disconnected registry address (must-gather image mirrored here)
+#   eco_gotest_dir            Per-feature directory for the generated run script and reports
+#   o2ims_must_gather_image_source
+#                           Source must-gather image. Default:
+#                           quay.io/openshift-kni/oran-o2ims-operator-must-gather:latest
+
+- name: Set up eco-gotests for O-RAN
+  hosts: bastion
+  gather_facts: false
+  vars:
+    eco_gotests_image: quay.io/ocp-edge-qe/eco-gotests
+    eco_gotest_dir: /tmp/eco_gotests
+    eco_gotests_report_path: "{{ eco_gotest_dir }}/report"
+    test_timeout: "12h"
+    script_name: "eco-gotests-oran-run.sh"
+    pull_container_image: true
+    mirror_registry: ""
+    o2ims_must_gather_image_source: "quay.io/openshift-kni/oran-o2ims-operator-must-gather:latest"
+    eco_gotest_kubeconfig: "/tmp/eco-gotests-kubeconfig.yaml"
+    acm_operator_namespace: "open-cluster-management"
+    o2ims_oauth_client_id: "o2ims-client"
+    o2ims_client_cert_secret: "o2ims-client-tls-certificate"
+    o2ims_client_cert_secret_namespace: "oran-o2ims"
+    eco_skip_tls_verify: "true"
+    eco_test_trace: "true"
+    eco_verbose_script: "true"
+  tasks:
+    - name: Initialize KUBECONFIG copy from hub kubeconfig
+      # eco-gotests design: KUBECONFIG (Spoke1Kubeconfig) transitions hub→spoke during
+      # the provision suite; ECO_CNF_RAN_KUBECONFIG_HUB (clusterconfigs dir mount) is
+      # the stable hub reference. Using a separate copy prevents the provision test from
+      # clobbering the real hub kubeconfig file, which ECO_CNF_RAN_KUBECONFIG_HUB also
+      # resolves to via the directory bind mount.
+      # force: false — only create on first invocation; subsequent features use the copy
+      # as-is (spoke kubeconfig after provision overwrites it).
+      ansible.builtin.copy:
+        src: "{{ hub_clusterconfigs_path }}/auth/kubeconfig"
+        dest: "{{ eco_gotest_kubeconfig }}"
+        remote_src: true
+        force: false
+        mode: "0600"
+      when: hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0
+
+    - name: Ensure required variables are defined
+      ansible.builtin.assert:
+        that:
+          - eco_gotest_kubeconfig is defined
+          - features is defined
+          - labels is defined
+
+    - name: Fetch hub apps domain
+      ansible.builtin.shell: |
+        oc --kubeconfig {{ hub_clusterconfigs_path }}/auth/kubeconfig \
+          get ingress.config cluster -o jsonpath='{.spec.domain}'
+      register: hub_apps_domain_result
+      changed_when: false
+
+    - name: Fetch O2IMS OAuth client secret
+      ansible.builtin.shell: |
+        set -o pipefail
+        oc --kubeconfig {{ hub_clusterconfigs_path }}/auth/kubeconfig \
+          get secret oauth-client-secrets -n oran-o2ims \
+          -o jsonpath='{.data.client-secret}' | base64 -d
+      register: o2ims_oauth_secret_result
+      changed_when: false
+      no_log: true
+
+    - name: Ensure test directory does not exist
+      ansible.builtin.file:
+        path: "{{ eco_gotest_dir }}"
+        state: absent
+
+    - name: Ensure test directory is present
+      ansible.builtin.file:
+        mode: "0760"
+        path: "{{ eco_gotests_report_path }}"
+        state: directory
+        recurse: true
+
+    - name: Gather cluster network information
+      register: cluster_info
+      environment:
+        K8S_AUTH_KUBECONFIG: "{{ hub_clusterconfigs_path }}/auth/kubeconfig"
+      kubernetes.core.k8s_info:
+        api: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+
+    - name: Extract OpenShift version details
+      ansible.builtin.set_fact:
+        version: "{{ cluster_info.resources[0].status.version.split('.')[0] }}.{{ cluster_info.resources[0].status.version.split('.')[1] }}"
+
+    - name: Print cluster version
+      ansible.builtin.debug:
+        msg: "Cluster version: {{ version }}"
+
+    - name: Set o2ims must-gather image
+      ansible.builtin.set_fact:
+        o2ims_must_gather_image: >-
+          {{ mirror_registry ~ '/openshift-kni/oran-o2ims-operator-must-gather:latest'
+             if mirror_registry | default('') | length > 0
+             else o2ims_must_gather_image_source }}
+
+    - name: Mirror o2ims must-gather image to disconnected registry
+      when: mirror_registry | default('') | length > 0
+      ansible.builtin.command: >
+        skopeo copy
+        --dest-tls-verify=false
+        docker://{{ o2ims_must_gather_image_source }}
+        docker://{{ o2ims_must_gather_image }}
+      changed_when: true
+
+    - name: Remove eco-gotests image
+      when: pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        state: absent
+        tag: "{{ item }}"
+      loop: "{{ (['v' + version + '.0', 'latest'] + ([eco_gotests_tag] if eco_gotests_tag is defined else [])) | unique }}"
+
+    - name: Pull user-specified eco-gotests image
+      when: eco_gotests_tag is defined and pull_container_image is true
+      containers.podman.podman_image:
+        name: "{{ eco_gotests_image }}"
+        tag: "{{ eco_gotests_tag }}"
+
+    - name: Try pulling cluster version matched image, fallback to latest if it fails
+      when: eco_gotests_tag is not defined and pull_container_image is true
+      block:
+        - name: Pull a cluster version matched eco-gotests image
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: v{{ version }}.0
+
+        - name: Set tag to specific version
+          ansible.builtin.set_fact:
+            eco_gotests_tag: "v{{ version }}.0"
+
+      rescue:
+        - name: Pull latest version of eco-gotests image as fallback
+          containers.podman.podman_image:
+            name: quay.io/ocp-edge-qe/eco-gotests
+            tag: latest
+
+        - name: Set tag to latest
+          ansible.builtin.set_fact:
+            eco_gotests_tag: latest
+
+    - name: Prepare execute shell script
+      ansible.builtin.template:
+        src: templates/run_eco_gotests_oran.sh.j2
+        dest: "{{ eco_gotest_dir }}/{{ script_name }}"
+        mode: "0764"

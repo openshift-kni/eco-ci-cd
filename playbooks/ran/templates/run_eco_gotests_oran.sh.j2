@@ -1,0 +1,34 @@
+#!/bin/bash
+
+podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001:1001:64536 --gidmap 0:1:1000 --gidmap 1000:0:1 --gidmap 1001:1001:64536 \
+  -e KUBECONFIG=/kubeconfig/kubeconfig \
+  -e ECO_REPORTS_DUMP_DIR=/tmp/reports \
+  -e ECO_VERBOSE_LEVEL=100 \
+  -e ECO_TEST_VERBOSE=true \
+  -e ECO_DUMP_FAILED_TESTS=true \
+  -e REPORT_CASE_TAG={{ report_test_case_tag }} \
+  -e REPORT_PARAMETER_TAG={{ report_parameter_tag }} \
+  -e ECO_TC_PREFIX={{ report_tc_prefix }} \
+  -e "ECO_TEST_FEATURES={{ features }}" \
+  -e "ECO_TEST_LABELS={{ labels }}" \
+  {% if hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0 %}-e ECO_CNF_RAN_KUBECONFIG_HUB=/clusterconfigs/auth/kubeconfig \
+  {% endif %}
+  -e ECO_CNF_RAN_ACM_OPERATOR_NAMESPACE={{ acm_operator_namespace }} \
+  -e ECO_CNF_RAN_HUB_APPS_DOMAIN={{ hub_apps_domain_result.stdout }} \
+  -e ECO_CNF_RAN_O2IMS_OAUTH_CLIENT_SECRET={{ o2ims_oauth_secret_result.stdout }} \
+  -e ECO_CNF_RAN_O2IMS_OAUTH_CLIENT_ID={{ o2ims_oauth_client_id }} \
+  -e ECO_CNF_RAN_O2IMS_CLIENT_CERT_SECRET={{ o2ims_client_cert_secret }} \
+  -e ECO_CNF_RAN_O2IMS_CLIENT_CERT_SECRET_NAMESPACE={{ o2ims_client_cert_secret_namespace }} \
+  -e ECO_CNF_RAN_O2IMS_MUST_GATHER_IMAGE={{ o2ims_must_gather_image }} \
+  -e ECO_CNF_RAN_SKIP_TLS_VERIFY={{ eco_skip_tls_verify }} \
+  -e ECO_TEST_TRACE={{ eco_test_trace }} \
+  -e ECO_VERBOSE_SCRIPT={{ eco_verbose_script }} \
+  {% if additional_test_env_variables is defined and additional_test_env_variables | length > 0 %}{{ additional_test_env_variables }} \
+  {% endif %}
+  -v {{ eco_gotest_kubeconfig }}:/kubeconfig/kubeconfig:Z \
+  -v {{ eco_gotests_report_path }}:/tmp/reports:Z \
+  {% if hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0 %}-v {{ hub_clusterconfigs_path }}:/clusterconfigs:Z \
+  {% endif %}
+  {{ eco_gotests_image }}:{{ eco_gotests_tag }} \
+  --timeout={{ test_timeout }} \
+  --keep-going

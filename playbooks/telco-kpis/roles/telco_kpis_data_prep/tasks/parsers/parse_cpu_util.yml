@@ -1,0 +1,113 @@
+---
+# Parse cpu_util test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with cpu_util scenarios
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_cpu_util_log
+  failed_when: false
+
+- name: Parse cpu_util metrics from log
+  when: _tkdp_cpu_util_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_log_text: "{{ _tkdp_cpu_util_log.content | b64decode }}"
+
+    - name: Extract cpu_util ranmetrics from log
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -E '^\s*ranmetrics_cpu_' | \
+        python3 -c "
+        import sys, json, re
+        scenarios = {}
+        SCENARIO_NAMES = ['idle', 'workloadlaunch', 'mustgather', 'promquery', 'steadyworkload']
+        for line in sys.stdin:
+            line = line.strip()
+            if not line.startswith('ranmetrics_cpu_'):
+                continue
+            # Handle lines with labels: ranmetrics_cpu_infra_pods_steadyworkload_avg(ns=...,pod=...): val
+            label_match = re.match(r'ranmetrics_cpu_(\w+?)_((?:' + '|'.join(SCENARIO_NAMES) + r'))_(max|avg)\((.+?)\):\s*([\d.eE+-]+)', line)
+            # Handle simple lines: ranmetrics_cpu_total_idle_max: val
+            simple_match = re.match(r'ranmetrics_cpu_(\w+?)_((?:' + '|'.join(SCENARIO_NAMES) + r'))_(max|avg):\s*([\d.eE+-]+)', line)
+            if label_match:
+                breakdown, scenario, agg, labels, val = label_match.groups()
+                if scenario not in scenarios:
+                    scenarios[scenario] = {'scenario_name': scenario, 'types': []}
+                if scenario == 'steadyworkload' and agg == 'avg':
+                    component_key = 'components_' + breakdown
+                    if component_key not in scenarios[scenario]:
+                        scenarios[scenario][component_key] = []
+                    label_dict = dict(re.findall(r'(\w+)=\"([^\"]+)\"', labels))
+                    entry = {'avg_cpu': float(val)}
+                    if 'namespace' in label_dict:
+                        entry['namespace'] = label_dict['namespace']
+                    if 'pod' in label_dict:
+                        entry['pod'] = label_dict['pod']
+                    if 'id' in label_dict:
+                        entry['group_name'] = label_dict['id']
+                    scenarios[scenario][component_key].append(entry)
+            elif simple_match:
+                breakdown, scenario, agg, val = simple_match.groups()
+                if scenario not in scenarios:
+                    scenarios[scenario] = {'scenario_name': scenario, 'types': []}
+                if agg == 'max':
+                    type_name = breakdown
+                    existing = [t for t in scenarios[scenario]['types'] if t['type_name'] == type_name]
+                    if existing:
+                        existing[0]['max_cpu'] = float(val)
+                    else:
+                        scenarios[scenario]['types'].append({'type_name': type_name, 'max_cpu': float(val)})
+        # Compute avg_cpu_total for steadyworkload (sum of all component avg_cpu values)
+        if 'steadyworkload' in scenarios:
+            sw = scenarios['steadyworkload']
+            total = 0.0
+            for key in ('components_os_daemon', 'components_infra_pods'):
+                for entry in sw.get(key, []):
+                    total += entry.get('avg_cpu', 0.0)
+            sw['avg_cpu_total'] = round(total, 7)
+        # Build ordered output
+        result = []
+        for sname in SCENARIO_NAMES:
+            if sname in scenarios:
+                result.append(scenarios[sname])
+        print(json.dumps(result))
+        "
+      args:
+        stdin: "{{ _tkdp_cpu_util_log_text }}"
+        executable: /bin/bash
+      register: _tkdp_cpu_util_ranmetrics_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse cpu_util ranmetrics
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_scenarios: "{{ _tkdp_cpu_util_ranmetrics_result.stdout | default('[]') | from_json }}"
+      when: _tkdp_cpu_util_ranmetrics_result.stdout is defined and _tkdp_cpu_util_ranmetrics_result.stdout | length > 2
+
+    - name: Set empty scenarios when no ranmetrics found
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_scenarios: []
+      when: _tkdp_cpu_util_scenarios is not defined
+
+    - name: Set cpu_util-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          scenarios: "{{ _tkdp_cpu_util_scenarios | default([]) }}"
+
+  rescue:
+    - name: Log cpu_util parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse cpu_util metrics from podman-run.log"
+
+    - name: Set empty cpu_util data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          scenarios: []
+
+- name: Handle missing cpu_util log
+  when: _tkdp_cpu_util_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data:
+      scenarios: []

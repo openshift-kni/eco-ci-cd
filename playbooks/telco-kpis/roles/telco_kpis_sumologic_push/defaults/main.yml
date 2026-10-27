@@ -1,0 +1,54 @@
+---
+# Defaults for telco_kpis_sumologic_push role (STUB IMPLEMENTATION)
+# Pushes telco-kpis test results to SumoLogic endpoint
+
+# NOTE: This is a stub implementation until SumoLogic infrastructure is ready
+# Interface matches telco_kpis_splunk_push for easy integration
+
+# Input: report_data fact from telco_kpis_data_prep role
+tkslp_report_data: {}
+
+# Cluster identification (REQUIRED for event metadata)
+tkslp_hub_cluster: ""
+tkslp_spoke_cluster: ""
+
+# SumoLogic configuration (REQUIRED - when infrastructure is ready)
+# TODO: Verify endpoint URL format when SumoLogic infrastructure is provisioned
+# Expected format: https://collectors.sumologic.com/receiver/v1/http/<unique-id>
+tkslp_sumologic_hec_url: ""
+
+# TODO: Verify authentication mechanism (header, URL param, or other)
+# Current assumption: Similar to Splunk HEC token-based auth
+tkslp_sumologic_hec_token: ""
+
+# TODO: Determine if SumoLogic uses index concept like Splunk
+# May use source_category or other metadata instead
+tkslp_sumologic_index: "ecosystem-telco"
+
+# Test metadata
+tkslp_formal_test: false
+
+# CI metadata (optional, for provenance tracking)
+# TODO: Map to SumoLogic-specific fields when infrastructure is ready
+tkslp_ci_metadata:
+  ci_type: ""
+  job_name: ""
+  build_number: ""
+
+# Retry configuration for transient failures
+tkslp_retries: 3
+tkslp_retry_delay: 10
+tkslp_request_timeout: 30
+
+# Upload control — enabled by default (use false for dry-run)
+tkslp_do_send: true
+
+# Output directory for generated event JSON files (for debugging)
+tkslp_output_dir: "/tmp/telco-kpis-sumologic-push"
+
+# Output: sumologic_push_result fact
+# Structure:
+#   success: true/false
+#   url: "https://service.sumologic.com/ui/#section/search/..."
+#   error_msg: "..." (if failed)
+#   events_sent: N

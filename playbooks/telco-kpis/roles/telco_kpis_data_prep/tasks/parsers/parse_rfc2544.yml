@@ -1,0 +1,95 @@
+---
+# Parse rfc2544 test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with rfc2544 metrics
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_rfc2544_log
+  failed_when: false
+
+- name: Parse rfc2544 metrics from log
+  when: _tkdp_rfc2544_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_rfc2544_log_text: "{{ _tkdp_rfc2544_log.content | b64decode }}"
+
+    - name: Extract RFC2544_PARAMS line from log
+      ansible.builtin.set_fact:
+        _tkdp_rfc2544_params_line: "{{
+          (_tkdp_rfc2544_log_text | regex_search('RFC2544_PARAMS:\\s*(.+)', '\\1') | default([''], true))[0] }}"
+
+    - name: Parse RFC2544 test configuration parameters
+      ansible.builtin.set_fact:
+        _tkdp_config_lat_duration: "{{
+          (_tkdp_rfc2544_params_line | regex_search('LAT_DURATION=([^;\\n]+)', '\\1') | default([''], true))[0]
+            if _tkdp_rfc2544_params_line else '' }}"
+        _tkdp_config_port1: "{{
+          (_tkdp_rfc2544_params_line | regex_search('PORT1=([^;\\n]+)', '\\1') | default([''], true))[0]
+            if _tkdp_rfc2544_params_line else '' }}"
+
+    - name: Extract throughput from RANMETRICS
+      ansible.builtin.set_fact:
+        _tkdp_throughput_match: "{{
+          _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_MAX_THROUGHPUT=([\\d.]+)', '\\1') }}"
+
+    - name: Set throughput value
+      ansible.builtin.set_fact:
+        _tkdp_throughput_percent: "{{
+          _tkdp_throughput_match[0] | float if _tkdp_throughput_match and _tkdp_throughput_match | length > 0 else 0.0 }}"
+
+    - name: Extract latency metrics from RANMETRICS
+      ansible.builtin.set_fact:
+        _tkdp_min_latency_match: "{{ _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_MIN=([\\d.]+)', '\\1') }}"
+        _tkdp_avg_latency_match: "{{ _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_AVG=([\\d.]+)', '\\1') }}"
+        _tkdp_max_latency_match: "{{ _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_MAX=([\\d.]+)', '\\1') }}"
+        _tkdp_frame_size_match: "{{ _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_FRAMESIZE=([\\d.]+)', '\\1') }}"
+        _tkdp_test_throughput_match: "{{ _tkdp_rfc2544_log_text | regex_search('RANMETRICS_RFC2544_TEST_THROUGHPUT=([\\d.]+)', '\\1') }}"
+
+    - name: Parse latency metrics from RANMETRICS
+      ansible.builtin.set_fact:
+        _tkdp_frame_size: "{{ _tkdp_frame_size_match[0] | float if _tkdp_frame_size_match and _tkdp_frame_size_match | length > 0 else 0.0 }}"
+        _tkdp_actual_rate: "{{ _tkdp_test_throughput_match[0] | float if _tkdp_test_throughput_match and _tkdp_test_throughput_match | length > 0 else 0.0 }}"
+        _tkdp_min_latency: "{{ _tkdp_min_latency_match[0] | float if _tkdp_min_latency_match and _tkdp_min_latency_match | length > 0 else 0.0 }}"
+        _tkdp_avg_latency: "{{ _tkdp_avg_latency_match[0] | float if _tkdp_avg_latency_match and _tkdp_avg_latency_match | length > 0 else 0.0 }}"
+        _tkdp_max_latency: "{{ _tkdp_max_latency_match[0] | float if _tkdp_max_latency_match and _tkdp_max_latency_match | length > 0 else 0.0 }}"
+
+    - name: Extract histogram data from RANMETRICS
+      ansible.builtin.set_fact:
+        _tkdp_histogram_line: "{{
+          (_tkdp_rfc2544_log_text | regex_search(\"RANMETRICS_RFC2544_HISTOGRAM='([^']+)'\", '\\1') | default([''], true)) | first }}"
+
+    - name: Set rfc2544-specific data for Splunk (matches dashboard field names)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: >-
+          {{ {
+            'test_type': 'rfc-2544',
+            'duration': _tkdp_config_lat_duration | default('0') | int,
+            'max_throughput': _tkdp_throughput_percent | float,
+            'throughput': _tkdp_throughput_percent | float,
+            'max_delay': _tkdp_max_latency | float,
+            'avg_delay': _tkdp_avg_latency | float,
+            'min_delay': _tkdp_min_latency | float,
+            'frame_size': _tkdp_frame_size | float,
+            'actual_rate': _tkdp_actual_rate | float,
+            'histogram_raw': _tkdp_histogram_line | default(''),
+            'config': {
+              'lat_duration': _tkdp_config_lat_duration | default(''),
+              'port1': _tkdp_config_port1 | default('')
+            }
+          } | to_json | from_json }}
+
+  rescue:
+    - name: Log rfc2544 parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse rfc2544 metrics from podman-run.log"
+
+    - name: Set empty rfc2544 data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing rfc2544 log
+  when: _tkdp_rfc2544_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

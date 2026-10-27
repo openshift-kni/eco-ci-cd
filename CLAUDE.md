@@ -214,6 +214,7 @@ The `playbooks/telco-kpis/` directory contains a comprehensive testing framework
 - `run-rds-compare.yml` - Compares RDS deployment metrics
 - `ztp-ai-deployment-time.yml` - **Validates ZTP AI deployment time against threshold**
 - `generate-report.yml` - Generates comprehensive Markdown reports from all test artifacts
+- `push-to-data-lake.yml` - **Pushes test results to observability backends (Splunk, SumoLogic)**
 
 **ZTP AI Deployment Time Test** (`ztp-ai-deployment-time.yml`):
 - **Purpose**: Validates that ZTP (Zero Touch Provisioning) Assisted Installer deployments complete within acceptable time threshold (default: 2h0m = 120 minutes)
@@ -256,6 +257,26 @@ The `playbooks/telco-kpis/` directory contains a comprehensive testing framework
 
 **UTC Timestamp Consistency:**
 All telco-kpis tests use UTC timestamps (`date -u +%Y%m%d-%H%M%S`) to ensure correct chronological ordering and freshness comparison across different bastion timezones.
+
+**Push to Data Lake** (`push-to-data-lake.yml`):
+- Pushes telco-kpis test results to observability backends (Splunk, SumoLogic)
+- Reads test data from shared artifact directory (`/home/telcov10n/telco-kpis-artifacts/{spoke}/`)
+- Supports single test, multiple tests, or all tests
+- Generates JSON artifact with push status and search URL
+- **Parameters**:
+  - `hub_cluster` (required) - Hub cluster name
+  - `spoke_cluster` (required) - Spoke cluster name
+  - `test_names` (default: "all") - Test names to push (list or "all")
+  - `data_lake_destination` (default: "splunk") - Backend: splunk | sumologic
+  - `formal_test` (default: true) - Mark as formal test run
+  - Destination-specific credentials: `splunk_hec_url`, `splunk_hec_token` OR `sumologic_hec_url`, `sumologic_hec_token`
+- **Roles**:
+  - `telco_kpis_data_prep` - Prepares data from shared artifacts (filters tests, parses JUnit XML)
+  - `telco_kpis_splunk_push` - Pushes to Splunk HEC endpoint (active implementation)
+  - `telco_kpis_sumologic_push` - Pushes to SumoLogic endpoint (stub - infrastructure not ready)
+- **Output**: `push-to-data-lake-result.json` with success status, search URL, and error details
+- **Integration**: Used by Jenkins jobs for manual/retry pushes, Prow steps for automatic per-test pushes
+- **Migration Path**: Default is Splunk; change to SumoLogic by updating single default value in playbook, Jenkins, and Prow configs
 
 ### Environment Setup Pattern
 The `setup-cluster-env.yml` playbook implements a **version-to-cluster mapping strategy**:

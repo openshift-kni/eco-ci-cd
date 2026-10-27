@@ -1,0 +1,39 @@
+---
+# Defaults for telco_kpis_data_prep role
+# Prepares test data from shared artifact directory for data lake push
+
+# Cluster identification (REQUIRED)
+tkdp_hub_cluster: ""
+tkdp_spoke_cluster: ""
+
+# Test selection (REQUIRED)
+# List of test names: ["oslat", "cyclictest", "ptp"]
+# OR string "all" to include all available tests
+tkdp_test_names: "all"
+
+# Shared artifact directory configuration
+tkdp_shared_artifact_base: "/home/telcov10n/telco-kpis-artifacts"
+tkdp_shared_artifact_dir: "{{ tkdp_shared_artifact_base }}/{{ tkdp_spoke_cluster }}"
+
+# Node info file (required for cluster/hardware metadata)
+tkdp_node_info_file: "{{ tkdp_shared_artifact_dir }}/node-info-{{ tkdp_spoke_cluster }}.json"
+
+# Test directory pattern
+# Expected: {test-name}-{spoke}-{YYYYMMDD-HHMMSS}/
+tkdp_test_dir_pattern: "*-{{ tkdp_spoke_cluster }}-[0-9]*"
+
+# Baseline folder exclusion patterns
+tkdp_baseline_patterns:
+  - "*-baseline"
+  - "*-baseline-*"
+
+# Tests without Splunk dashboard support (excluded from Splunk push)
+tkdp_splunk_unsupported_tests:
+  - bios_validation
+  - rds_compare
+
+# Missing test handling
+tkdp_fail_on_missing_tests: false  # Log warning instead of failing
+
+# Output
+# Produces: report_data fact (dict with test_results, cluster_info, hardware_info)

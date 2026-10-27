@@ -1,0 +1,264 @@
+---
+# Main entry point for telco_kpis_data_prep role
+# Prepares standardized test data from shared artifacts for data lake push
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - tkdp_hub_cluster | length > 0
+      - tkdp_spoke_cluster | length > 0
+      - tkdp_test_names is defined
+      - tkdp_test_names | length > 0
+    fail_msg: "Missing required parameters: tkdp_hub_cluster, tkdp_spoke_cluster, tkdp_test_names"
+
+- name: Validate shared artifact directory exists
+  ansible.builtin.stat:
+    path: "{{ tkdp_shared_artifact_dir }}"
+  register: _tkdp_artifact_dir_stat
+  failed_when: not _tkdp_artifact_dir_stat.stat.exists or not _tkdp_artifact_dir_stat.stat.isdir
+
+- name: Check if node-info file exists
+  ansible.builtin.stat:
+    path: "{{ tkdp_node_info_file }}"
+  register: _tkdp_node_info_stat
+
+- name: Load node-info metadata (optional enrichment)
+  when: _tkdp_node_info_stat.stat.exists
+  block:
+    - name: Read node-info metadata
+      ansible.builtin.slurp:
+        src: "{{ tkdp_node_info_file }}"
+      register: _tkdp_node_info_content
+
+    - name: Parse node-info JSON
+      ansible.builtin.set_fact:
+        _tkdp_node_info: "{{ _tkdp_node_info_content['content'] | b64decode | from_json }}"
+
+    - name: Build cluster_info from node-info
+      ansible.builtin.set_fact:
+        _tkdp_cluster_info:
+          sw_version: "{{ _tkdp_node_info.cluster_version | default('') }}"
+          hub_version: "{{ _tkdp_node_info.hub_version | default('') }}"
+          kernel_version: "{{ _tkdp_node_info.kernel_version | default('') }}"
+          tuned_profile: "{{ _tkdp_node_info.tuned_profile | default('') }}"
+
+    - name: Build hardware_info from node-info
+      ansible.builtin.set_fact:
+        _tkdp_hardware_info:
+          cpu_model: "{{ _tkdp_node_info.cpu_model | default('') }}"
+          cpu_type: "{{ _tkdp_node_info.cpu_family | default(_tkdp_node_info.cpu_model | default('')) }}"
+          architecture: "{{ _tkdp_node_info.architecture | default('x86_64') }}"
+          bios_version: "{{ _tkdp_node_info.bios_version | default('') }}"
+          microcode: "{{ _tkdp_node_info.microcode | default('') }}"
+
+- name: Use empty metadata when node-info not available
+  when: not _tkdp_node_info_stat.stat.exists
+  block:
+    - name: Log node-info not found
+      ansible.builtin.debug:
+        msg: "WARNING: node-info not found - cluster/hardware metadata will be empty"
+
+    - name: Set empty cluster_info
+      ansible.builtin.set_fact:
+        _tkdp_cluster_info:
+          sw_version: ""
+          hub_version: ""
+          kernel_version: ""
+          tuned_profile: ""
+
+    - name: Set empty hardware_info
+      ansible.builtin.set_fact:
+        _tkdp_hardware_info:
+          cpu_model: ""
+          cpu_type: ""
+          architecture: "x86_64"
+          bios_version: ""
+          microcode: ""
+
+- name: Discover available test directories
+  ansible.builtin.find:
+    paths: "{{ tkdp_shared_artifact_dir }}"
+    file_type: directory
+    patterns: "{{ tkdp_test_dir_pattern }}"
+  register: _tkdp_all_test_dirs
+
+- name: Filter out baseline directories
+  ansible.builtin.set_fact:
+    _tkdp_filtered_dirs: >-
+      {{ _tkdp_all_test_dirs.files
+         | map(attribute='path')
+         | reject('match', '.*/[^/]*-baseline(-.*)?$')
+         | list }}
+
+- name: Display discovered test directories
+  ansible.builtin.debug:
+    msg:
+      - "==========================================="
+      - "Test Discovery"
+      - "==========================================="
+      - "Total directories found: {{ _tkdp_all_test_dirs.files | length }}"
+      - "After baseline exclusion: {{ _tkdp_filtered_dirs | length }}"
+      - "Test selection mode: {{ 'all tests' if tkdp_test_names == 'all' else 'selected tests' }}"
+      - "==========================================="
+
+- name: Normalize test_names to list and replace dashes with underscores
+  ansible.builtin.set_fact:
+    _tkdp_requested_tests: >-
+      {{ tkdp_test_names if tkdp_test_names is iterable and tkdp_test_names is not string
+         else tkdp_test_names.split(',') | map('trim') | map('replace', '-', '_') | list if tkdp_test_names != 'all'
+         else [] }}
+
+- name: Extract test metadata from directory names
+  ansible.builtin.set_fact:
+    _tkdp_test_metadata: >-
+      {%- set result = [] -%}
+      {%- for dir_path in _tkdp_filtered_dirs -%}
+        {%- set basename = dir_path | basename -%}
+        {%- set test_name = basename | regex_replace('^([^-]+)-' + tkdp_spoke_cluster + '-.*$', '\\1') -%}
+        {%- set timestamp = basename | regex_replace('^.*-([0-9]{8}-[0-9]{6})$', '\\1') -%}
+        {%- set _ = result.append({
+          'path': dir_path,
+          'basename': basename,
+          'test_name': test_name,
+          'timestamp': timestamp
+        }) -%}
+      {%- endfor -%}
+      {{ result | to_json }}
+
+- name: Parse test metadata from JSON
+  ansible.builtin.set_fact:
+    _tkdp_test_metadata: "{{ _tkdp_test_metadata | from_json }}"
+
+- name: Filter tests by requested names
+  ansible.builtin.set_fact:
+    _tkdp_selected_tests: >-
+      {{ _tkdp_test_metadata
+         | selectattr('test_name', 'in', _tkdp_requested_tests)
+         | list
+         if _tkdp_requested_tests | length > 0
+         else _tkdp_test_metadata }}
+
+- name: Exclude tests without Splunk dashboard support
+  ansible.builtin.set_fact:
+    _tkdp_selected_tests: >-
+      {{ _tkdp_selected_tests
+         | rejectattr('test_name', 'in', tkdp_splunk_unsupported_tests)
+         | list }}
+
+- name: Group by test name and select latest timestamp (JSON)
+  ansible.builtin.set_fact:
+    _tkdp_latest_tests_json: >-
+      {%- set ns = namespace(tests={}) -%}
+      {%- for test in _tkdp_selected_tests -%}
+        {%- set test_name = test.test_name -%}
+        {%- if test_name not in ns.tests or test.timestamp > ns.tests[test_name].timestamp -%}
+          {%- set _ = ns.tests.update({test_name: test}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.tests.values() | list | to_json }}
+
+- name: Parse latest tests from JSON
+  ansible.builtin.set_fact:
+    _tkdp_latest_tests: "{{ _tkdp_latest_tests_json | from_json }}"
+
+- name: Display test selection results
+  ansible.builtin.debug:
+    msg:
+      - "==========================================="
+      - "Test Selection Results"
+      - "==========================================="
+      - "Requested: {{ _tkdp_requested_tests | join(', ') if _tkdp_requested_tests | length > 0 else 'all' }}"
+      - "Selected: {{ _tkdp_latest_tests | length }} tests"
+      - "Tests: {{ _tkdp_latest_tests | map(attribute='test_name') | list | join(', ') }}"
+      - "==========================================="
+
+- name: Check for missing requested tests
+  ansible.builtin.set_fact:
+    _tkdp_missing_tests: >-
+      {{ _tkdp_requested_tests
+         | difference(_tkdp_latest_tests | map(attribute='test_name') | list)
+         if _tkdp_requested_tests | length > 0
+         else [] }}
+
+- name: Warn about missing tests
+  ansible.builtin.debug:
+    msg: "WARNING: Requested tests not found in artifacts: {{ _tkdp_missing_tests | join(', ') }}"
+  when: _tkdp_missing_tests | length > 0
+
+- name: Fail if missing tests and fail_on_missing is enabled
+  ansible.builtin.fail:
+    msg: "Missing required tests: {{ _tkdp_missing_tests | join(', ') }}"
+  when:
+    - tkdp_fail_on_missing_tests | bool
+    - _tkdp_missing_tests | length > 0
+
+- name: Initialize test_results dict
+  ansible.builtin.set_fact:
+    _tkdp_test_results: {}
+
+- name: Load test data for each selected test
+  ansible.builtin.include_tasks: load_test_data.yml
+  loop: "{{ _tkdp_latest_tests }}"
+  loop_control:
+    loop_var: _tkdp_test_item
+    label: "{{ _tkdp_test_item.test_name }}"
+
+- name: Update cluster version from test-specific cluster-info.txt
+  when: _tkdp_latest_tests | length > 0
+  block:
+    - name: Check for cluster-info.txt in first test directory
+      ansible.builtin.stat:
+        path: "{{ _tkdp_latest_tests[0].path }}/cluster-info.txt"
+      register: _tkdp_test_cluster_info_stat
+
+    - name: Read cluster-info.txt from first test
+      when: _tkdp_test_cluster_info_stat.stat.exists
+      block:
+        - name: Read cluster-info.txt
+          ansible.builtin.slurp:
+            src: "{{ _tkdp_latest_tests[0].path }}/cluster-info.txt"
+          register: _tkdp_test_cluster_info_content
+
+        - name: Parse cluster-info.txt (key=value format)
+          ansible.builtin.set_fact:
+            _tkdp_test_cluster_info_parsed: >-
+              {% set ns = namespace(result={}) -%}
+              {% for line in (_tkdp_test_cluster_info_content['content'] | b64decode).splitlines() -%}
+                {% if '=' in line -%}
+                  {% set key_value = line.split('=', 1) -%}
+                  {% set _ = ns.result.update({key_value[0]: key_value[1]}) -%}
+                {% endif -%}
+              {% endfor -%}
+              {{ ns.result }}
+
+        - name: Update cluster_info with test-specific cluster version
+          ansible.builtin.set_fact:
+            _tkdp_cluster_info: >-
+              {{ _tkdp_cluster_info | combine({
+                'sw_version': _tkdp_test_cluster_info_parsed.cluster_version | default(_tkdp_cluster_info.sw_version)
+              }) }}
+          when: _tkdp_test_cluster_info_parsed.cluster_version | default('') | length > 0
+
+      rescue:
+        - name: Log cluster-info parse error
+          ansible.builtin.debug:
+            msg: "WARNING: Failed to parse cluster-info.txt from test directory"
+
+- name: Build final report_data structure
+  ansible.builtin.set_fact:
+    report_data:
+      cluster_info: "{{ _tkdp_cluster_info }}"
+      hardware_info: "{{ _tkdp_hardware_info }}"
+      test_results: "{{ _tkdp_test_results }}"
+
+- name: Display data preparation summary
+  ansible.builtin.debug:
+    msg:
+      - "==========================================="
+      - "Data Preparation Complete"
+      - "==========================================="
+      - "Hub cluster: {{ tkdp_hub_cluster }}"
+      - "Spoke cluster: {{ tkdp_spoke_cluster }}"
+      - "Tests prepared: {{ _tkdp_test_results | length }}"
+      - "Missing tests: {{ _tkdp_missing_tests | length }}"
+      - "==========================================="

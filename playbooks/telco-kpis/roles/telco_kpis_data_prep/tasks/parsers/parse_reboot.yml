@@ -1,0 +1,90 @@
+---
+# Parse reboot test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with reboot iterations
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_reboot_log
+  failed_when: false
+
+- name: Parse reboot metrics from log
+  when: _tkdp_reboot_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_reboot_log_text: "{{ _tkdp_reboot_log.content | b64decode }}"
+
+    - name: Extract reboot ranmetrics from log
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -E '^\s*ranmetrics_(soft_reboot|power_cycle)_' | \
+        python3 -c "
+        import sys, json
+        iterations = {'soft_reboot': [], 'power_cycle': []}
+        current = {'soft_reboot': {}, 'power_cycle': {}}
+        for line in sys.stdin:
+            line = line.strip()
+            if not line.startswith('ranmetrics_'):
+                continue
+            parts = line.split(': ', 1)
+            if len(parts) != 2:
+                continue
+            key, val = parts
+            key = key.replace('ranmetrics_', '')
+            for rtype in ['soft_reboot', 'power_cycle']:
+                if not key.startswith(rtype + '_'):
+                    continue
+                field = key[len(rtype)+1:]
+                if field == 'total':
+                    current[rtype]['total_minutes'] = round(float(val) / 60.0, 2)
+                    current[rtype]['iteration'] = len(iterations[rtype])
+                    iterations[rtype].append(dict(current[rtype]))
+                    current[rtype] = {}
+                else:
+                    fparts = field.split('_', 1)
+                    if len(fparts) == 2 and fparts[0].isdigit():
+                        field_name = fparts[1]
+                    else:
+                        field_name = field
+                    current[rtype][field_name] = float(val)
+        print(json.dumps(iterations))
+        "
+      args:
+        stdin: "{{ _tkdp_reboot_log_text }}"
+        executable: /bin/bash
+      register: _tkdp_reboot_ranmetrics_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse reboot ranmetrics
+      ansible.builtin.set_fact:
+        _tkdp_reboot_iterations: "{{ _tkdp_reboot_ranmetrics_result.stdout | default('{}') | from_json }}"
+      when: _tkdp_reboot_ranmetrics_result.stdout is defined and _tkdp_reboot_ranmetrics_result.stdout | length > 2
+
+    - name: Set empty reboot iterations when no ranmetrics found
+      ansible.builtin.set_fact:
+        _tkdp_reboot_iterations:
+          soft_reboot: []
+          power_cycle: []
+      when: _tkdp_reboot_iterations is not defined
+
+    - name: Set reboot-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          soft_reboot_iterations: "{{ _tkdp_reboot_iterations.soft_reboot | default([]) }}"
+          power_cycle_iterations: "{{ _tkdp_reboot_iterations.power_cycle | default([]) }}"
+
+  rescue:
+    - name: Log reboot parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse reboot metrics from podman-run.log"
+
+    - name: Set empty reboot data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing reboot log
+  when: _tkdp_reboot_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

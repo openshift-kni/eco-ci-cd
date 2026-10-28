@@ -72,7 +72,7 @@
 
     - name: Set mirror registry from inventory disconnected_registry_url
       ansible.builtin.set_fact:
-        oran_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port | default('5000') }}"
+        oran_registry_url: "{{ disconnected_registry_url | default('disconnected.registry.local') }}:{{ disconnected_registry_port | default('5000') }}"
 
     - name: Run the O-RAN mTLS/OAuth setup role
       ansible.builtin.include_role:

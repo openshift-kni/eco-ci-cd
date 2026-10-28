@@ -1,0 +1,125 @@
+---
+- name: Pause between worker convergence polls
+  ansible.builtin.pause:
+    seconds: "{{ worker_convergence_delay }}"
+  when: convergence_attempt > 0
+
+- name: Read the spoke worker MachineConfigPool
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: worker
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: worker_pool_result
+  failed_when: false
+
+- name: Read the day-2 worker node
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ spoke_kubeconfig }}"
+    label_selectors:
+      - node-role.kubernetes.io/worker
+      - "!node-role.kubernetes.io/master"
+  register: worker_node_result
+  failed_when: false
+
+- name: Select worker resources when available
+  ansible.builtin.set_fact:
+    worker_pool: >-
+      {{ worker_pool_result.resources[0]
+         if worker_pool_result.resources | default([]) | length == 1 else {} }}
+    worker_node: >-
+      {{ worker_node_result.resources[0]
+         if worker_node_result.resources | default([]) | length == 1 else {} }}
+
+- name: Read the day-2 worker SR-IOV node state
+  kubernetes.core.k8s_info:
+    api_version: sriovnetwork.openshift.io/v1
+    kind: SriovNetworkNodeState
+    name: "{{ worker_node.metadata.name }}"
+    namespace: openshift-sriov-network-operator
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: worker_sriov_result
+  failed_when: false
+  when: worker_node | length > 0
+
+- name: Check worker pool and node configuration
+  ansible.builtin.set_fact:
+    worker_pool_ready: >-
+      {{
+        worker_pool | length > 0 and
+        worker_pool.spec.configuration.name | default('') | length > 0 and
+        worker_pool.status.configuration.name | default('') ==
+          worker_pool.spec.configuration.name | default('') and
+        '50-nto-worker' in
+          (worker_pool.status.configuration.source | default([]) |
+           map(attribute='name') | list) and
+        (worker_pool.status.configuration.source | default([]) |
+         map(attribute='name') | select('match', '^50-performance-') |
+         list | length > 0) and
+        worker_pool.status.machineCount | default(0) | int == 1 and
+        worker_pool.status.readyMachineCount | default(0) | int == 1 and
+        worker_pool.status.updatedMachineCount | default(0) | int == 1 and
+        worker_pool.status.unavailableMachineCount | default(0) | int == 0 and
+        worker_pool.status.degradedMachineCount | default(0) | int == 0 and
+        (worker_pool.status.conditions | default([]) |
+         selectattr('type', 'equalto', 'Updated') |
+         selectattr('status', 'equalto', 'True') | list | length > 0) and
+        (worker_pool.status.conditions | default([]) |
+         selectattr('type', 'equalto', 'Updating') |
+         selectattr('status', 'equalto', 'False') | list | length > 0) and
+        (worker_pool.status.conditions | default([]) |
+         selectattr('type', 'equalto', 'Degraded') |
+         selectattr('status', 'equalto', 'False') | list | length > 0)
+      }}
+    worker_node_ready: >-
+      {{
+        worker_node | length > 0 and
+        worker_node.metadata.annotations[
+          'machineconfiguration.openshift.io/state'] |
+          default('') == 'Done' and
+        worker_node.metadata.annotations[
+          'machineconfiguration.openshift.io/currentConfig'] |
+          default('') | length > 0 and
+        worker_node.metadata.annotations[
+          'machineconfiguration.openshift.io/currentConfig'] |
+          default('') ==
+          worker_node.metadata.annotations[
+            'machineconfiguration.openshift.io/desiredConfig'] |
+          default('') and
+        worker_node.metadata.annotations[
+          'machineconfiguration.openshift.io/currentConfig'] |
+          default('') ==
+          worker_pool.status.configuration.name | default('') and
+        (worker_node.status.conditions | default([]) |
+         selectattr('type', 'equalto', 'Ready') |
+         selectattr('status', 'equalto', 'True') | list | length > 0)
+      }}
+    worker_sriov_ready: >-
+      {{ worker_sriov_result.resources | default([]) | length == 1 and
+         worker_sriov_result.resources[0].status.syncStatus |
+         default('') == 'Succeeded' }}
+
+- name: Count consecutive converged worker polls
+  ansible.builtin.set_fact:
+    worker_convergence_streak: >-
+      {{ (worker_convergence_streak | default(0) | int + 1)
+         if worker_pool_ready | bool and worker_node_ready | bool and
+            worker_sriov_ready | bool else 0 }}
+
+- name: Record sustained worker convergence
+  ansible.builtin.set_fact:
+    worker_converged: >-
+      {{ worker_convergence_streak | int >=
+         worker_convergence_stable_polls | int }}
+
+- name: Advance worker convergence poll
+  ansible.builtin.set_fact:
+    convergence_attempt: "{{ convergence_attempt | int + 1 }}"
+
+- name: Poll the worker again if convergence is not sustained
+  ansible.builtin.include_tasks: check-day2-worker-convergence.yml
+  when:
+    - not worker_converged | bool
+    - convergence_attempt | int < worker_convergence_retries | int

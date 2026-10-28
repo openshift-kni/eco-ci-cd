@@ -52,6 +52,11 @@
     # name; keep it short to stay within Kubernetes' 63-character label limit.
     day2_cgu_name: "d2-worker"
     legacy_day2_cgu_name: "day2-worker-cgu"
+    # Eleven consecutive 30-second samples span five minutes of stable
+    # configuration after the worker's DU-profile MachineConfigs have landed.
+    worker_convergence_retries: 60
+    worker_convergence_delay: 30
+    worker_convergence_stable_polls: 11
     day2_managed_policies:
       - common-config-policy
       - common-subscriptions-policy
@@ -574,6 +579,41 @@
               list | length == 0
           retries: 30
           delay: 30
+
+        # A first Ready observation can precede the worker's configuration
+        # reboot. Do not hand off to tests until its DU profile and SR-IOV
+        # node state have converged.
+        - name: Initialize day-2 worker convergence polls
+          ansible.builtin.set_fact:
+            convergence_attempt: 0
+            worker_convergence_streak: 0
+            worker_converged: false
+
+        - name: Wait for sustained day-2 worker configuration convergence
+          ansible.builtin.include_tasks: tasks/check-day2-worker-convergence.yml
+
+        - name: Assert day-2 worker configuration converged
+          ansible.builtin.assert:
+            that:
+              - worker_converged | default(false) | bool
+            fail_msg: >-
+              Worker did not converge after
+              {{ worker_convergence_retries }} polls.
+              Stable polls: {{ worker_convergence_streak | default(0) }}/
+              {{ worker_convergence_stable_polls }}.
+              Pool query: {{ worker_pool_result.msg | default('ok') }}.
+              Node query: {{ worker_node_result.msg | default('ok') }}.
+              SR-IOV query: {{ worker_sriov_result.msg | default('ok') }}.
+              Ready checks: pool={{ worker_pool_ready | default(false) }},
+              node={{ worker_node_ready | default(false) }},
+              SR-IOV={{ worker_sriov_ready | default(false) }}.
+              MCP: {{ worker_pool.status | default({}) | to_json }}.
+              Node: {{ worker_node.metadata.name | default('missing') }},
+              annotations={{ worker_node.metadata.annotations |
+              default({}) | to_json }}, conditions={{
+              worker_node.status.conditions | default([]) | to_json }}.
+              SR-IOV state: {{ (worker_sriov_result.resources | default([]) |
+              first | default({})).status | default({}) | to_json }}.
       always:
         - name: Delete the day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:

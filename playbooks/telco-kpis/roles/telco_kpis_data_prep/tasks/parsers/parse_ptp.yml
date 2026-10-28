@@ -1,0 +1,56 @@
+---
+# Parse PTP test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with ptp metrics
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_ptp_log
+  failed_when: false
+
+- name: Parse PTP metrics from log
+  when: _tkdp_ptp_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_ptp_log_text: "{{ _tkdp_ptp_log.content | b64decode }}"
+
+    - name: Extract PTP metrics from log
+      ansible.builtin.set_fact:
+        _tkdp_ptp4l_max_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PTP4L MAX Value (\\d+)', '\\1') }}"
+        _tkdp_ptp4l_min_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PTP4L MIN Value (\\d+)', '\\1') }}"
+        _tkdp_ptp4l_avg_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PTP4L AVG VALUE ([\\d.]+)', '\\1') }}"
+        _tkdp_phc2sys_max_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PHC2SYS MAX Value (\\d+)', '\\1') }}"
+        _tkdp_phc2sys_min_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PHC2SYS MIN Value (\\d+)', '\\1') }}"
+        _tkdp_phc2sys_avg_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] PHC2SYS AVG VALUE ([\\d.]+)', '\\1') }}"
+        _tkdp_ptp4l_restarts_match: "{{ _tkdp_ptp_log_text | regex_search('\\[INFO\\] Number of ptp4l process restart: (\\d+)', '\\1') }}"
+
+    - name: Extract duration from log
+      ansible.builtin.set_fact:
+        _tkdp_ptp_duration_match: "{{ _tkdp_ptp_log_text | regex_search('duration=([^)]+)', '\\1') }}"
+
+    - name: Set PTP-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          ptp4l_max_offset: "{{ (_tkdp_ptp4l_max_match[0] | default('0')) | float }}"
+          ptp4l_min_offset: "{{ (_tkdp_ptp4l_min_match[0] | default('0')) | float }}"
+          ptp4l_avg_offset: "{{ (_tkdp_ptp4l_avg_match[0] | default('0')) | float }}"
+          phc2sys_max_offset: "{{ (_tkdp_phc2sys_max_match[0] | default('0')) | float }}"
+          phc2sys_min_offset: "{{ (_tkdp_phc2sys_min_match[0] | default('0')) | float }}"
+          phc2sys_avg_offset: "{{ (_tkdp_phc2sys_avg_match[0] | default('0')) | float }}"
+          duration: "{{ _tkdp_ptp_duration_match[0] if _tkdp_ptp_duration_match else 'N/A' }}"
+          ptp4l_restarts: "{{ (_tkdp_ptp4l_restarts_match[0] | default('0')) | int }}"
+
+  rescue:
+    - name: Log ptp parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse ptp metrics from podman-run.log"
+
+    - name: Set empty ptp data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing ptp log
+  when: _tkdp_ptp_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

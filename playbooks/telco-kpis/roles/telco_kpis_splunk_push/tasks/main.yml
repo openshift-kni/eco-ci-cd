@@ -1,0 +1,214 @@
+---
+# Main entry point for telco_kpis_splunk_push role
+# Pushes test results to Splunk HEC endpoint
+
+- name: Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - tksp_report_data | length > 0
+      - tksp_report_data.test_results is defined
+      - tksp_report_data.test_results | length > 0
+      - tksp_spoke_cluster | length > 0
+      - tksp_hub_cluster | length > 0
+    fail_msg: "Missing required parameters: tksp_report_data (with test_results), tksp_spoke_cluster, tksp_hub_cluster"
+
+- name: Validate Splunk credentials
+  ansible.builtin.assert:
+    that:
+      - tksp_splunk_hec_url | length > 0
+      - tksp_splunk_hec_token | length > 0
+    fail_msg: "Missing Splunk credentials: tksp_splunk_hec_url or tksp_splunk_hec_token"
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ tksp_output_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Build common fields for all events
+  ansible.builtin.set_fact:
+    _tksp_common:
+      ocp_version: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
+      ocp_build: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
+      node_name: "{{ tksp_spoke_cluster }}"
+      formal: "{{ (tksp_formal_test | bool) | ternary('true', 'false') }}"
+      cpu: "{{ tksp_report_data.hardware_info.cpu_model | default(tksp_report_data.hardware_info.cpu_type | default('')) }}"
+      kernel: "{{ tksp_report_data.cluster_info.kernel_version | default('') }}"
+      sideloaded: "{{ '.rt' not in (tksp_report_data.cluster_info.kernel_version | default('')) }}"
+
+- name: Build cluster_artifacts dict
+  ansible.builtin.set_fact:
+    _tksp_cluster_artifacts:
+      ocp:
+        ocp_version_spoke: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
+        ocp_version_hub: "{{ tksp_report_data.cluster_info.hub_version | default('') }}"
+      openshift_version: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
+      kernel_version: "{{ tksp_report_data.cluster_info.kernel_version | default('') }}"
+      cpu_model: "{{ tksp_report_data.hardware_info.cpu_type | default(tksp_report_data.hardware_info.cpu_model | default('')) }}"
+      bios_version: "{{ tksp_report_data.hardware_info.bios_version | default('') }}"
+      microcode: "{{ tksp_report_data.hardware_info.microcode | default('') }}"
+      architecture: "{{ tksp_report_data.hardware_info.architecture | default('') }}"
+      tuned_profile: "{{ tksp_report_data.cluster_info.tuned_profile | default('') }}"
+      cluster_name: "{{ tksp_hub_cluster }}"
+
+- name: Initialize push tracking
+  ansible.builtin.set_fact:
+    _tksp_events_sent: 0
+    _tksp_push_errors: []
+
+- name: Calculate time window from test timestamps
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      # Extract all test timestamps from test result keys
+      # Expected format: {test}-{spoke}-{YYYYMMDD}-{HHMMSS}
+      timestamps=({{ tksp_report_data.test_results.keys() | join(' ') }})
+
+      # Extract YYYYMMDD-HHMMSS portions and find earliest/latest
+      earliest=""
+      latest=""
+
+      for ts_key in "${timestamps[@]}"; do
+        # Extract timestamp: last two dash-separated fields
+        ts=$(echo "$ts_key" | grep -oE '[0-9]{8}-[0-9]{6}' | tail -1)
+        if [ -n "$ts" ]; then
+          if [ -z "$earliest" ] || [ "$ts" \< "$earliest" ]; then
+            earliest="$ts"
+          fi
+          if [ -z "$latest" ] || [ "$ts" \> "$latest" ]; then
+            latest="$ts"
+          fi
+        fi
+      done
+
+      # Convert to ISO8601 with 5-minute buffer before earliest, 15-minute buffer after latest
+      if [ -n "$earliest" ]; then
+        # Format: YYYYMMDD-HHMMSS -> YYYY-MM-DD HH:MM:SS
+        earliest_formatted="${earliest:0:4}-${earliest:4:2}-${earliest:6:2} ${earliest:9:2}:${earliest:11:2}:${earliest:13:2}"
+        latest_formatted="${latest:0:4}-${latest:4:2}-${latest:6:2} ${latest:9:2}:${latest:11:2}:${latest:13:2}"
+
+        # Calculate with buffer and output ISO8601
+        date -u -d "$earliest_formatted -5 minutes" +%Y-%m-%dT%H:%M:%S.000Z
+        date -u -d "$latest_formatted +15 minutes" +%Y-%m-%dT%H:%M:%S.000Z
+      else
+        # Fallback: use current time window
+        date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%S.000Z
+        date -u -d '+15 minutes' +%Y-%m-%dT%H:%M:%S.000Z
+      fi
+    executable: /bin/bash
+  register: _tksp_time_window
+  changed_when: false
+
+- name: Set Splunk dashboard time parameters (URL encode with urlencode filter)
+  ansible.builtin.set_fact:
+    _tksp_time_earliest: "{{ _tksp_time_window.stdout_lines[0] | urlencode }}"
+    _tksp_time_latest: "{{ _tksp_time_window.stdout_lines[1] | urlencode }}"
+
+- name: Generate Splunk dashboard URLs for each test
+  vars:
+    _tksp_ocp_version: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
+    _tksp_kernel: "{{ tksp_report_data.cluster_info.kernel_version | default('') | urlencode }}"
+    _tksp_base_url: "{{ tksp_splunk_dashboard_base_url }}"
+    # Dashboard name: 'rfc2544' for rfc-2544 test, otherwise use test_type as-is
+    _tksp_dashboard_name: >-
+      {{ 'rfc2544' if item.value.test_type == 'rfc-2544' else item.value.test_type }}
+    # Dashboard suffix: '_' for rfc2544, '_kpis' for others
+    _tksp_dashboard_suffix: >-
+      {{ '_' if item.value.test_type == 'rfc-2544' else '_kpis' }}
+    # Test-specific parameters inserted before standard middle params
+    _tksp_pre_middle_params: >-
+      {{ 'form.high_cpu_treshhold=0.005&'
+         if item.value.test_type == 'cpu_util'
+         else '' }}
+    # Standard middle parameters (excluded for rfc-2544 and deployment which have custom params)
+    _tksp_standard_middle: >-
+      {{ '' if item.value.test_type in ['rfc-2544', 'deployment']
+         else 'form.selected_duration=*&' }}
+    # Test-specific parameters before the last parameter
+    _tksp_custom_params: >-
+      {{ 'form.bubble_chart_legend=kernel&form.histogram=' ~ _tksp_ocp_version ~ '&form.test_durations=*&'
+         if item.value.test_type == 'rfc-2544'
+         else ('form.ocp_view=ocp_build&' if item.value.test_type not in ['cpu_util', 'deployment'] else '') }}
+    # Last form parameter varies by test type
+    _tksp_last_param: >-
+      {{ 'form.charts_comparison=ocp_build' if item.value.test_type == 'deployment'
+         else 'form.dashboard_kernels=' ~ _tksp_kernel }}
+    # Trailing parameters appended at the very end
+    _tksp_trailing: >-
+      {{ '&tab=layout_1' if item.value.test_type == 'cpu_util' else '' }}
+    # Build URL in parts for readability
+    _tksp_url_base_path: >-
+      {{ _tksp_base_url ~ '/en-US/app/search/' ~ _tksp_dashboard_name ~ _tksp_dashboard_suffix }}
+    _tksp_url_time_params: >-
+      {{ '?form.global_time.earliest=' ~ _tksp_time_earliest ~
+         '&form.global_time.latest=' ~ _tksp_time_latest }}
+    _tksp_url_common_params: >-
+      {{ '&form.ocp_version=' ~ _tksp_ocp_version ~
+         '&form.ocp_build=' ~ _tksp_ocp_version ~
+         '&form.node_name=' ~ tksp_spoke_cluster ~
+         '&form.general_statistics=' ~ _tksp_ocp_version ~
+         '&form.formal_tag=*&' }}
+    _tksp_url_dynamic_params: >-
+      {{ _tksp_pre_middle_params ~ _tksp_custom_params ~
+         _tksp_standard_middle ~ _tksp_last_param ~ _tksp_trailing }}
+  ansible.builtin.set_fact:
+    _tksp_dashboard_urls: >-
+      {{ _tksp_dashboard_urls | default({}) | combine({
+        item.value.test_type: _tksp_url_base_path ~ _tksp_url_time_params ~
+                              _tksp_url_common_params ~ _tksp_url_dynamic_params
+      }) }}
+  loop: "{{ tksp_report_data.test_results | dict2items }}"
+  loop_control:
+    label: "{{ item.value.test_type }}"
+
+- name: Push events to Splunk
+  block:
+    - name: Process each test result
+      ansible.builtin.include_tasks: send_event.yml
+      loop: "{{ tksp_report_data.test_results | dict2items }}"
+      loop_control:
+        loop_var: _tksp_test_item
+        label: "{{ _tksp_test_item.key }}"
+
+    - name: Set success result
+      ansible.builtin.set_fact:
+        splunk_push_result:
+          success: true
+          urls: "{{ _tksp_dashboard_urls }}"
+          error_msg: null
+          events_sent: "{{ _tksp_events_sent }}"
+
+  rescue:
+    - name: Set failure result
+      ansible.builtin.set_fact:
+        splunk_push_result:
+          success: false
+          urls: "{{ _tksp_dashboard_urls | default({}) }}"
+          error_msg: "{{ ansible_failed_result.msg | default('Unknown error during Splunk push') }}"
+          events_sent: "{{ _tksp_events_sent }}"
+
+- name: Display push summary
+  vars:
+    _tksp_test_types: >-
+      {{ tksp_report_data.test_results | dict2items
+         | map(attribute='value') | map(attribute='test_type', default='unknown')
+         | list | join(', ') }}
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Splunk Push Summary"
+      - "=========================================="
+      - "Success:      {{ splunk_push_result.success }}"
+      - "Events sent:  {{ splunk_push_result.events_sent }}"
+      - "Test types:   {{ _tksp_test_types }}"
+      - "Index:        {{ tksp_splunk_index }}"
+      - "Node:         {{ tksp_spoke_cluster }}"
+      - "Formal:       {{ tksp_formal_test }}"
+      - "OCP version:  {{ _tksp_common.ocp_version | default('') }}"
+      - "=========================================="
+      - "Dashboard URLs"
+      - "=========================================="
+      - "{% for test_type, url in splunk_push_result.urls.items() %}{{ test_type }}: {{ url }}{% endfor %}"
+      - "Event files:  {{ tksp_output_dir }}/"
+      - "=========================================="

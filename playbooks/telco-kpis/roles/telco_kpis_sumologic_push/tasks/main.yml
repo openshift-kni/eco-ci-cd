@@ -1,0 +1,186 @@
+---
+# STUB IMPLEMENTATION - telco_kpis_sumologic_push role
+# TODO: Complete implementation when SumoLogic infrastructure is ready
+
+# This stub provides the same interface as telco_kpis_splunk_push
+# to enable testing of the push-to-data-lake playbook orchestration
+
+- name: Log SumoLogic push not implemented
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "SumoLogic Push - NOT IMPLEMENTED"
+      - "=========================================="
+      - "SumoLogic infrastructure is not yet ready"
+      - "This is a stub implementation"
+      - "Tests requested: {{ tkslp_report_data.test_results | length }}"
+      - "Spoke cluster: {{ tkslp_spoke_cluster }}"
+      - "=========================================="
+
+- name: Set stub result
+  ansible.builtin.set_fact:
+    sumologic_push_result:
+      success: false
+      urls: {}
+      error_msg: "SumoLogic push not implemented - infrastructure not ready"
+      events_sent: 0
+
+# ============================================================================
+# TODO: Implementation Checklist (complete when SumoLogic is ready)
+# ============================================================================
+#
+# 1. ENDPOINT VERIFICATION
+#    - Confirm SumoLogic HTTP endpoint URL format
+#    - Expected: https://collectors.sumologic.com/receiver/v1/http/<unique-id>
+#    - Verify if unique-id is per-tenant, per-index, or per-source
+#    - Document any URL encoding requirements
+#
+# 2. AUTHENTICATION MECHANISM
+#    - Verify authentication method (most likely HTTP header)
+#    - Determine header name (e.g., X-Sumo-Token, Authorization, etc.)
+#    - Confirm if token is plain or requires prefix (like "Splunk" in Splunk HEC)
+#    - Test authentication failure responses to guide error handling
+#
+# 3. DATA FORMAT TRANSFORMATION
+#    - Determine if SumoLogic accepts HEC-like JSON format or requires different structure
+#    - Possible differences to check:
+#      * Timestamp field: May be "timestamp", "time", "@timestamp", or auto-detected
+#      * Event wrapper: May require top-level "event" key or accept flat JSON
+#      * Source metadata: May use "source", "source_category", "source_host"
+#      * Index concept: May use "_index" or source_category for organization
+#    - Document required vs optional fields
+#    - Test with sample event to validate format
+#
+# 4. METADATA FIELD MAPPING
+#    - Map Splunk fields to SumoLogic equivalents:
+#      * host → _sourceHost or source_host
+#      * sourcetype → _sourceCategory or source_category
+#      * index → ? (may not have direct equivalent)
+#    - Map CI metadata fields:
+#      * ci_type → custom field or _sourceCategory tag
+#      * job_name → custom field or metadata
+#      * build_number → custom field or metadata
+#    - Determine if custom fields need prefix (e.g., _metadata.ci_type)
+#
+# 5. SEARCH URL GENERATION
+#    - Determine SumoLogic search UI URL pattern
+#    - Expected base: https://service.sumologic.com/ui/#section/search/
+#    - Verify query parameter format for:
+#      * Search query (spoke cluster, test type)
+#      * Time range (equivalent to Splunk's "earliest")
+#    - Test URL generation with actual SumoLogic instance
+#    - Example target format:
+#      https://service.sumologic.com/ui/#section/search?query=node_name%3Dkni-qe-70&startTime=-1h
+#
+# 6. HTTP REQUEST DETAILS
+#    - Verify HTTP method (likely POST)
+#    - Determine required headers:
+#      * Content-Type: application/json (likely)
+#      * Authentication header (verify exact format)
+#      * Any custom headers for metadata
+#    - Check if request requires specific User-Agent
+#    - Document expected success status codes (200, 201, 202?)
+#
+# 7. ERROR HANDLING
+#    - Map HTTP error codes to error messages:
+#      * 400: Bad request - check data format
+#      * 401: Authentication failed - verify token
+#      * 403: Forbidden - check permissions
+#      * 429: Rate limited - implement backoff
+#      * 500+: Server error - retry with backoff
+#    - Determine if response body contains error details
+#    - Test retry logic with transient failures
+#
+# 8. RETRY AND BACKOFF
+#    - Verify if SumoLogic has rate limiting
+#    - Determine appropriate retry delay (may need exponential backoff)
+#    - Check if Retry-After header is provided on 429 responses
+#    - Set reasonable timeout values based on typical response times
+#
+# 9. BATCH PROCESSING (OPTIONAL)
+#    - Check if SumoLogic supports batch event submission
+#    - If yes: Determine batch format (array of events, newline-delimited JSON)
+#    - If yes: Determine maximum batch size
+#    - Consider implementing batch mode for efficiency
+#
+# 10. TESTING AND VALIDATION
+#     - Create test playbook with sample data
+#     - Verify events appear in SumoLogic UI
+#     - Validate search URLs work correctly
+#     - Test error scenarios (bad credentials, network failure, malformed data)
+#     - Compare data fidelity with Splunk (ensure no data loss in migration)
+#
+# ============================================================================
+# IMPLEMENTATION TEMPLATE (uncomment and complete when ready)
+# ============================================================================
+#
+# - name: Validate required parameters
+#   ansible.builtin.assert:
+#     that:
+#       - tkslp_report_data | length > 0
+#       - tkslp_report_data.test_results is defined
+#       - tkslp_report_data.test_results | length > 0
+#       - tkslp_spoke_cluster | length > 0
+#       - tkslp_hub_cluster | length > 0
+#     fail_msg: "Missing required parameters"
+#
+# - name: Validate SumoLogic credentials
+#   ansible.builtin.assert:
+#     that:
+#       - tkslp_sumologic_hec_url | length > 0
+#       - tkslp_sumologic_hec_token | length > 0
+#     fail_msg: "Missing SumoLogic credentials"
+#   no_log: "{{ ansible_verbosity < 3 }}"
+#
+# - name: Create output directory
+#   ansible.builtin.file:
+#     path: "{{ tkslp_output_dir }}"
+#     state: directory
+#     mode: '0755'
+#
+# - name: Build event payload (adapt for SumoLogic format)
+#   # TODO: Transform report_data to SumoLogic-compatible format
+#   # Consider differences in field names, nesting, metadata
+#
+# - name: POST to SumoLogic endpoint (with retries)
+#   ansible.builtin.uri:
+#     url: "{{ tkslp_sumologic_hec_url }}"
+#     method: POST
+#     headers:
+#       # TODO: Verify correct authentication header format
+#       # Example options:
+#       # X-Sumo-Token: "{{ tkslp_sumologic_hec_token }}"
+#       # Authorization: "Bearer {{ tkslp_sumologic_hec_token }}"
+#       Content-Type: "application/json"
+#     body: "{{ _tkslp_event_payload }}"
+#     body_format: json
+#     validate_certs: true  # TODO: Verify certificate requirements
+#     timeout: "{{ tkslp_request_timeout }}"
+#     status_code: [200, 201, 202]  # TODO: Verify accepted status codes
+#   register: _tkslp_send_result
+#   until: _tkslp_send_result is not failed
+#   retries: "{{ tkslp_retries }}"
+#   delay: "{{ tkslp_retry_delay }}"
+#   when: tkslp_do_send | bool
+#   no_log: "{{ ansible_verbosity < 3 }}"
+#
+# - name: Generate SumoLogic search URL
+#   vars:
+#     # TODO: Verify actual search URL pattern
+#     _tkslp_search_query: "node_name={{ tkslp_spoke_cluster }}"
+#     _tkslp_time_range: "-1h"
+#   ansible.builtin.set_fact:
+#     _tkslp_search_url: >-
+#       https://service.sumologic.com/ui/#section/search?
+#       query={{ _tkslp_search_query | urlencode }}&
+#       startTime={{ _tkslp_time_range }}
+#
+# - name: Set success result
+#   ansible.builtin.set_fact:
+#     sumologic_push_result:
+#       success: true
+#       url: "{{ _tkslp_search_url }}"
+#       error_msg: null
+#       events_sent: "{{ tkslp_report_data.test_results | length }}"
+#
+# ============================================================================

@@ -1,0 +1,135 @@
+---
+# Parse ZTP AI deployment time metrics from deployment files
+# Sets: _tkdp_test_specific_data with ztp_ai_deployment_time metrics
+
+- name: Find ZTP deployment JUnit XML files
+  ansible.builtin.find:
+    paths: "{{ _tkdp_current_test_dir }}"
+    patterns: "*ztp*.xml,*suite*.xml"
+  register: _tkdp_ztp_xml_files
+
+- name: Parse ZTP deployment results
+  when: _tkdp_ztp_xml_files.files | length > 0
+  block:
+    - name: Read XML content
+      ansible.builtin.slurp:
+        src: "{{ _tkdp_ztp_xml_files.files[0].path }}"
+      register: _tkdp_ztp_xml_content
+
+    - name: Parse XML to extract deployment time
+      ansible.builtin.set_fact:
+        _tkdp_ztp_xml: "{{ _tkdp_ztp_xml_content.content | b64decode }}"
+
+    - name: Extract deployment time from XML
+      ansible.builtin.set_fact:
+        _tkdp_deployment_time_match: "{{ _tkdp_ztp_xml | regex_search('time=\"([\\d.]+)\"', '\\1') }}"
+
+    - name: Set deployment time in seconds
+      ansible.builtin.set_fact:
+        _tkdp_deployment_time_seconds: >-
+          {{ (_tkdp_deployment_time_match[0] | float)
+             if _tkdp_deployment_time_match and _tkdp_deployment_time_match | length > 0
+             else 0 }}
+
+    - name: Read deployment-timeline.json for milestone data
+      ansible.builtin.slurp:
+        src: "{{ _tkdp_current_test_dir }}/deployment-timeline.json"
+      register: _tkdp_ztp_timeline_json
+      failed_when: false
+
+    - name: Parse milestones from JSON
+      when: _tkdp_ztp_timeline_json.content is defined
+      ansible.builtin.set_fact:
+        _tkdp_ztp_milestones: "{{ _tkdp_ztp_timeline_json.content | b64decode | from_json }}"
+
+    - name: Set empty milestones when no JSON
+      when: _tkdp_ztp_timeline_json.content is not defined
+      ansible.builtin.set_fact:
+        _tkdp_ztp_milestones: []
+
+    - name: Read spoke-reboot-count.txt for reboot analysis
+      ansible.builtin.slurp:
+        src: "{{ _tkdp_current_test_dir }}/spoke-reboot-count.txt"
+      register: _tkdp_ztp_reboot_content
+      failed_when: false
+
+    - name: Extract reboot count
+      when: _tkdp_ztp_reboot_content.content is defined
+      block:
+        - name: Decode reboot analysis
+          ansible.builtin.set_fact:
+            _tkdp_ztp_reboot_analysis: "{{ _tkdp_ztp_reboot_content.content | b64decode }}"
+
+        - name: Extract reboot count from analysis
+          ansible.builtin.set_fact:
+            _tkdp_reboot_count_match: "{{ _tkdp_ztp_reboot_analysis | regex_search('Reboots During ZTP: (\\d+)', '\\1') }}"
+
+        - name: Set reboot count value
+          ansible.builtin.set_fact:
+            _tkdp_reboot_count: "{{ _tkdp_reboot_count_match[0] if _tkdp_reboot_count_match else '0' }}"
+
+    - name: Set default reboot count when no reboot file
+      when: _tkdp_ztp_reboot_content.content is not defined
+      ansible.builtin.set_fact:
+        _tkdp_reboot_count: "0"
+
+    - name: Calculate stage times from milestones
+      ansible.builtin.set_fact:
+        _tkdp_deploy_start_ts: >-
+          {{ (_tkdp_ztp_milestones
+              | selectattr('event', 'equalto', 'ZTP.ClusterInstanceCreated')
+              | map(attribute='timestamp') | first | default('')) }}
+        _tkdp_deploy_install_ts: >-
+          {{ (_tkdp_ztp_milestones
+              | selectattr('event', 'equalto', 'AgentClusterInstall.Condition.Completed')
+              | map(attribute='timestamp') | first | default('')) }}
+        _tkdp_deploy_end_ts: >-
+          {{ (_tkdp_ztp_milestones
+              | selectattr('event', 'equalto', 'TALM.CGU.Completed')
+              | map(attribute='timestamp') | first | default('')) }}
+
+    - name: Compute stage seconds from milestone timestamps
+      when:
+        - _tkdp_deploy_start_ts | trim | length > 0
+        - _tkdp_deploy_install_ts | trim | length > 0
+        - _tkdp_deploy_end_ts | trim | length > 0
+      ansible.builtin.set_fact:
+        _tkdp_deploy_sno_seconds: >-
+          {{ ((_tkdp_deploy_install_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+            - (_tkdp_deploy_start_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}
+        _tkdp_wait_du_seconds: >-
+          {{ ((_tkdp_deploy_end_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+            - (_tkdp_deploy_install_ts | trim | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }}
+
+    - name: Fall back to total time when milestones unavailable
+      when: _tkdp_deploy_sno_seconds is not defined
+      ansible.builtin.set_fact:
+        _tkdp_deploy_sno_seconds: "{{ _tkdp_deployment_time_seconds | float | round | int }}"
+        _tkdp_wait_du_seconds: 0
+
+    - name: Set ZTP deployment-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          test_type: "deployment"
+          iteration: 1
+          total_minutes: "{{ ((_tkdp_deployment_time_seconds | float) / 60) | round(2) }}"
+          reboot_count: "{{ _tkdp_reboot_count | int }}"
+          stages:
+            - stage_name: "deploy_sno_du_node"
+              time: "{{ _tkdp_deploy_sno_seconds | int }}"
+            - stage_name: "wait_for_du_profile"
+              time: "{{ _tkdp_wait_du_seconds | int }}"
+
+  rescue:
+    - name: Log ztp_ai_deployment_time parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse ztp_ai_deployment_time metrics"
+
+    - name: Set empty ztp_ai_deployment_time data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing ZTP deployment XML
+  when: _tkdp_ztp_xml_files.files | length == 0
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

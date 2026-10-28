@@ -1,0 +1,108 @@
+---
+# Parse Cyclictest test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with cyclictest metrics
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_cyclictest_log
+  failed_when: false
+
+- name: Parse Cyclictest metrics from log
+  when: _tkdp_cyclictest_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_cyclictest_log_text: "{{ _tkdp_cyclictest_log.content | b64decode }}"
+
+    - name: Extract Min/Avg/Max latency lines
+      ansible.builtin.set_fact:
+        _tkdp_cyclictest_min_line: "{{ _tkdp_cyclictest_log_text | regex_search('# Min Latencies: (.+)', '\\1') }}"
+        _tkdp_cyclictest_avg_line: "{{ _tkdp_cyclictest_log_text | regex_search('# Avg Latencies: (.+)', '\\1') }}"
+        _tkdp_cyclictest_max_line: "{{ _tkdp_cyclictest_log_text | regex_search('# Max Latencies: (.+)', '\\1') }}"
+
+    - name: Parse latency values
+      when: _tkdp_cyclictest_max_line and _tkdp_cyclictest_max_line | length > 0
+      block:
+        - name: Split values into lists
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_min_values: "{{ (_tkdp_cyclictest_min_line | default([''], true) | first).split() | map('int') | list }}"
+            _tkdp_cyclictest_avg_values: "{{ (_tkdp_cyclictest_avg_line | default([''], true) | first).split() | map('int') | list }}"
+            _tkdp_cyclictest_max_values: "{{ (_tkdp_cyclictest_max_line | default([''], true) | first).split() | map('int') | list }}"
+
+        - name: Calculate overall max latency
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_max_overall: "{{ _tkdp_cyclictest_max_values | max }}"
+
+        - name: Generate parser script
+          ansible.builtin.template:
+            src: parse_cyclictest_availability.py.j2
+            dest: "{{ _tkdp_current_test_dir }}/parse_cyclictest_availability.py"
+            mode: '0755'
+          vars:
+            num_threads: "{{ _tkdp_cyclictest_max_values | length }}"
+
+        - name: Compute per-thread availability from histogram
+          ansible.builtin.command:
+            cmd: python3 "{{ _tkdp_current_test_dir }}/parse_cyclictest_availability.py"
+            stdin: "{{ _tkdp_cyclictest_log_text }}"
+          register: _tkdp_cyclictest_availability_result
+          changed_when: false
+          failed_when: false
+
+        - name: Parse availability results
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_avail_data: >-
+              {{ _tkdp_cyclictest_availability_result.stdout |
+                 default('{"per_thread":[],"overall_availability":100.0,"overall_number_of_nines":100}') |
+                 from_json }}
+
+        - name: Build per-thread results (test_units format for Splunk dashboard)
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_test_units: >-
+              {{ _tkdp_cyclictest_test_units | default([]) + [{
+                'index': item | string,
+                'max_latency': _tkdp_cyclictest_max_values[item],
+                'min_latency': _tkdp_cyclictest_min_values[item],
+                'avg_latency': _tkdp_cyclictest_avg_values[item],
+                'availability': (_tkdp_cyclictest_avail_data.per_thread[item] | default({'availability': 100.0})).availability,
+                'number_of_nines': (_tkdp_cyclictest_avail_data.per_thread[item] | default({'number_of_nines': 100})).number_of_nines
+              }] }}
+          loop: "{{ range(0, _tkdp_cyclictest_max_values | length) | list }}"
+
+        - name: Extract duration from command line (e.g., "-D 5m")
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_duration_match: "{{ _tkdp_cyclictest_log_text | regex_search('-D\\s+(\\S+)', '\\1') }}"
+
+        - name: Set duration value
+          ansible.builtin.set_fact:
+            _tkdp_cyclictest_duration: "{{ _tkdp_cyclictest_duration_match | default(['N/A'], true) | first }}"
+
+        - name: Set cyclictest-specific data for Splunk (matches splunk_kpis_reporter schema)
+          ansible.builtin.set_fact:
+            _tkdp_test_specific_data:
+              duration: "{{ _tkdp_cyclictest_duration }}"
+              test_units: "{{ _tkdp_cyclictest_test_units | default([]) }}"
+              max_overall: "{{ _tkdp_cyclictest_max_overall }}"
+              availability_overall: "{{ _tkdp_cyclictest_avail_data.overall_availability | default(100.0) }}"
+              number_of_nines_overall: "{{ _tkdp_cyclictest_avail_data.overall_number_of_nines | default(100) }}"
+              threads: "{{ _tkdp_cyclictest_max_values | length }}"
+
+    - name: Set defaults when no latency data found
+      when: not _tkdp_cyclictest_max_line or _tkdp_cyclictest_max_line | length == 0
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+  rescue:
+    - name: Log cyclictest parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse cyclictest metrics from podman-run.log"
+
+    - name: Set empty cyclictest data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing cyclictest log
+  when: _tkdp_cyclictest_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

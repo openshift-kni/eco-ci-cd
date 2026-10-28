@@ -1,0 +1,118 @@
+---
+# Parse OSLAT test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with oslat metrics
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_oslat_log
+  failed_when: false
+
+- name: Parse OSLAT metrics from log
+  when: _tkdp_oslat_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_oslat_log_text: "{{ _tkdp_oslat_log.content | b64decode }}"
+
+    - name: Extract core list
+      ansible.builtin.set_fact:
+        _tkdp_oslat_cores_line: "{{ _tkdp_oslat_log_text | regex_search('Core:\\s+(.+)', '\\1') }}"
+
+    - name: Extract maximum latencies line
+      ansible.builtin.set_fact:
+        _tkdp_oslat_max_line: "{{ _tkdp_oslat_log_text | regex_search('Maximum:\\s+(.+)\\(us\\)', '\\1') }}"
+
+    - name: Extract minimum latencies line
+      ansible.builtin.set_fact:
+        _tkdp_oslat_min_line: "{{ _tkdp_oslat_log_text | regex_search('Minimum:\\s+(.+)\\(us\\)', '\\1') }}"
+
+    - name: Extract average latencies line
+      ansible.builtin.set_fact:
+        _tkdp_oslat_avg_line: "{{ _tkdp_oslat_log_text | regex_search('Average:\\s+(.+)\\(us\\)', '\\1') }}"
+
+    - name: Extract total runtime
+      ansible.builtin.set_fact:
+        _tkdp_oslat_runtime: "{{ (_tkdp_oslat_log_text | regex_search('Total runtime:\\s+(\\d+)', '\\1') | default(['60'], true) | first) }}"
+
+    - name: Parse cores into list
+      ansible.builtin.set_fact:
+        _tkdp_oslat_cores: "{{ (_tkdp_oslat_cores_line | default([''], true) | first).split() }}"
+
+    - name: Parse max latencies into list
+      ansible.builtin.set_fact:
+        _tkdp_oslat_max_values: "{{ (_tkdp_oslat_max_line | default([''], true) | first).split() }}"
+
+    - name: Parse min latencies into list
+      ansible.builtin.set_fact:
+        _tkdp_oslat_min_values: "{{ (_tkdp_oslat_min_line | default([''], true) | first).split() }}"
+
+    - name: Parse avg latencies into list
+      ansible.builtin.set_fact:
+        _tkdp_oslat_avg_values: "{{ (_tkdp_oslat_avg_line | default([''], true) | first).split() }}"
+
+    - name: Calculate overall max latency
+      ansible.builtin.set_fact:
+        _tkdp_oslat_overall_max: "{{ _tkdp_oslat_max_values | map('int') | max | default(0) }}"
+
+    - name: Generate parser script
+      ansible.builtin.template:
+        src: parse_oslat_availability.py.j2
+        dest: "{{ _tkdp_current_test_dir }}/parse_oslat_availability.py"
+        mode: '0755'
+      vars:
+        num_cores: "{{ _tkdp_oslat_cores | length }}"
+
+    - name: Compute per-core availability from histogram
+      ansible.builtin.command:
+        cmd: python3 "{{ _tkdp_current_test_dir }}/parse_oslat_availability.py"
+        stdin: "{{ _tkdp_oslat_log_text }}"
+      register: _tkdp_oslat_availability_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse availability results
+      ansible.builtin.set_fact:
+        _tkdp_oslat_availability_data: "{{ _tkdp_oslat_availability_result.stdout | default('[]') | from_json }}"
+
+    - name: Calculate overall availability
+      ansible.builtin.set_fact:
+        _tkdp_oslat_availability: >-
+          {{ (_tkdp_oslat_availability_data | map(attribute='availability') | min | default(100.0)) | string }}
+
+    - name: Build per-core results (test_units format for Splunk dashboard)
+      ansible.builtin.set_fact:
+        _tkdp_oslat_test_units: >-
+          {{ _tkdp_oslat_test_units | default([]) + [{
+            'index': _tkdp_oslat_cores[item] | string,
+            'max_latency': _tkdp_oslat_max_values[item] | int,
+            'min_latency': (_tkdp_oslat_min_values[item] | default('0')) | int,
+            'avg_latency': (_tkdp_oslat_avg_values[item] | default('0')) | float,
+            'availability': (_tkdp_oslat_availability_data[item] | default({'availability': 100.0})).availability,
+            'number_of_nines': (_tkdp_oslat_availability_data[item] | default({'number_of_nines': 100})).number_of_nines
+          }] }}
+      loop: "{{ range(0, _tkdp_oslat_cores | length) | list }}"
+      when: _tkdp_oslat_cores | length > 0 and _tkdp_oslat_max_values | length > 0
+
+    - name: Set oslat-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          duration: "{{ _tkdp_oslat_runtime | int }}"
+          test_units: "{{ _tkdp_oslat_test_units | default([]) }}"
+          max_latency: "{{ _tkdp_oslat_overall_max }}"
+          availability: "{{ _tkdp_oslat_availability }}"
+          cores: "{{ _tkdp_oslat_cores | join(', ') }}"
+
+  rescue:
+    - name: Log oslat parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse oslat metrics from podman-run.log"
+
+    - name: Set empty oslat data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Handle missing oslat log
+  when: _tkdp_oslat_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data: {}

@@ -1,0 +1,205 @@
+---
+# Push to Data Lake Playbook
+# Purpose: Push telco-kpis test results to observability backends (Splunk, SumoLogic)
+# Output: JSON artifact with push status and search URL
+
+- name: Push Telco-KPIs Results to Data Lake
+  hosts: bastion
+  gather_facts: true
+
+  tasks:
+    - name: Load telco-kpis default configuration
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/telco_kpis_defaults/defaults/main.yml"
+
+    - name: Display push configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Push to Data Lake - Configuration"
+          - "=========================================="
+          - "Hub Cluster:    {{ hub_cluster }}"
+          - "Spoke Cluster:  {{ spoke_cluster }}"
+          - "Destination:    {{ data_lake_destination }}"
+          - "URL:            {{ data_lake_url }}"
+          - "Test Names:     {{ test_names }}"
+          - "Formal Test:    {{ formal_test }}"
+          - "=========================================="
+
+    - name: Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - hub_cluster is defined
+          - hub_cluster | length > 0
+          - spoke_cluster is defined
+          - spoke_cluster | length > 0
+          - data_lake_destination is defined
+          - data_lake_destination in ['splunk', 'sumologic']
+          - data_lake_url is defined
+          - data_lake_url | length > 0
+          - data_lake_token is defined
+          - data_lake_token | length > 0
+        fail_msg: "Missing or invalid required parameters: hub_cluster, spoke_cluster, data_lake_destination, data_lake_url, data_lake_token"
+      no_log: "{{ ansible_verbosity < 3 }}"
+
+    - name: Set default values for optional parameters
+      ansible.builtin.set_fact:
+        _test_names: "{{ test_names | default('all') }}"
+        _formal_test: "{{ formal_test | default(true) }}"
+        _ci_metadata:
+          ci_type: "{{ ci_type | default('') }}"
+          job_name: "{{ ci_job_name | default('') }}"
+          build_number: "{{ ci_build_number | default('') }}"
+
+    - name: Prepare test data from shared artifacts
+      block:
+        - name: Include telco_kpis_data_prep role
+          ansible.builtin.include_role:
+            name: telco_kpis_data_prep
+          vars:
+            tkdp_hub_cluster: "{{ hub_cluster }}"
+            tkdp_spoke_cluster: "{{ spoke_cluster }}"
+            tkdp_test_names: "{{ _test_names }}"
+
+        - name: Validate report_data was generated
+          ansible.builtin.assert:
+            that:
+              - report_data is defined
+              - report_data.test_results is defined
+              - report_data.test_results | length > 0
+            fail_msg: "No test data available to push"
+
+      rescue:
+        - name: Set failure result for data preparation error
+          ansible.builtin.set_fact:
+            _push_result:
+              success: false
+              urls: {}
+              error_msg: "Data preparation failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
+              events_sent: 0
+
+        - name: Skip to artifact generation after data prep failure
+          ansible.builtin.meta: end_host
+
+    - name: Push to Splunk
+      when: data_lake_destination == 'splunk'
+      block:
+        - name: Include telco_kpis_splunk_push role
+          ansible.builtin.include_role:
+            name: telco_kpis_splunk_push
+          vars:
+            tksp_report_data: "{{ report_data }}"
+            tksp_hub_cluster: "{{ hub_cluster }}"
+            tksp_spoke_cluster: "{{ spoke_cluster }}"
+            tksp_splunk_hec_url: "{{ data_lake_url }}"
+            tksp_splunk_hec_token: "{{ data_lake_token }}"
+            tksp_formal_test: "{{ _formal_test }}"
+            tksp_ci_metadata: "{{ _ci_metadata }}"
+            tksp_do_send: true
+
+        - name: Set push result from Splunk
+          ansible.builtin.set_fact:
+            _push_result: "{{ splunk_push_result }}"
+
+      rescue:
+        - name: Set failure result for Splunk push error
+          ansible.builtin.set_fact:
+            _push_result:
+              success: false
+              urls: {}
+              error_msg: "Splunk push failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
+              events_sent: 0
+
+    - name: Push to SumoLogic
+      when: data_lake_destination == 'sumologic'
+      block:
+        - name: Include telco_kpis_sumologic_push role
+          ansible.builtin.include_role:
+            name: telco_kpis_sumologic_push
+          vars:
+            tkslp_report_data: "{{ report_data }}"
+            tkslp_hub_cluster: "{{ hub_cluster }}"
+            tkslp_spoke_cluster: "{{ spoke_cluster }}"
+            tkslp_sumologic_hec_url: "{{ data_lake_url }}"
+            tkslp_sumologic_hec_token: "{{ data_lake_token }}"
+            tkslp_formal_test: "{{ _formal_test }}"
+            tkslp_ci_metadata: "{{ _ci_metadata }}"
+            tkslp_do_send: true
+
+        - name: Set push result from SumoLogic
+          ansible.builtin.set_fact:
+            _push_result: "{{ sumologic_push_result }}"
+
+      rescue:
+        - name: Set failure result for SumoLogic push error
+          ansible.builtin.set_fact:
+            _push_result:
+              success: false
+              urls: {}
+              error_msg: "SumoLogic push failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
+              events_sent: 0
+
+    - name: Build output artifact
+      ansible.builtin.set_fact:
+        _output_artifact:
+          destination: "{{ data_lake_destination }}"
+          destination_url: "{{ data_lake_url }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          hub_cluster: "{{ hub_cluster }}"
+          spoke_cluster: "{{ spoke_cluster }}"
+          test_names: >-
+            {{ report_data.test_results.keys() | list
+               if report_data is defined and report_data.test_results is defined
+               else [] }}
+          formal_test: "{{ _formal_test }}"
+          success: "{{ _push_result.success }}"
+          events_sent: "{{ _push_result.events_sent }}"
+          urls: "{{ _push_result.urls }}"
+          error_msg: "{{ _push_result.error_msg }}"
+          missing_tests: "{{ _tkdp_missing_tests | default([]) }}"
+
+    - name: Create artifact output directory
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Write output artifact JSON
+      ansible.builtin.copy:
+        content: "{{ _output_artifact | to_nice_json }}"
+        dest: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/push-to-data-lake-result-for-{{ spoke_cluster }}.json"
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Display completion summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Push to Data Lake - Summary"
+          - "=========================================="
+          - "Destination:     {{ data_lake_destination }}"
+          - "URL:             {{ data_lake_url }}"
+          - "Success:         {{ _push_result.success }}"
+          - "Tests pushed:    {{ _output_artifact.test_names | join(', ') }}"
+          - "Events sent:     {{ _push_result.events_sent }}"
+          - "Missing tests:   {{ _output_artifact.missing_tests | join(', ') if _output_artifact.missing_tests | length > 0 else 'none' }}"
+          - "Error:           {{ _push_result.error_msg | default('none') }}"
+          - "=========================================="
+          - "Dashboard URLs"
+          - "=========================================="
+          - "{% for test_type, url in _push_result.urls.items() %}{{ test_type }}: {{ url }}{% endfor %}"
+          - "Artifact:        {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/push-to-data-lake-result-for-{{ spoke_cluster }}.json"
+          - "=========================================="
+
+    - name: Log dashboard URLs for easy troubleshooting
+      ansible.builtin.debug:
+        msg: "{{ data_lake_destination | upper }} Dashboard URLs: {{ _push_result.urls | to_json }}"
+      when: _push_result.urls | default({}) | length > 0
+
+    - name: Fail playbook if push was unsuccessful
+      ansible.builtin.fail:
+        msg: "Push to {{ data_lake_destination }} failed: {{ _push_result.error_msg }}"
+      when:
+        - not (_push_result.success | bool)
+        - data_lake_destination == 'splunk'  # Only fail for Splunk, SumoLogic is expected to fail (stub)

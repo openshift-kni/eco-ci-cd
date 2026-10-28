@@ -1,0 +1,142 @@
+---
+# Load test data for a single test from its artifact directory
+# Expects: _tkdp_test_item (dict with path, test_name, timestamp)
+
+- name: Set test directory path
+  ansible.builtin.set_fact:
+    _tkdp_current_test_dir: "{{ _tkdp_test_item.path }}"
+    _tkdp_current_test_name: "{{ _tkdp_test_item.test_name }}"
+
+- name: Find JUnit XML file
+  ansible.builtin.find:
+    paths: "{{ _tkdp_current_test_dir }}"
+    patterns: "junit*.xml"
+    file_type: file
+  register: _tkdp_junit_files
+
+- name: Check if JUnit XML exists
+  ansible.builtin.set_fact:
+    _tkdp_junit_file: >-
+      {{ _tkdp_junit_files.files[0].path
+         if _tkdp_junit_files.files | length > 0
+         else '' }}
+
+- name: Parse JUnit XML
+  when: _tkdp_junit_file | length > 0
+  block:
+    - name: Read JUnit XML file
+      ansible.builtin.slurp:
+        src: "{{ _tkdp_junit_file }}"
+      register: _tkdp_junit_content
+
+    - name: Parse JUnit XML
+      community.general.xml:
+        xmlstring: "{{ _tkdp_junit_content['content'] | b64decode }}"
+        xpath: //testcase
+        content: attribute
+      register: _tkdp_junit_parsed
+      failed_when: false
+
+    - name: Extract test status from JUnit
+      ansible.builtin.set_fact:
+        _tkdp_test_status: >-
+          {% if _tkdp_junit_parsed.matches is defined and _tkdp_junit_parsed.matches | length > 0 %}
+            {% set testcase = _tkdp_junit_parsed.matches[0].testcase %}
+            {% if testcase.failure is defined %}FAIL
+            {% elif testcase.skipped is defined %}N/A
+            {% elif testcase.error is defined %}FAIL
+            {% else %}PASS
+            {% endif %}
+          {% else %}N/A
+          {% endif %}
+
+  rescue:
+    - name: Set status to N/A on parse error
+      ansible.builtin.set_fact:
+        _tkdp_test_status: "N/A"
+
+    - name: Log JUnit parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse JUnit XML for {{ _tkdp_current_test_name }}"
+
+- name: Set default status if no JUnit file
+  ansible.builtin.set_fact:
+    _tkdp_test_status: "N/A"
+  when: _tkdp_junit_file | length == 0
+
+- name: Find test-specific results JSON file
+  ansible.builtin.find:
+    paths: "{{ _tkdp_current_test_dir }}"
+    patterns:
+      - "{{ _tkdp_current_test_name }}-results.json"
+      - "{{ _tkdp_current_test_name }}_results.json"
+      - "*-results.json"
+    file_type: file
+  register: _tkdp_results_files
+
+- name: Load test-specific results
+  when: _tkdp_results_files.files | length > 0
+  block:
+    - name: Read results JSON file
+      ansible.builtin.slurp:
+        src: "{{ _tkdp_results_files.files[0].path }}"
+      register: _tkdp_results_content
+
+    - name: Parse results JSON
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: "{{ _tkdp_results_content['content'] | b64decode | from_json }}"
+
+  rescue:
+    - name: Set empty results on parse error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+    - name: Log results parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse results JSON for {{ _tkdp_current_test_name }}"
+
+- name: Parse test metrics from logs if no JSON file
+  when: _tkdp_results_files.files | length == 0
+  block:
+    - name: Check if parser exists for test type
+      ansible.builtin.stat:
+        path: "{{ role_path }}/tasks/parsers/parse_{{ _tkdp_current_test_name }}.yml"
+      register: _tkdp_parser_check
+      delegate_to: localhost
+
+    - name: Call test-specific parser
+      ansible.builtin.include_tasks: "parsers/parse_{{ _tkdp_current_test_name }}.yml"
+      when: _tkdp_parser_check.stat.exists
+
+    - name: Set empty results if no parser found
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+      when: not _tkdp_parser_check.stat.exists
+
+  rescue:
+    - name: Log parser error
+      ansible.builtin.debug:
+        msg: "WARNING: Parser failed for {{ _tkdp_current_test_name }}, using empty data"
+
+    - name: Set empty results on parser error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data: {}
+
+- name: Build test result entry
+  ansible.builtin.set_fact:
+    _tkdp_test_entry: >-
+      {{ {
+        'test_type': _tkdp_current_test_name,
+        'status': _tkdp_test_status
+      } | combine(_tkdp_test_specific_data) }}
+
+- name: Add test result to collection
+  ansible.builtin.set_fact:
+    _tkdp_test_results: >-
+      {{ _tkdp_test_results | combine({
+        _tkdp_current_test_name: _tkdp_test_entry
+      }) }}
+
+- name: Display test load result
+  ansible.builtin.debug:
+    msg: "Loaded {{ _tkdp_current_test_name }}: status={{ _tkdp_test_status }}"

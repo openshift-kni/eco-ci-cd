@@ -1,0 +1,64 @@
+---
+# Parse cpu_util test metrics from podman-run.log
+# Sets: _tkdp_test_specific_data with cpu_util scenarios
+
+- name: Read podman-run.log
+  ansible.builtin.slurp:
+    src: "{{ _tkdp_current_test_dir }}/podman-run.log"
+  register: _tkdp_cpu_util_log
+  failed_when: false
+
+- name: Parse cpu_util metrics from log
+  when: _tkdp_cpu_util_log.content is defined
+  block:
+    - name: Decode log content
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_log_text: "{{ _tkdp_cpu_util_log.content | b64decode }}"
+
+    - name: Generate parser script
+      ansible.builtin.template:
+        src: parse_cpu_util.py.j2
+        dest: "{{ _tkdp_current_test_dir }}/parse_cpu_util.py"
+        mode: '0755'
+
+    - name: Extract cpu_util ranmetrics from log
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -E '^\s*ranmetrics_cpu_' | python3 "{{ _tkdp_current_test_dir }}/parse_cpu_util.py"
+      args:
+        stdin: "{{ _tkdp_cpu_util_log_text }}"
+        executable: /bin/bash
+      register: _tkdp_cpu_util_ranmetrics_result
+      changed_when: false
+      failed_when: false
+
+    - name: Parse cpu_util ranmetrics
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_scenarios: "{{ _tkdp_cpu_util_ranmetrics_result.stdout | default('[]') | from_json }}"
+      when: _tkdp_cpu_util_ranmetrics_result.stdout is defined and _tkdp_cpu_util_ranmetrics_result.stdout | length > 2
+
+    - name: Set empty scenarios when no ranmetrics found
+      ansible.builtin.set_fact:
+        _tkdp_cpu_util_scenarios: []
+      when: _tkdp_cpu_util_scenarios is not defined
+
+    - name: Set cpu_util-specific data for Splunk (matches splunk_kpis_reporter schema)
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          scenarios: "{{ _tkdp_cpu_util_scenarios | default([]) }}"
+
+  rescue:
+    - name: Log cpu_util parse error
+      ansible.builtin.debug:
+        msg: "WARNING: Failed to parse cpu_util metrics from podman-run.log"
+
+    - name: Set empty cpu_util data on error
+      ansible.builtin.set_fact:
+        _tkdp_test_specific_data:
+          scenarios: []
+
+- name: Handle missing cpu_util log
+  when: _tkdp_cpu_util_log.content is not defined
+  ansible.builtin.set_fact:
+    _tkdp_test_specific_data:
+      scenarios: []

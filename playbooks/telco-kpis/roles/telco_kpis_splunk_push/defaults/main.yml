@@ -1,0 +1,45 @@
+---
+# Defaults for telco_kpis_splunk_push role
+# Pushes telco-kpis test results to Splunk HEC endpoint
+
+# Input: report_data fact from telco_kpis_data_prep role
+tksp_report_data: {}
+
+# Cluster identification (REQUIRED for event metadata)
+tksp_hub_cluster: ""
+tksp_spoke_cluster: ""
+
+# Splunk HEC configuration (REQUIRED)
+tksp_splunk_hec_url: ""
+tksp_splunk_hec_token: ""
+tksp_splunk_index: "ecosystem-telco"
+tksp_splunk_dashboard_base_url: "https://rhcorporate.splunkcloud.com"
+
+# Test metadata
+tksp_formal_test: false
+
+# CI metadata (optional, for provenance tracking)
+tksp_ci_metadata:
+  ci_type: ""
+  job_name: ""
+  build_number: ""
+
+# Retry configuration for transient failures
+# Note: Ansible's native retry uses fixed delay (no exponential backoff)
+# For exponential backoff, consider: 5 retries × 15s = simulates 15, 30, 60s pattern average
+tksp_retries: 5
+tksp_retry_delay: 15
+tksp_request_timeout: 30
+
+# Upload control — enabled by default (use false for dry-run)
+tksp_do_send: true
+
+# Output directory for generated event JSON files (for debugging)
+tksp_output_dir: "/tmp/telco-kpis-splunk-push"
+
+# Output: splunk_push_result fact
+# Structure:
+#   success: true/false
+#   url: "https://splunk.../search?..."
+#   error_msg: "..." (if failed)
+#   events_sent: N

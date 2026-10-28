@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+################################################################################
+# Parser: parse_oslat_availability.py
+# Purpose: Compute availability and number of nines from oslat histogram
+# Generated from: playbooks/telco-kpis/roles/telco_kpis_data_prep/templates/parse_oslat_availability.py.j2
+#
+# Description:
+#   Parses oslat histogram output and computes per-core availability metrics
+#   with number of nines calculation.
+#
+# Input: stdin (oslat histogram from podman-run.log)
+# Output: JSON array of per-core results [{availability, number_of_nines}, ...]
+################################################################################
+
+import json, re, sys
+
+log = sys.stdin.read()
+threshold = 20
+num_cores = {{ num_cores }}
+
+histogram = {}
+for m in re.finditer(r'^\s+(\d+)\s+\(us\):\s+(.+?)(?:\s+\(including overflows\))?$', log, re.MULTILINE):
+    bucket = int(m.group(1))
+    counts = m.group(2).split()
+    for i, c in enumerate(counts[:num_cores]):
+        histogram.setdefault(i, {})[bucket] = int(c)
+
+results = []
+for i in range(num_cores):
+    h = histogram.get(i, {})
+    total = sum(h.values())
+    above = sum(v for k, v in h.items() if k > threshold)
+    if total > 0:
+        avail = (total - above) / total * 100.0
+    else:
+        avail = 100.0
+    avail_str = f'{avail:.10f}'
+    nines = 0
+    dot_seen = False
+    for ch in avail_str:
+        if ch == '.':
+            dot_seen = True
+            continue
+        if not dot_seen:
+            continue
+        if ch == '9':
+            nines += 1
+        else:
+            break
+    if avail == 100.0:
+        nines = 100
+    results.append({'availability': round(avail, 10), 'number_of_nines': nines})
+
+print(json.dumps(results))

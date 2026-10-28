@@ -1,0 +1,64 @@
+---
+# Send a single Splunk HEC event
+# Expects: _tksp_event_data (dict with event fields)
+
+- name: Build HEC event payload with type preservation
+  ansible.builtin.set_fact:
+    _tksp_hec_event: >-
+      {{ {
+        'host': tksp_splunk_hec_url,
+        'sourcetype': '_json',
+        'event': _tksp_common
+                 | combine({
+                     'test_type': _tksp_event_data.test_type | default(_tksp_test_item.value.test_type),
+                     'status': _tksp_legacy_status | trim,
+                     'cluster_artifacts': _tksp_cluster_artifacts
+                   })
+                 | combine(_tksp_event_data)
+                 | combine(tksp_ci_metadata)
+      } | to_json | from_json }}
+
+- name: Generate event filename
+  ansible.builtin.set_fact:
+    _tksp_event_path: >-
+      {{ tksp_output_dir }}/event-{{ _tksp_event_data.test_type | default(_tksp_test_item.value.test_type) }}-{{
+         _tksp_event_data.reboot_type | default('') }}-{{
+         _tksp_test_item.key | hash('md5') | truncate(8, True, '') }}.json
+
+- name: Write event to file
+  ansible.builtin.copy:
+    content: "{{ _tksp_hec_event | to_nice_json }}"
+    dest: "{{ _tksp_event_path }}"
+    mode: '0644'
+
+- name: POST to Splunk HEC (with retries)
+  ansible.builtin.uri:
+    url: "{{ tksp_splunk_hec_url }}?index={{ tksp_splunk_index }}"
+    method: POST
+    headers:
+      Authorization: "Splunk {{ tksp_splunk_hec_token }}"
+      Content-Type: "application/json"
+    body: "{{ _tksp_hec_event | to_json }}"
+    body_format: raw
+    validate_certs: false
+    timeout: "{{ tksp_request_timeout }}"
+    status_code: [200, 201, 202]
+  register: _tksp_send_result
+  until: _tksp_send_result is not failed
+  retries: "{{ tksp_retries }}"
+  delay: "{{ tksp_retry_delay }}"
+  when: tksp_do_send | bool
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Increment events sent counter
+  ansible.builtin.set_fact:
+    _tksp_events_sent: "{{ _tksp_events_sent | int + 1 }}"
+  when: tksp_do_send | bool
+
+- name: Confirm event sent
+  ansible.builtin.debug:
+    msg: >-
+      Splunk event sent: type={{ _tksp_event_data.test_type | default(_tksp_test_item.value.test_type) }}
+      {{ 'reboot_type=' + _tksp_event_data.reboot_type if _tksp_event_data.reboot_type is defined else '' }}
+      status={{ _tksp_legacy_status | trim }}
+      HTTP={{ _tksp_send_result.status | default('dry-run') }}

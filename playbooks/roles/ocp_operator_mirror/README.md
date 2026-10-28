@@ -11,8 +11,8 @@ registry for disconnected or partially connected environments. It can:
 - Prepare/clean the local registry storage
 - Generate an ImageSetConfiguration from your operator list
 - Run `oc-mirror` to mirror operator catalogs/packages from PROD catalog
-- Run `skopeo copy` to mirror operators from ART catalog
-- Apply generated CatalogSource and IDMS manifests
+- Run `oc-mirror --v2 --remove-signatures=false` for each full ART/FBC catalog
+- Optionally apply generated CatalogSource, IDMS, and ITMS resources
 - Mirror the `operator-registry` image referenced by the cluster payload
 
 ## Supported operator sources
@@ -23,8 +23,7 @@ registry for disconnected or partially connected environments. It can:
 - Derives catalog version (major.minor) from `ocp_operator_mirror_version` and maps production catalogs to index images (e.g. `redhat-operator-index:v4.19`, `certified-operator-index:v4.19`, `community-operator-index:v4.19`)
 - **Per-operator catalog version override**: For production catalogs, any operator may set `catalog_version_override` to pin that catalog’s index to a different version (e.g. use certified-operators at v4.18 while the rest use 4.19)
 - Supports Red Hat, certified, and community catalogs
-- Selects operator channels per catalog with sensible defaults (`ocp_operator_mirror_prod_default_channel_map`); supports `channel` and optional per-operator `default_channel` (manual) or catalog-derived `default_channel` (automatic; see below)
-- **Production catalog JSON**: Renders the Red Hat operator index to a local JSON file, then may enrich each `redhat-operators` entry with **`default_channel`** read from `olm.package.defaultChannel` when it **differs** from the operator’s requested **`channel`** (helps `oc-mirror` when the package default channel would otherwise be filtered out)
+- Selects each operator’s requested `channel`, falling back to `ocp_operator_mirror_prod_default_channel_map`, and sets it as the package `defaultChannel` and sole channel in the ImageSetConfiguration
 - After mirroring, mutates production operator entries in place so `catalog` is set to the mirrored CatalogSource name (e.g. `cs-redhat-operator-index-v4-19`) for use by downstream deployment
 - Idempotent mirroring with pre-checks and post-verify
 - Secure handling of credentials (no_log on sensitive tasks)
@@ -34,9 +33,8 @@ registry for disconnected or partially connected environments. It can:
 - Tools available on the bastion/runner:
   - `oc` (connected to the cluster)
   - `skopeo`
-  - `oc-mirror`
-  - `jq` (production catalog path: used to read `defaultChannel` from the rendered index JSON)
-  - `bash` (used with `jq` when the catalog file is a JSON stream rather than a single array)
+  - `oc-mirror` 4.20+ with v2 and signature mirroring support
+  - `bash`
 - Reachable internal registry with credentials
 - Ansible collections:
   - `kubernetes.core`
@@ -48,28 +46,57 @@ Key variables (see `defaults/main.yaml` for full list and defaults):
 - `ocp_operator_mirror_registry_service_name`: Registry systemd unit (default: container-registry)
 - `ocp_operator_mirror_folder`: Target repo namespace for operators (default: operators)
 - `ocp_operator_mirror_disable_default_sources`: Disable default OperatorHub (bool, default: true)
+- `ocp_operator_mirror_skip_manifest_apply`: Skip applying generated CatalogSource, IDMS, and ITMS resources, including the operator-registry IDMS (bool, default: false). Mirroring and manifest generation still run.
 - `ocp_operator_mirror_prod_catalog_sources`: Catalogs to mirror
-- `ocp_operator_mirror_prod_default_channel_map`: Default channel per catalog. **Required** when mirroring operators with a specific channel that is not the default channel for that operator. This mapping allows the role to correctly identify and mirror non-default channels.
+- `ocp_operator_mirror_prod_default_channel_map`: Fallback channel per catalog, used when an operator omits `channel`.
 - `ocp_operator_mirror_pull_secret_path`: Path to auth.json (default: /tmp/auth.json)
 - `ocp_operator_mirror_image_set_configuration_path`: Path to ImageSetConfiguration.yaml
 - `ocp_operator_mirror_workspace_path`: oc-mirror workspace root
-- `ocp_operator_mirror_prod_catalog_json_path`: Host path where the rendered Red Hat index catalog JSON is written (default: `/tmp/prod_catalog.json`). Consumed by `tasks/set_default_channel.yaml`.
-- `ocp_operator_mirror_prod_catalog_image_name`: Image reference for the production Red Hat operator index used for `podman … render /configs` (default: `registry.redhat.io/redhat/redhat-operator-index`). Tag is derived from `production_catalog_version` / `catalog_version` like other index images.
+- `ocp_operator_mirror_prod_catalog_image_name`: Production Red Hat operator index image (default: `registry.redhat.io/redhat/redhat-operator-index`). Tagged with `production_catalog_version` / `catalog_version`.
 - `ocp_operator_mirror_kubeconfig`: Path to kubeconfig used by oc/k8s modules (optional). If empty, uses environment or module defaults.
-- `ocp_operator_mirror_fbc_extract_dir`: Local directory used to extract FBC (IIB) catalog files (e.g., catalog.yaml) from index images during Konflux/IIB workflows. Default: `/tmp/fbc/`
-- `ocp_operator_mirror_fbc_image_base`: Base repository for FBC (IIB) index images.
-- `ocp_operator_mirror_art_images_share`: Registry/repo prefix used to pull ART images by digest when mapping source digests to a shared location.
+- `ocp_operator_mirror_fbc_image_base`: Default base repository for FBC (IIB) index images.
+- `ocp_operator_mirror_fbc_target_tag`: Tag used when publishing FBC catalogs to the internal registry (default: `latest`).
 
-**FBC operator item (optional):**
-- `multifile_catalog`: Set `true` on an FBC operator to read `bundles.yaml` under the package dir and resolve the package from the first `olm.bundle`’s `package` field; omit or `false` uses `catalog.yaml` and resolves from the first `olm.package`’s `name` (default). This only affects catalog parsing, not `skopeo` source URLs.
-- `bundle_version`: Optional regex used to filter channel entry names before selecting a bundle from FBC catalogs (for example, `4\.19\.[0-9]+`). If omitted or empty, the role selects the latest entry in the channel.
-- FBC **image pair `src` remaps** (org path → `/acm-d/`, `registry.stage.redhat.io` → `quay.io:443`) apply when `catalog` contains the substring `acm` or `mce` (case-insensitive). Other FBC operators use `image_list` as-is for `src` when mirroring from FBC.
+**FBC operator items:**
+- `fbc_iib_repo`: Used to construct the catalog tag. The default tag is `ocp__<version>__<fbc_iib_repo>`; an item with `ocp_operator_mirror_fbc_image_base` or an ACM/MCE catalog uses `fbc_iib_repo` directly.
+- `ocp_operator_mirror_fbc_image_base`: Optional per-item catalog repository override.
+- `fbc_target_catalog`: Optional target repository path below `ocp_operator_mirror_folder`. Defaults to `fbc_iib_repo`, or to the item's `catalog` name for an explicit `fbc` source.
+- `fbc_target_tag`: Optional per-item override for the published catalog tag.
+- `fbc`: Optional complete source catalog reference, including a digest for pinned catalogs.
+- `name` and `channel`: The package and channel to mirror. The channel is also set as the package's `defaultChannel`.
+
+All FBC catalogs are mirrored in a single oc-mirror v2 run. Each catalog is filtered to the requested package and channel, including signatures. The generated
+CatalogSource keeps the item's `catalog` name for downstream deployment. The requested target tag
+is published at the destination. As a workaround for OCPBUGS-135380, when the target catalog
+contains the target tag, oc-mirror uses a tag derived from the source digest and the role copies
+that image to the requested tag. The generated CatalogSource references the digest-derived tag. For OCPBUGS-136180, a target
+repository containing underscores is replaced in the ImageSetConfiguration with a deterministic
+`fbc-<hash>` repository. The role copies the mirrored catalog to the original requested repository
+and tag, while the generated CatalogSource continues to reference the temporary image. Both
+workarounds can apply to the same catalog.
+Generated
+IDMS and ITMS resources use `-prod` or `-fbc` suffixes plus a short digest of the generated mapping. Repeated runs with
+different hub or spoke mappings therefore coexist, while rerunning the same mapping remains idempotent.
+During FBC mirroring, a temporary
+`/etc/containers/registries.conf.d/ocp-operator-mirror-art.conf` routes production
+references to `registry.stage.redhat.io`, following the legacy ART configuration.
+An `always` block removes it on success or failure before other mirroring proceeds.
+The runner needs privilege escalation for this file and credentials for stage.
+Do not run other mirroring concurrently on this host while this override is active.
+
+The former catalog extraction, image rewriting, shared ART image repository,
+and manual signature copies are removed.
+`bundle_version`, `multifile_catalog`, and `art_fbc` no longer select or
+rewrite FBC content; pin the source catalog with `fbc` when needed.
+
+The role pins the source catalog digest before mirroring. When
+`ocp_operator_mirror_generate_lockdown` is enabled, it also records that pinned FBC reference
+through the lockdown role. A provided `fbc` digest is used directly. FBC lockdown entries contain no `bundle` field; legacy
+`bundle` pins are ignored.
 
 **Operator item (production catalogs):**
 - `catalog_version_override`: Optional. When set on an operator that uses a production catalog (redhat-operators, certified-operators, community-operators), that catalog’s index image version is overridden (e.g. `"4.18"`). Useful to pin one catalog to a different major.minor than `ocp_operator_mirror_version`.
-- **`default_channel` (two meanings)**:
-  - **Manual:** You may set `default_channel` on an operator; it is passed into the ImageSetConfiguration channel list alongside `channel` (same behavior as before).
-  - **Automatic (redhat-operators only):** After the index is rendered to `ocp_operator_mirror_prod_catalog_json_path`, `tasks/set_default_channel.yaml` runs `jq` over that file. If the catalog’s package **`defaultChannel`** is **non-empty** and **not equal** to the operator’s **`channel`**, the role sets **`default_channel`** on that operator dict so the mirror step can include both channels. If they are equal or `jq` returns nothing, the dict is left unchanged for that key.
+- `channel`: Channel to mirror. Used as both the package `defaultChannel` and the sole entry in `channels`. If omitted, uses the catalog’s entry in `ocp_operator_mirror_prod_default_channel_map`.
 
 Provide operator list as `ocp_operator_mirror_operators` (array of dicts). Operators whose `catalog` is in `ocp_operator_mirror_prod_catalog_sources` (redhat-operators, certified-operators, community-operators) are mirrored from production index images; the role then mutates their `catalog` to the mirrored CatalogSource name (e.g. `cs-redhat-operator-index-v4-19`) for downstream use.
 
@@ -92,7 +119,6 @@ ocp_operator_mirror_operators:
     catalog_version_override: "4.18"
 ```
 
-**Note on `default_channel`**: When mirroring an operator with a specific channel that is not the default channel for that operator, you must configure `ocp_operator_mirror_prod_default_channel_map` to map the catalog to its default channel. This ensures the role can correctly identify and mirror the non-default channel you specified. For **`redhat-operators`**, the role can also discover the package default channel from the rendered catalog JSON and set **`default_channel`** on the operator when it differs from **`channel`** (see **Automatic** under operator item above).
 
 **Note on `catalog_version_override`**: For production catalogs only. When set on an operator, that catalog’s index image version is overridden (e.g. `certified-operator-index:v4.18`). The first override seen per catalog type wins; use when you need one catalog at a different major.minor than `ocp_operator_mirror_version`.
 
@@ -145,7 +171,6 @@ IIB (FBC) example with ART mirroring:
             nsname: openshift-sriov-network-operator
             deploy_default_config: true
             channel: stable
-            bundle_version: '4.19.0'
           - name: ptp-operator
             catalog: redhat-operators-ptp-art
             nsname: openshift-ptp
@@ -159,13 +184,13 @@ IIB (FBC) example with ART mirroring:
 1. Verify required variables and optionally disable default OperatorHub sources
 2. Reset local registry storage
 3. Configure registry authentication and write auth.json
-4. Mirror `operator-registry` image from payload and apply IDMS for ART repo
-5. **Production catalogs**: Derive catalog version (major.minor), apply any per-operator `catalog_version_override`, map catalogs to index images; render the Red Hat index catalog to `ocp_operator_mirror_prod_catalog_json_path`; enrich `ocp_operator_mirror_operators_prod` with optional catalog-derived **`default_channel`** (`set_default_channel.yaml` + `jq`); build package lists per catalog (redhat/certified/community); assemble ImageSetConfiguration; run `oc-mirror`; apply CatalogSource and ImageDigestMirrorSet manifests; then mutate `ocp_operator_mirror_operators_prod` so each operator’s `catalog` is the mirrored CatalogSource name
+4. Mirror `operator-registry` image from payload and optionally apply IDMS for ART repo
+5. **Production catalogs**: Derive catalog version (major.minor), apply any per-operator `catalog_version_override`, map catalogs to index images; build package lists per catalog (redhat/certified/community) with the selected channel as each package’s `defaultChannel` and sole channel; assemble ImageSetConfiguration; run `oc-mirror`; optionally apply generated cluster resources; then mutate `ocp_operator_mirror_operators_prod` so each operator’s `catalog` is the mirrored CatalogSource name
 6. **FBC/ART**: Mirror from IIB/FBC and apply manifests as configured
 7. Merge production and FBC operator lists into `ocp_operators_mirror_disconnected_config`
 
 ## Outputs
-- Applies CatalogSource and ImageDigestMirrorSet to the cluster
+- Optionally applies CatalogSource, ImageDigestMirrorSet, and ImageTagMirrorSet resources to the cluster
 - Writes ImageSetConfiguration to `ocp_operator_mirror_image_set_configuration_path`
 - Populates `ocp_operators_mirror_disconnected_config` with filtered operators
 

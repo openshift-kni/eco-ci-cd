@@ -1,6 +1,8 @@
 ocp_operator_mirror_registry_service_name: container-registry
 ocp_operator_mirror_skip_internal_registry_cleanup: false  # Set to true to preserve existing mirrored images
+ocp_operator_mirror_skip_manifest_apply: false
 ocp_operator_mirror_folder: operators
+ocp_operator_mirror_fbc_target_tag: latest
 ocp_operator_mirror_disable_default_sources: true
 ocp_operator_mirror_prod_redhat_catalog_name: redhat-operators
 ocp_operator_mirror_prod_certified_catalog_name: certified-operators
@@ -21,6 +23,6 @@ ocp_operator_mirror_registry_path: /opt/registry/data/docker/registry/v2/reposit
 ocp_operator_mirror_pull_secret_path: /tmp/auth.json
 ocp_operator_mirror_image_set_configuration_path: /tmp/ImageSetConfiguration.yaml
 ocp_operator_mirror_workspace_path: /tmp/oc-mirror-workspace
-ocp_operator_mirror_fbc_extract_dir: /tmp/fbc/
-ocp_operator_mirror_prod_catalog_json_path: /tmp/prod_catalog.json
 ocp_operator_mirror_prod_catalog_image_name: registry.redhat.io/redhat/redhat-operator-index
+ocp_operator_mirror_oc_mirror_dry_run: false
+ocp_operator_mirror_registries_conf_file: ocp-operator-mirror-stage-mapping.conf

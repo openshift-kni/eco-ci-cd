@@ -204,6 +204,7 @@
             Operators with bundles:
             {{ lockdown_metadata_operators
                | dict2items
+               | selectattr('value.bundle', 'defined')
                | selectattr('value.bundle', 'ne', '')
                | map(attribute='key')
                | list }}
@@ -211,6 +212,7 @@
             Operators without bundles:
             {{ lockdown_metadata_operators
                | dict2items
+               | selectattr('value.bundle', 'defined')
                | selectattr('value.bundle', 'equalto', '')
                | map(attribute='key')
                | list }}
@@ -277,6 +279,7 @@
 - name: Warn if bundle digests missing
   when: >-
     lockdown_metadata_operators.values()
+    | selectattr('bundle', 'defined')
     | selectattr('bundle', 'equalto', '')
     | list
     | length > 0

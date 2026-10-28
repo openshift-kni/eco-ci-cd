@@ -299,12 +299,7 @@
 - name: Select source repositories for mirror mapping
   changed_when: false
   ansible.builtin.set_fact:
-    loop_source_repos: >-
-      {{
-        (source_repos | map('replace', 'registry.stage.redhat.io', 'registry.redhat.io') | list)
-        if (((operator.ocp_operator_mirror_fbc_image_base | default('')) | length) > 0)
-        else source_repos
-      }}
+    loop_source_repos: "{{ source_repos | map('replace', 'registry.stage.redhat.io', 'registry.redhat.io') | list }}"
 
 - name: Set empty image_digest_mirrors
   changed_when: false

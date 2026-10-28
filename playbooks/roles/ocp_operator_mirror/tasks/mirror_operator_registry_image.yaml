@@ -80,6 +80,7 @@
       ignore_errors: true
 
 - name: Ensure IDMS for ocp-v4.0-art-dev is present
+  when: not (ocp_operator_mirror_skip_manifest_apply | bool)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"

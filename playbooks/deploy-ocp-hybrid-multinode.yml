@@ -552,6 +552,12 @@
         ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
         ocp_version_facts_arch: "{{ arch }}"
 
+    - name: Create artifacts directory
+      ansible.builtin.file:
+        path: /tmp/artifacts
+        state: directory
+        mode: '0755'
+
     - name: Save OCP version facts to artifacts
       ansible.builtin.copy:
         dest: /tmp/artifacts/ocp_version.json

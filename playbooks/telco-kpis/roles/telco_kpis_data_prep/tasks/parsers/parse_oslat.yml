@@ -55,47 +55,17 @@
       ansible.builtin.set_fact:
         _tkdp_oslat_overall_max: "{{ _tkdp_oslat_max_values | map('int') | max | default(0) }}"
 
+    - name: Generate parser script
+      ansible.builtin.template:
+        src: parse_oslat_availability.py.j2
+        dest: "{{ _tkdp_current_test_dir }}/parse_oslat_availability.py"
+        mode: '0755'
+      vars:
+        num_cores: "{{ _tkdp_oslat_cores | length }}"
+
     - name: Compute per-core availability from histogram
-      ansible.builtin.shell: |
-        python3 -c "
-        import json, re, sys
-        log = sys.stdin.read()
-        threshold = 20
-        num_cores = {{ _tkdp_oslat_cores | length }}
-        histogram = {}
-        for m in re.finditer(r'^\s+(\d+)\s+\(us\):\s+(.+?)(?:\s+\(including overflows\))?$', log, re.MULTILINE):
-            bucket = int(m.group(1))
-            counts = m.group(2).split()
-            for i, c in enumerate(counts[:num_cores]):
-                histogram.setdefault(i, {})[bucket] = int(c)
-        results = []
-        for i in range(num_cores):
-            h = histogram.get(i, {})
-            total = sum(h.values())
-            above = sum(v for k, v in h.items() if k > threshold)
-            if total > 0:
-                avail = (total - above) / total * 100.0
-            else:
-                avail = 100.0
-            avail_str = f'{avail:.10f}'
-            nines = 0
-            dot_seen = False
-            for ch in avail_str:
-                if ch == '.':
-                    dot_seen = True
-                    continue
-                if not dot_seen:
-                    continue
-                if ch == '9':
-                    nines += 1
-                else:
-                    break
-            if avail == 100.0:
-                nines = 100
-            results.append({'availability': round(avail, 10), 'number_of_nines': nines})
-        print(json.dumps(results))
-        "
-      args:
+      ansible.builtin.command:
+        cmd: python3 "{{ _tkdp_current_test_dir }}/parse_oslat_availability.py"
         stdin: "{{ _tkdp_oslat_log_text }}"
       register: _tkdp_oslat_availability_result
       changed_when: false

@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+################################################################################
+# Parser: parse_cyclictest_availability.py
+# Purpose: Compute availability and number of nines from cyclictest histogram
+# Generated from: playbooks/telco-kpis/roles/telco_kpis_data_prep/templates/parse_cyclictest_availability.py.j2
+#
+# Description:
+#   Parses cyclictest histogram output and computes per-thread and overall
+#   availability metrics with number of nines calculation.
+#
+# Input: stdin (cyclictest histogram from podman-run.log)
+# Output: JSON with per_thread[], overall_availability, overall_number_of_nines
+################################################################################
+
+import json, re, sys
+
+log = sys.stdin.read()
+threshold = 20
+num_threads = {{ num_threads }}
+
+histogram = {}
+for m in re.finditer(r'^(\d{6})\s+(.+)$', log, re.MULTILINE):
+    bucket = int(m.group(1))
+    counts = m.group(2).split()
+    for i, c in enumerate(counts[:num_threads]):
+        histogram.setdefault(i, {})[bucket] = int(c)
+
+results = []
+for i in range(num_threads):
+    h = histogram.get(i, {})
+    total = sum(h.values())
+    above = sum(v for k, v in h.items() if k > threshold)
+    if total > 0:
+        avail = (total - above) / total * 100.0
+    else:
+        avail = 100.0
+    avail_str = f'{avail:.10f}'
+    nines = 0
+    dot_seen = False
+    for ch in avail_str:
+        if ch == '.':
+            dot_seen = True
+            continue
+        if not dot_seen:
+            continue
+        if ch == '9':
+            nines += 1
+        else:
+            break
+    if avail == 100.0:
+        nines = 100
+    results.append({'availability': round(avail, 10), 'number_of_nines': nines})
+
+# Overall: sum all threads' histograms
+total_all = sum(sum(histogram.get(i, {}).values()) for i in range(num_threads))
+above_all = sum(sum(v for k, v in histogram.get(i, {}).items() if k > threshold) for i in range(num_threads))
+if total_all > 0:
+    overall_avail = (total_all - above_all) / total_all * 100.0
+else:
+    overall_avail = 100.0
+
+overall_str = f'{overall_avail:.10f}'
+overall_nines = 0
+dot_seen = False
+for ch in overall_str:
+    if ch == '.':
+        dot_seen = True
+        continue
+    if not dot_seen:
+        continue
+    if ch == '9':
+        overall_nines += 1
+    else:
+        break
+if overall_avail == 100.0:
+    overall_nines = 100
+
+print(json.dumps({
+    'per_thread': results,
+    'overall_availability': round(overall_avail, 10),
+    'overall_number_of_nines': overall_nines
+}))

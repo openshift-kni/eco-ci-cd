@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+################################################################################
+# Parser: parse_cpu_util.py
+# Purpose: Extract CPU utilization scenarios from podman-run.log
+# Generated from: playbooks/telco-kpis/roles/telco_kpis_data_prep/templates/parse_cpu_util.py.j2
+#
+# Description:
+#   Parses cpu_util test ranmetrics from log output and generates structured
+#   JSON with scenarios (idle, workloadlaunch, mustgather, promquery, steadyworkload).
+#
+# Input: stdin (podman-run.log content, filtered by grep)
+# Output: JSON array of scenarios to stdout
+################################################################################
+
+import sys, json, re
+
+scenarios = {}
+SCENARIO_NAMES = ['idle', 'workloadlaunch', 'mustgather', 'promquery', 'steadyworkload']
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith('ranmetrics_cpu_'):
+        continue
+
+    # Handle lines with labels: ranmetrics_cpu_infra_pods_steadyworkload_avg(ns=...,pod=...): val
+    label_match = re.match(r'ranmetrics_cpu_(\w+?)_((?:' + '|'.join(SCENARIO_NAMES) + r'))_(max|avg)\((.+?)\):\s*([\d.eE+-]+)', line)
+    # Handle simple lines: ranmetrics_cpu_total_idle_max: val
+    simple_match = re.match(r'ranmetrics_cpu_(\w+?)_((?:' + '|'.join(SCENARIO_NAMES) + r'))_(max|avg):\s*([\d.eE+-]+)', line)
+
+    if label_match:
+        breakdown, scenario, agg, labels, val = label_match.groups()
+        if scenario not in scenarios:
+            scenarios[scenario] = {'scenario_name': scenario, 'types': []}
+        if scenario == 'steadyworkload' and agg == 'avg':
+            component_key = 'components_' + breakdown
+            if component_key not in scenarios[scenario]:
+                scenarios[scenario][component_key] = []
+            label_dict = dict(re.findall(r'(\w+)=\"([^\"]+)\"', labels))
+            entry = {'avg_cpu': float(val)}
+            if 'namespace' in label_dict:
+                entry['namespace'] = label_dict['namespace']
+            if 'pod' in label_dict:
+                entry['pod'] = label_dict['pod']
+            if 'id' in label_dict:
+                entry['group_name'] = label_dict['id']
+            scenarios[scenario][component_key].append(entry)
+    elif simple_match:
+        breakdown, scenario, agg, val = simple_match.groups()
+        if scenario not in scenarios:
+            scenarios[scenario] = {'scenario_name': scenario, 'types': []}
+        if agg == 'max':
+            type_name = breakdown
+            existing = [t for t in scenarios[scenario]['types'] if t['type_name'] == type_name]
+            if existing:
+                existing[0]['max_cpu'] = float(val)
+            else:
+                scenarios[scenario]['types'].append({'type_name': type_name, 'max_cpu': float(val)})
+
+# Compute avg_cpu_total for steadyworkload (sum of all component avg_cpu values)
+if 'steadyworkload' in scenarios:
+    sw = scenarios['steadyworkload']
+    total = 0.0
+    for key in ('components_os_daemon', 'components_infra_pods'):
+        for entry in sw.get(key, []):
+            total += entry.get('avg_cpu', 0.0)
+    sw['avg_cpu_total'] = round(total, 7)
+
+# Build ordered output
+result = []
+for sname in SCENARIO_NAMES:
+    if sname in scenarios:
+        result.append(scenarios[sname])
+
+print(json.dumps(result))

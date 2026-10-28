@@ -116,11 +116,32 @@
         fail_msg: "Please provide release variable to playbook"
 
     - name: Set OCP version facts
-      ansible.builtin.import_role:
-        name: ocp_version_facts
-      vars:
-        ocp_version_facts_release: "{{ release }}"
-        ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
+      block:
+        - name: Resolve OCP version facts
+          ansible.builtin.import_role:
+            name: ocp_version_facts
+          vars:
+            ocp_version_facts_release: "{{ release }}"
+            ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
+      rescue:
+        - name: Mark stale release and stop setup
+          when:
+            - ansible_failed_task.name == 'Validate image age days'
+            - ansible_failed_result.evaluated_to is defined
+            - not ansible_failed_result.evaluated_to
+          block:
+            - name: Write stale-release skip marker
+              ansible.builtin.copy:
+                content: "Resolved OpenShift release exceeds configured age limit."
+                dest: "{{ dest_directory }}/skip.txt"
+                mode: "0660"
+
+            - name: End setup after stale release
+              ansible.builtin.meta: end_play
+
+        - name: Fail for other version resolution errors
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('OCP version fact resolution failed') }}"
 
     - name: Set cluster name
       ansible.builtin.set_fact:

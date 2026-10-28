@@ -52,6 +52,7 @@
     # name; keep it short to stay within Kubernetes' 63-character label limit.
     day2_cgu_name: "d2-worker"
     legacy_day2_cgu_name: "day2-worker-cgu"
+    day2_group_policy_name: "group-du-standard-config-policy"
     day2_managed_policies:
       - common-config-policy
       - common-subscriptions-policy
@@ -354,6 +355,78 @@
           retries: 30
           delay: 20
 
+        - name: Find the group ConfigurationPolicy on the spoke
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_config_policies
+          until: >-
+            spoke_config_policies.resources | default([]) |
+              selectattr('metadata.name', 'equalto', day2_group_policy_name) |
+              list | length == 1
+          retries: 30
+          delay: 10
+
+        - name: Record the group ConfigurationPolicy namespace
+          ansible.builtin.set_fact:
+            day2_group_policy_namespace: >-
+              {{
+                spoke_config_policies.resources |
+                  selectattr(
+                    'metadata.name', 'equalto', day2_group_policy_name
+                  ) |
+                  map(attribute='metadata.namespace') | first
+              }}
+
+        # Argo CD sync does not guarantee the spoke has checked the updated policy.
+        # Wait for that check before creating the CGU: TALM might otherwise see
+        # an older Compliant result and finish without applying the new settings.
+        - name: Wait for the day2 group policy to be freshly evaluated
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            name: "{{ day2_group_policy_name }}"
+            namespace: "{{ day2_group_policy_namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: day2_group_policy
+          until: >-
+            day2_group_policy.resources | default([]) | length == 1 and
+            (
+              day2_group_policy.resources[0].metadata.generation | string
+            ) == (
+              day2_group_policy.resources[0].status.lastEvaluatedGeneration |
+                default(-1) | string
+            ) and
+            (
+              day2_group_policy.resources[0].spec['object-templates'] |
+                selectattr('objectDefinition.kind', 'equalto', 'Network') |
+                selectattr(
+                  'objectDefinition.metadata.name', 'equalto', 'cluster'
+                ) |
+                map(attribute=
+                  'objectDefinition.spec.disableNetworkDiagnostics') |
+                list
+            ) == [true] and
+            (
+              day2_group_policy.resources[0].spec['object-templates'] |
+                selectattr('objectDefinition.kind', 'equalto', 'Tuned') |
+                selectattr(
+                  'objectDefinition.metadata.name', 'equalto',
+                  'performance-patch'
+                ) |
+                map(attribute='objectDefinition.spec.recommend') | flatten |
+                selectattr('profile', 'equalto', 'performance-patch') |
+                map(attribute='machineConfigLabels') | map('dict2items') |
+                flatten |
+                selectattr(
+                  'key', 'equalto', 'machineconfiguration.openshift.io/role'
+                ) |
+                selectattr('value', 'equalto', 'worker') | list | length > 0
+            )
+          retries: 90
+          delay: 10
+
         - name: Delete pre-existing day2 worker ClusterGroupUpgrades
           kubernetes.core.k8s:
             api_version: ran.openshift.io/v1alpha1
@@ -419,6 +492,65 @@
             fail_msg: >-
               ClusterGroupUpgrade '{{ day2_cgu_name }}' failed to enforce
               day2 worker policies on cluster '{{ spoke_cluster_name }}'
+
+        - name: Wait for the day2 group policy to become Compliant
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            name: "{{ day2_group_policy_name }}"
+            namespace: "{{ day2_group_policy_namespace }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: remediated_group_policy
+          until: >-
+            remediated_group_policy.resources | default([]) | length == 1 and
+            remediated_group_policy.resources[0].status.compliant |
+              default('') == 'Compliant' and
+            (
+              remediated_group_policy.resources[0].metadata.generation | string
+            ) == (
+              remediated_group_policy.resources[0].status
+              .lastEvaluatedGeneration |
+                default(-1) | string
+            )
+          retries: 90
+          delay: 10
+
+        - name: Verify network diagnostics are disabled on the spoke
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: Network
+            name: cluster
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: day2_network
+          until: >-
+            day2_network.resources | default([]) | length == 1 and
+            day2_network.resources[0].spec.disableNetworkDiagnostics |
+              default(false) | bool
+          retries: 30
+          delay: 10
+
+        - name: Verify worker performance tuning is recommended on the spoke
+          kubernetes.core.k8s_info:
+            api_version: tuned.openshift.io/v1
+            kind: Tuned
+            name: performance-patch
+            namespace: openshift-cluster-node-tuning-operator
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: day2_tuned
+          until: >-
+            day2_tuned.resources | default([]) | length == 1 and
+            (
+              day2_tuned.resources[0].spec.recommend | default([]) |
+                selectattr('profile', 'equalto', 'performance-patch') |
+                map(attribute='machineConfigLabels') | map('dict2items') |
+                flatten |
+                selectattr(
+                  'key', 'equalto', 'machineconfiguration.openshift.io/role'
+                ) |
+                selectattr('value', 'equalto', 'worker') | list | length > 0
+            )
+          retries: 30
+          delay: 10
 
         - name: Wait for the PTP Operator default config to be created
           kubernetes.core.k8s_info:
@@ -574,6 +706,31 @@
               list | length == 0
           retries: 30
           delay: 30
+
+        - name: Wait for the worker to apply the performance-patch TuneD profile
+          kubernetes.core.k8s_info:
+            api_version: tuned.openshift.io/v1
+            kind: Profile
+            name: "{{ worker_nodes.resources[0].metadata.name }}"
+            namespace: openshift-cluster-node-tuning-operator
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: worker_tuned_profile
+          until: >-
+            worker_tuned_profile.resources | default([]) | length == 1 and
+            worker_tuned_profile.resources[0].status.tunedProfile |
+              default('') == 'performance-patch' and
+            (
+              worker_tuned_profile.resources[0].status.conditions | default([]) |
+                selectattr('type', 'equalto', 'Applied') |
+                selectattr('status', 'equalto', 'True') | list | length > 0
+            ) and
+            (
+              worker_tuned_profile.resources[0].status.conditions | default([]) |
+                selectattr('type', 'equalto', 'Degraded') |
+                selectattr('status', 'equalto', 'False') | list | length > 0
+            )
+          retries: 60
+          delay: 20
       always:
         - name: Delete the day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:

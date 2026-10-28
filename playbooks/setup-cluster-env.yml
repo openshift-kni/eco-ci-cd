@@ -129,6 +129,7 @@
             - ansible_failed_task.name == 'Validate image age days'
             - ansible_failed_result.evaluated_to is defined
             - not ansible_failed_result.evaluated_to
+            - lookup('ansible.builtin.env', 'SHARED_DIR') | length > 0
           block:
             - name: Write stale-release skip marker
               ansible.builtin.copy:

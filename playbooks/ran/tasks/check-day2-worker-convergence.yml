@@ -2,7 +2,10 @@
 - name: Pause between worker convergence polls
   ansible.builtin.pause:
     seconds: "{{ worker_convergence_delay }}"
-  when: convergence_attempt > 0
+  when: convergence_attempt | int > 0
+
+- name: Approve kubelet-serving CSRs that appeared during convergence
+  ansible.builtin.include_tasks: approve-day2-worker-serving-csrs.yml
 
 - name: Read the spoke worker MachineConfigPool
   kubernetes.core.k8s_info:
@@ -41,6 +44,17 @@
     namespace: openshift-sriov-network-operator
     kubeconfig: "{{ spoke_kubeconfig }}"
   register: worker_sriov_result
+  failed_when: false
+  when: worker_node | length > 0
+
+- name: Read the day-2 worker TuneD Profile
+  kubernetes.core.k8s_info:
+    api_version: tuned.openshift.io/v1
+    kind: Profile
+    name: "{{ worker_node.metadata.name }}"
+    namespace: openshift-cluster-node-tuning-operator
+    kubeconfig: "{{ spoke_kubeconfig }}"
+  register: worker_profile_result
   failed_when: false
   when: worker_node | length > 0
 
@@ -100,13 +114,23 @@
       {{ worker_sriov_result.resources | default([]) | length == 1 and
          worker_sriov_result.resources[0].status.syncStatus |
          default('') == 'Succeeded' }}
+    worker_profile_ready: >-
+      {{ worker_profile_result.resources | default([]) | length == 1 and
+         worker_profile_result.resources[0].status.tunedProfile |
+           default('') == 'performance-patch' and
+         (worker_profile_result.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Applied') |
+          selectattr('status', 'equalto', 'True') | list | length > 0) and
+         (worker_profile_result.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Degraded') |
+          selectattr('status', 'equalto', 'False') | list | length > 0) }}
 
 - name: Count consecutive converged worker polls
   ansible.builtin.set_fact:
     worker_convergence_streak: >-
       {{ (worker_convergence_streak | default(0) | int + 1)
          if worker_pool_ready | bool and worker_node_ready | bool and
-            worker_sriov_ready | bool else 0 }}
+            worker_sriov_ready | bool and worker_profile_ready | bool else 0 }}
 
 - name: Record sustained worker convergence
   ansible.builtin.set_fact:

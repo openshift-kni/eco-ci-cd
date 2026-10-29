@@ -355,7 +355,59 @@
           until: >-
             policies_app_status.resources is defined and
             policies_app_status.resources | length > 0 and
-            policies_app_status.resources[0].status.sync.status | default('') == 'Synced'
+            policies_app_status.resources[0].spec.source.targetRevision |
+              default('') == day2_branch and
+            policies_app_status.resources[0].status.sync.status |
+              default('') == 'Synced' and
+            policies_app_status.resources[0].status.operationState.phase |
+              default('') == 'Succeeded' and
+            policies_app_status.resources[0].status.operationState.syncResult.source.targetRevision |
+              default('') == day2_branch and
+            policies_app_status.resources[0].status.sync.revision |
+              default('') | length > 0 and
+            policies_app_status.resources[0].status.sync.revision |
+              default('') ==
+              policies_app_status.resources[0].status.operationState.syncResult.revision |
+              default('')
+          retries: 30
+          delay: 20
+
+        - name: Wait for the spoke to evaluate the day-2 worker policy
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: spoke_group_policy_result
+          vars:
+            group_policy: >-
+              {{ spoke_group_policy_result.resources | default([]) |
+                 selectattr('metadata.name', 'equalto',
+                   'ztp-group.group-du-standard-config-policy') |
+                 first | default({}) }}
+            policy_templates: >-
+              {{ group_policy.spec['object-templates'] | default([]) |
+                 map(attribute='objectDefinition') | list }}
+            network_templates: >-
+              {{ policy_templates | selectattr('kind', 'equalto', 'Network') |
+                 selectattr('metadata.name', 'equalto', 'cluster') |
+                 list }}
+            tuned_templates: >-
+              {{ policy_templates | selectattr('kind', 'equalto', 'Tuned') |
+                 selectattr('metadata.name', 'equalto', 'performance-patch') |
+                 list }}
+          until: >-
+            group_policy | length > 0 and
+            group_policy.metadata.generation | default(-1) | int ==
+              group_policy.status.lastEvaluatedGeneration | default(-2) | int and
+            (network_templates |
+              selectattr('spec.disableNetworkDiagnostics', 'equalto', true) |
+              list | length > 0) and
+            tuned_templates | length > 0 and
+            (tuned_templates[0].spec.recommend | default([]) |
+              selectattr('profile', 'equalto', 'performance-patch') |
+              selectattr('machineConfigLabels', 'equalto',
+                {'machineconfiguration.openshift.io/role': 'worker'}) |
+              list | length > 0)
           retries: 30
           delay: 20
 
@@ -409,6 +461,7 @@
             cgu_status.resources | length > 0 and
             cgu_status.resources[0].status.conditions | default([]) |
               selectattr('type', 'equalto', 'Succeeded') |
+              selectattr('status', 'equalto', 'True') |
               list | length > 0
           retries: 130
           delay: 30
@@ -424,6 +477,31 @@
             fail_msg: >-
               ClusterGroupUpgrade '{{ day2_cgu_name }}' failed to enforce
               day2 worker policies on cluster '{{ spoke_cluster_name }}'
+
+        # The pre-CGU gate verified that this policy contains the day-2 Network
+        # and TuneD templates. Fresh compliance verifies their remediation;
+        # the worker TuneD Profile is checked after the node joins.
+        - name: Wait for the spoke day-2 worker policy to become Compliant
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: remediated_group_policy_result
+          vars:
+            remediated_group_policy: >-
+              {{ remediated_group_policy_result.resources | default([]) |
+                 selectattr('metadata.name', 'equalto',
+                   'ztp-group.group-du-standard-config-policy') |
+                 first | default({}) }}
+          until: >-
+            remediated_group_policy | length > 0 and
+            remediated_group_policy.metadata.generation | default(-1) | int ==
+              remediated_group_policy.status.lastEvaluatedGeneration |
+              default(-2) | int and
+            remediated_group_policy.status.compliant | default('') ==
+              'Compliant'
+          retries: 60
+          delay: 30
 
         - name: Wait for the PTP Operator default config to be created
           kubernetes.core.k8s_info:
@@ -538,32 +616,14 @@
           until: >-
             worker_nodes.resources is defined and
             worker_nodes.resources | length > 0 and
-            (worker_nodes.resources[0].status.conditions |
-             selectattr('type', 'equalto', 'Ready') |
-             first).status == 'True'
+            (worker_nodes.resources[0].status.conditions | default([]) |
+              selectattr('type', 'equalto', 'Ready') |
+              selectattr('status', 'equalto', 'True') | list | length > 0)
           retries: 90
           delay: 60
 
-        - name: Approve pending kubelet-serving CSRs until stable
-          ansible.builtin.shell:
-            cmd: |
-              set -o pipefail
-              pending=$(oc --kubeconfig {{ spoke_kubeconfig }} get csr -o json \
-                | jq -r '.items[]
-                    | select(.spec.signerName == "kubernetes.io/kubelet-serving")
-                    | select((.status.conditions // []) | length == 0)
-                    | .metadata.name')
-              if [ -z "$pending" ]; then
-                echo "no_pending"
-                exit 0
-              fi
-              echo "$pending" | xargs oc --kubeconfig {{ spoke_kubeconfig }} adm certificate approve
-              echo "approved"
-          register: csr_result
-          until: csr_result.stdout_lines | last == "no_pending"
-          retries: 10
-          delay: 30
-          changed_when: '"approved" in csr_result.stdout'
+        - name: Approve pending kubelet-serving CSRs after worker join
+          ansible.builtin.include_tasks: tasks/approve-day2-worker-serving-csrs.yml
 
         - name: Wait for all ClusterServiceVersions to succeed on the spoke cluster
           kubernetes.core.k8s_info:
@@ -582,7 +642,7 @@
 
         # A first Ready observation can precede the worker's configuration
         # reboot. Do not hand off to tests until its DU profile and SR-IOV
-        # node state have converged.
+        # node state and TuneD Profile have converged.
         - name: Initialize day-2 worker convergence polls
           ansible.builtin.set_fact:
             convergence_attempt: 0
@@ -604,9 +664,11 @@
               Pool query: {{ worker_pool_result.msg | default('ok') }}.
               Node query: {{ worker_node_result.msg | default('ok') }}.
               SR-IOV query: {{ worker_sriov_result.msg | default('ok') }}.
+              TuneD Profile query: {{ worker_profile_result.msg | default('ok') }}.
               Ready checks: pool={{ worker_pool_ready | default(false) }},
               node={{ worker_node_ready | default(false) }},
-              SR-IOV={{ worker_sriov_ready | default(false) }}.
+              SR-IOV={{ worker_sriov_ready | default(false) }},
+              TuneD Profile={{ worker_profile_ready | default(false) }}.
               MCP: {{ worker_pool.status | default({}) | to_json }}.
               Node: {{ worker_node.metadata.name | default('missing') }},
               annotations={{ worker_node.metadata.annotations |
@@ -614,6 +676,9 @@
               worker_node.status.conditions | default([]) | to_json }}.
               SR-IOV state: {{ (worker_sriov_result.resources | default([]) |
               first | default({})).status | default({}) | to_json }}.
+              TuneD Profile state: {{ (worker_profile_result.resources |
+              default([]) | first | default({})).status | default({}) |
+              to_json }}.
       always:
         - name: Delete the day2 worker ClusterGroupUpgrade # noqa: ignore-errors
           kubernetes.core.k8s:

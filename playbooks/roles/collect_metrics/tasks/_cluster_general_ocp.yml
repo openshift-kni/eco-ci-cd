@@ -8,7 +8,10 @@
         name: version
         kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
       register: _cluster_version
-      when: _cluster_version is not defined
+      when: >-
+        _cluster_version is not defined or
+        _collect_metrics_ocp_last_kubeconfig | default(_collect_metrics_ocp_kubeconfig) !=
+          _collect_metrics_ocp_kubeconfig
 
     - name: Set version facts
       ansible.builtin.set_fact:
@@ -47,7 +50,10 @@
         name: cluster
         kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"
       register: _infra
-      when: _infra is not defined
+      when: >-
+        _infra is not defined or
+        _collect_metrics_ocp_last_kubeconfig | default(_collect_metrics_ocp_kubeconfig) !=
+          _collect_metrics_ocp_kubeconfig
 
     - name: Append cluster name to metrics
       ansible.builtin.set_fact:
@@ -80,7 +86,10 @@
         label_selectors:
           - node-role.kubernetes.io/worker
       register: _worker_nodes
-      when: _worker_nodes is not defined
+      when: >-
+        _worker_nodes is not defined or
+        _collect_metrics_ocp_last_kubeconfig | default(_collect_metrics_ocp_kubeconfig) !=
+          _collect_metrics_ocp_kubeconfig
 
     - name: Append kernel version for each worker
       ansible.builtin.set_fact:
@@ -102,3 +111,7 @@
     - name: Handle worker kernel version collection failure
       ansible.builtin.debug:
         msg: "Failed to collect {{ _collect_metrics_ocp_scope }}worker kernel versions, skipping"
+
+- name: Remember kubeconfig for the next OCP metrics scope
+  ansible.builtin.set_fact:
+    _collect_metrics_ocp_last_kubeconfig: "{{ _collect_metrics_ocp_kubeconfig }}"

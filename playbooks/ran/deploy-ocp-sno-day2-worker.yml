@@ -376,13 +376,15 @@
           kubernetes.core.k8s_info:
             api_version: policy.open-cluster-management.io/v1
             kind: ConfigurationPolicy
+            name: group-du-standard-config-policy
+            namespace: "{{ spoke_cluster_name }}"
             kubeconfig: "{{ spoke_kubeconfig }}"
           register: spoke_group_policy_result
           vars:
             group_policy: >-
               {{ spoke_group_policy_result.resources | default([]) |
                  selectattr('metadata.name', 'equalto',
-                   'ztp-group.group-du-standard-config-policy') |
+                   'group-du-standard-config-policy') |
                  first | default({}) }}
             policy_templates: >-
               {{ group_policy.spec['object-templates'] | default([]) |
@@ -403,10 +405,10 @@
               selectattr('spec.disableNetworkDiagnostics', 'equalto', true) |
               list | length > 0) and
             tuned_templates | length > 0 and
-            (tuned_templates[0].spec.recommend | default([]) |
-              selectattr('profile', 'equalto', 'performance-patch') |
-              selectattr('machineConfigLabels', 'equalto',
-                {'machineconfiguration.openshift.io/role': 'worker'}) |
+             (tuned_templates[0].spec.recommend | default([]) |
+               selectattr('profile', 'equalto', 'performance-patch-worker') |
+               selectattr('machineConfigLabels', 'equalto',
+                 {'machineconfiguration.openshift.io/role': 'worker'}) |
               list | length > 0)
           retries: 30
           delay: 20
@@ -485,13 +487,15 @@
           kubernetes.core.k8s_info:
             api_version: policy.open-cluster-management.io/v1
             kind: ConfigurationPolicy
+            name: group-du-standard-config-policy
+            namespace: "{{ spoke_cluster_name }}"
             kubeconfig: "{{ spoke_kubeconfig }}"
           register: remediated_group_policy_result
           vars:
             remediated_group_policy: >-
               {{ remediated_group_policy_result.resources | default([]) |
                  selectattr('metadata.name', 'equalto',
-                   'ztp-group.group-du-standard-config-policy') |
+                   'group-du-standard-config-policy') |
                  first | default({}) }}
           until: >-
             remediated_group_policy | length > 0 and

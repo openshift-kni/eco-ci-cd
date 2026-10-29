@@ -116,8 +116,8 @@
          default('') == 'Succeeded' }}
     worker_profile_ready: >-
       {{ worker_profile_result.resources | default([]) | length == 1 and
-         worker_profile_result.resources[0].status.tunedProfile |
-           default('') == 'performance-patch' and
+          worker_profile_result.resources[0].status.tunedProfile |
+            default('') == 'performance-patch-worker' and
          (worker_profile_result.resources[0].status.conditions | default([]) |
           selectattr('type', 'equalto', 'Applied') |
           selectattr('status', 'equalto', 'True') | list | length > 0) and

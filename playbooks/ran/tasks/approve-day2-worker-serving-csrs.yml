@@ -1,0 +1,22 @@
+---
+- name: Approve pending kubelet-serving CSRs
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      set -o pipefail
+      pending=$(oc --kubeconfig {{ spoke_kubeconfig | quote }} get csr -o json \
+        | jq -r '.items[]
+            | select(.spec.signerName == "kubernetes.io/kubelet-serving")
+            | select((.status.conditions // []) | length == 0)
+            | .metadata.name')
+      if [ -z "$pending" ]; then
+        echo "no_pending"
+        exit 0
+      fi
+      echo "$pending" | xargs oc --kubeconfig {{ spoke_kubeconfig | quote }} adm certificate approve
+      echo "approved"
+  register: csr_result
+  until: csr_result is success
+  retries: 10
+  delay: 30
+  changed_when: '"approved" in csr_result.stdout'

@@ -1,0 +1,26 @@
+---
+- name: Stop registry service
+  become: true
+  ansible.builtin.systemd:
+    name: container-registry
+    state: stopped
+
+- name: Remove registry data directory
+  become: true
+  ansible.builtin.file:
+    path: /opt/registry/data/docker
+    state: absent
+
+- name: Start registry service
+  become: true
+  ansible.builtin.systemd:
+    name: container-registry
+    state: started
+
+- name: Ensure registry is running
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ disconnected_registry_port | int }}"
+    state: started
+    delay: 5
+    timeout: 120

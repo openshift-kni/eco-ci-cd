@@ -7,8 +7,9 @@
 #      if needed before creating BMC secrets and the spoke pull secret on the hub.
 #   2. Resolves the hub OCP version and creates a ClusterImageSet pointing to the
 #      pre-mirrored release image in the disconnected registry (digest format).
-#   3. Mirrors the ironic-agent image; for arch=multi, registers a pinned ARM64
-#      RHCOS ISO hosted on the bastion.
+#   3. Mirrors the ironic-agent image; for arch=multi, fetches the current ARM64
+#      RHCOS ISO for the hub minor version from Assisted Service's default OS images
+#      and registers it using the bastion HTTP store.
 #   4. Patches the extracted ZTP ArgoCD apps with the Git URL, branch, and paths,
 #      adds repository credentials, and allows ClusterInstance in the AppProject.
 #   5. Applies the ArgoCD kustomization and waits for both apps to be Synced with
@@ -45,7 +46,8 @@
 #   - Registry credentials in the hub pull secret; matching release and operand
 #     images pre-mirrored, with ZTP mirror configuration for the spoke
 #   - Upstream access on the bastion for release inspection and ironic-agent mirroring;
-#     arch=multi also downloads the pinned RHCOS ISO and requires an HTTP store on port 8081
+#     arch=multi also fetches Assisted Service's default_os_images.json from GitHub,
+#     downloads the matching ARM64 RHCOS ISO, and requires an HTTP store on port 8081
 #   - ztp_git_repo_url must end with .git
 #
 # Required variables (extra-vars or inventory):
@@ -447,13 +449,40 @@
     - name: Get RHCOS image for aarch64
       when: arch == 'multi'
       block:
+        - name: Fetch current Assisted Service default OS images
+          ansible.builtin.uri:
+            url: https://raw.githubusercontent.com/openshift/assisted-service/master/data/default_os_images.json
+            return_content: true
+          register: _default_os_images
+
+        - name: Select ARM64 OS image matching the hub OCP version
+          ansible.builtin.set_fact:
+            _arm_os_images: >-
+              {{
+                _default_os_images.content | from_json
+                | selectattr('openshift_version', 'equalto', ocp_version)
+                | selectattr('cpu_architecture', 'equalto', 'arm64')
+                | list
+              }}
+
+        - name: Ensure exactly one matching ARM64 OS image is available
+          ansible.builtin.assert:
+            that:
+              - _arm_os_images | length == 1
+            fail_msg: >-
+              Expected one ARM64 OS image for OCP {{ ocp_version }} in Assisted Service's
+              default_os_images.json, found {{ _arm_os_images | length }}.
+
+        - name: Set ARM64 RHCOS image metadata
+          ansible.builtin.set_fact:
+            _arm_os_image: "{{ _arm_os_images | first }}"
+
         - name: Download RHCOS image to http store
           ansible.builtin.get_url:
-            url: "https://mirror.openshift.com/pub/openshift-v4/aarch64/dependencies/rhcos/4.10/4.10.37/rhcos-4.10.37-aarch64-live.aarch64.iso"
-            dest: "/opt/http_store/data/rhcos-4.10.37-aarch64-live.aarch64.iso"
+            url: "{{ _arm_os_image.url }}"
+            dest: "/opt/http_store/data/{{ _arm_os_image.url | basename }}"
             mode: "0644"
           become: true
-          changed_when: true
 
         - name: Get current agent Service config
           kubernetes.core.k8s_info:
@@ -472,8 +501,8 @@
                   'cpuArchitecture': 'arm64',
                   'openshiftVersion': ocp_version,
                   'rootFSUrl': '',
-                  'url': 'http://' + ansible_host + ':8081/rhcos-4.10.37-aarch64-live.aarch64.iso',
-                  'version': '410.84.202210040011-0'
+                  'url': 'http://' + ansible_host + ':8081/' + (_arm_os_image.url | basename),
+                  'version': _arm_os_image.version
                 }]
               }}
 

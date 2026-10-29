@@ -124,7 +124,7 @@
             ocp_version_facts_release: "{{ release }}"
             ocp_version_release_age_max_days: "{{ release_age_max_days | default(10000) | int }}"
       rescue:
-        - name: Mark stale release and stop setup
+        - name: Mark stale release for Prow skip
           when:
             - ansible_failed_task.name == 'Validate image age days'
             - ansible_failed_result.evaluated_to is defined
@@ -137,12 +137,18 @@
                 dest: "{{ dest_directory }}/skip.txt"
                 mode: "0660"
 
-            - name: End setup after stale release
-              ansible.builtin.meta: end_play
+            - name: Record stale-release skip
+              ansible.builtin.set_fact:
+                skip_stale_release: true
 
         - name: Fail for other version resolution errors
+          when: not (skip_stale_release | default(false))
           ansible.builtin.fail:
             msg: "{{ ansible_failed_result.msg | default('OCP version fact resolution failed') }}"
+
+    - name: End setup after stale release
+      when: skip_stale_release | default(false)
+      ansible.builtin.meta: end_play
 
     - name: Set cluster name
       ansible.builtin.set_fact:

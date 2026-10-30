@@ -136,6 +136,17 @@
       ansible.builtin.set_fact:
         report_junit_files: "{{ found_files.files | map(attribute='path') | list | difference(report_files) }}"
 
+    - name: Require XML reports before invoking the reporter
+      ansible.builtin.assert:
+        that:
+          - report_files | length > 0
+          - report_junit_files | length > 0
+        fail_msg: >-
+          Cannot upload reports: expected processed and JUnit XML files in
+          {{ reports_directory }} (found {{ report_files | length }} processed,
+          {{ report_junit_files | length }} JUnit). Check the test steps that
+          produce reports before running the reporter.
+
     - name: Gather cluster network information
       register: cluster_info
       environment:

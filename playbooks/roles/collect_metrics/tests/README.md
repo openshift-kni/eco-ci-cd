@@ -57,8 +57,9 @@ Every metric category's live query is a single, unlooped `register:`'d task
 (`_cluster_version`, `_infra`, `_worker_nodes`, `_sriov_sub`, `_talm_sub`,
 etc. — one register var per category file, see each `tasks/*.yml`), now
 guarded the same way `ocp_version_facts/tasks/latest_release.yml` guards its
-`uri` call: `when: <register> is not defined`. Pre-seeding the register var
-in a fixture (as the shape `kubernetes.core.k8s_info`/`podman_image_info`
+`uri` call: pre-seeded OCP results skip the query for the first kubeconfig,
+but a subsequent scope using a different kubeconfig queries again. Pre-seeding
+the register var in a fixture (as the shape `kubernetes.core.k8s_info`/`podman_image_info`
 would have returned it, e.g. `{resources: [...]}` or `{images: [...]}`)
 skips the live call and exercises only the deterministic string-building
 logic downstream.

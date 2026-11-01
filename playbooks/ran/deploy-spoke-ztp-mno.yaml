@@ -29,6 +29,11 @@
 #   - Reads status.desired.version from the hub ClusterVersion.
 #   - Inspects mirrored release tags (including hash tags) using skopeo and matches
 #     their io.openshift.release label to the hub version; arch=multi requires AMD64/ARM64.
+#     Nightly/EC/RC release names carry an architecture infix for every stream
+#     except the default x86_64/amd64 one (e.g. a hub installed from
+#     "5.0.0-0.nightly-2026-10-28-062412" corresponds to the same build mirrored
+#     as "5.0.0-0.nightly-multi-2026-10-28-062412" in the multi stream), so the
+#     match also accepts the mirrored label with that infix stripped.
 #   - ClusterImageSet name is the hub minor version (e.g. 4.22); releaseImage is:
 #     <disconnected_registry_url>:<disconnected_registry_port>/
 #     <mirror_ocp_release_registry_path>/openshift/release-images@sha256:<digest>.
@@ -349,7 +354,17 @@
           loop: "{{ _candidate_release_metadata.results }}"
           loop_control:
             label: "{{ item.item }}"
-          when: ((item.stdout | from_json).get('Labels') or {}).get('io.openshift.release', '') == ocp_full_version
+          vars:
+            # Nightly/EC/RC release names carry an architecture infix for
+            # every stream except the default x86_64/amd64 one, e.g. hub
+            # version "5.0.0-0.nightly-2026-10-28-062412" corresponds to
+            # "5.0.0-0.nightly-multi-2026-10-28-062412" in the multi stream -
+            # same build, different name. Strip that infix before comparing
+            # so a hub installed from the default stream still matches a
+            # same-build release mirrored for another architecture.
+            _release_label: "{{ ((item.stdout | from_json).get('Labels') or {}).get('io.openshift.release', '') }}"
+            _release_label_normalized: "{{ _release_label | regex_replace('-(multi|arm64|aarch64|ppc64le|s390x)-', '-') }}"
+          when: (_release_label == ocp_full_version) or (_release_label_normalized == ocp_full_version)
           register: _candidate_release_manifests
           changed_when: false
 

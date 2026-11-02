@@ -330,6 +330,24 @@
             label: "{{ item.item.item.namespace }}/{{ item.item.item.name }}"
 
         # ── Phase 1: Enforce day2 worker policies before provisioning ──
+        - name: Read the existing spoke group policy before switching branches
+          kubernetes.core.k8s_info:
+            api_version: policy.open-cluster-management.io/v1
+            kind: ConfigurationPolicy
+            name: group-du-standard-config-policy
+            namespace: "{{ spoke_cluster_name }}"
+            kubeconfig: "{{ spoke_kubeconfig }}"
+          register: previous_group_policy_result
+
+        - name: Record the TuneD CR names from the current group policy
+          ansible.builtin.set_fact:
+            previous_tuned_cr_names: >-
+              {{ (previous_group_policy_result.resources[0].spec['object-templates'] |
+                  default([]) | map(attribute='objectDefinition') |
+                  selectattr('kind', 'equalto', 'Tuned') |
+                  map(attribute='metadata.name') | list)
+                 if previous_group_policy_result.resources | length == 1 else [] }}
+
         - name: Patch the ArgoCD policies application to switch to the day2-worker branch
           kubernetes.core.k8s:
             api_version: argoproj.io/v1alpha1
@@ -395,8 +413,21 @@
                  list }}
             tuned_templates: >-
               {{ policy_templates | selectattr('kind', 'equalto', 'Tuned') |
-                 selectattr('metadata.name', 'equalto', 'performance-patch') |
                  list }}
+            worker_performance_profiles: >-
+              {{ policy_templates |
+                 selectattr('kind', 'equalto', 'PerformanceProfile') |
+                 selectattr('spec.machineConfigPoolSelector', 'equalto',
+                   {'pools.operator.machineconfiguration.openshift.io/worker': ''}) |
+                 selectattr('spec.nodeSelector') | list }}
+            worker_tuned_profiles: >-
+              {{ tuned_templates | map(attribute='spec.recommend', default=[]) |
+                 flatten | selectattr('machineConfigLabels', 'equalto',
+                   {'machineconfiguration.openshift.io/role': 'worker'}) |
+                 map(attribute='profile') | unique | list }}
+            defined_tuned_profiles: >-
+              {{ tuned_templates | map(attribute='spec.profile', default=[]) |
+                 flatten | map(attribute='name') | list }}
           until: >-
             group_policy | length > 0 and
             group_policy.metadata.generation | default(-1) | int ==
@@ -404,14 +435,40 @@
             (network_templates |
               selectattr('spec.disableNetworkDiagnostics', 'equalto', true) |
               list | length > 0) and
-            tuned_templates | length > 0 and
-             (tuned_templates[0].spec.recommend | default([]) |
-               selectattr('profile', 'equalto', 'performance-patch-worker') |
-               selectattr('machineConfigLabels', 'equalto',
-                 {'machineconfiguration.openshift.io/role': 'worker'}) |
-              list | length > 0)
+            worker_performance_profiles | length == 1 and
+            worker_tuned_profiles | length == 1 and
+            worker_tuned_profiles[0] in defined_tuned_profiles
           retries: 30
           delay: 20
+
+        - name: Record worker tuning from the evaluated day-2 policy
+          ansible.builtin.set_fact:
+            expected_worker_tuned_profile: >-
+              {{ spoke_group_policy_result.resources[0].spec['object-templates'] |
+                 map(attribute='objectDefinition') |
+                 selectattr('kind', 'equalto', 'Tuned') |
+                 map(attribute='spec.recommend', default=[]) | flatten |
+                 selectattr('machineConfigLabels', 'equalto',
+                   {'machineconfiguration.openshift.io/role': 'worker'}) |
+                 map(attribute='profile') | unique | first }}
+            day2_tuned_cr_names: >-
+              {{ spoke_group_policy_result.resources[0].spec['object-templates'] |
+                 map(attribute='objectDefinition') |
+                 selectattr('kind', 'equalto', 'Tuned') |
+                 map(attribute='metadata.name') | list }}
+
+        # Worker addition does not rename the existing TuneD CR. If a future
+        # policy does, require a separate, explicit migration instead of
+        # deleting CRs whose ownership cannot be established on retries.
+        - name: Require unchanged TuneD CR names across the policy switch
+          ansible.builtin.assert:
+            that:
+              - previous_tuned_cr_names | length > 0
+              - (previous_tuned_cr_names | sort) == (day2_tuned_cr_names | sort)
+            fail_msg: >-
+              TuneD CR names changed from {{ previous_tuned_cr_names }} to
+              {{ day2_tuned_cr_names }}. Handle any obsolete TuneD CRs with
+              an explicitly scoped migration before adding the worker.
 
         - name: Delete pre-existing day2 worker ClusterGroupUpgrades
           kubernetes.core.k8s:

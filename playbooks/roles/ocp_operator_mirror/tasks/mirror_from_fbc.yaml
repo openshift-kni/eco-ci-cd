@@ -372,10 +372,8 @@
               {
                 'src': (
                   (image
-                  | replace('registry.stage.redhat.io/rhacm2', 'quay.io:443/acm-d')
-                  | replace('registry.stage.redhat.io/multicluster-engine', 'quay.io:443/acm-d')
-                  | replace('registry.redhat.io/rhacm2', 'quay.io:443/acm-d')
-                  | replace('registry.redhat.io/multicluster-engine', 'quay.io:443/acm-d'))
+                  | replace('registry.redhat.io/rhacm2', 'registry.stage.redhat.io/rhacm2')
+                  | replace('registry.redhat.io/multicluster-engine', 'registry.stage.redhat.io/multicluster-engine'))
                   if (((operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base | default(''))) | length) > 0)
                   else ((image | regex_search('@sha256:[0-9a-f]{64}'))
                         | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image))

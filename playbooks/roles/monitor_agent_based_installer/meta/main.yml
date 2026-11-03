@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: eco-ci-cd
+  description: >
+    Wait for an agent-based OpenShift install. Installer logs stay on the
+    bastion so the SSH session does not carry debug output.
+  company: Red Hat
+  license: Apache-2.0
+  standalone: true
+  min_ansible_version: "2.10"
+  galaxy_tags:
+    - openshift
+
+dependencies: []

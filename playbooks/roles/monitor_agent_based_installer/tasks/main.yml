@@ -1,0 +1,122 @@
+---
+- name: Wait for API to be available
+  ansible.builtin.uri:
+    url: "https://api.{{ cluster }}.{{ base_dns_domain }}:6443/readyz"
+    validate_certs: false
+    return_content: true
+  register: _mabi_api_ready
+  until:
+    - "'ok' in _mabi_api_ready.content"
+    - _mabi_api_ready.status == 200
+  retries: 180
+  delay: 10
+
+- name: Wait for bootstrap complete
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      err=$(mktemp)
+      trap 'rm -f "$err"' EXIT
+      set +e
+      timeout "{{ mabi_wait_timeout }}" \
+        "{{ agent_based_installer_path }}" --log-level=debug agent wait-for bootstrap-complete \
+        >"$err" 2>&1
+      rc=$?
+      set -e
+      cat "$err" >> .openshift_install.log
+      tail -n 40 .openshift_install.log >&2 || true
+      exit "$rc"
+    chdir: "{{ manifests_dir }}"
+  timeout: "{{ mabi_task_timeout }}"
+  changed_when: false
+
+- name: Check installation and gather jobs if it fails
+  block:
+    - name: Wait for install complete
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          set +e
+          timeout "{{ mabi_wait_timeout }}" \
+            "{{ agent_based_installer_path }}" --log-level=debug agent wait-for install-complete \
+            >"$err" 2>&1
+          rc=$?
+          set -e
+          cat "$err" >> .openshift_install.log
+          grep -F \
+            -e 'Attempted to gather ClusterOperator status after wait failure: Listing ClusterOperator objects' \
+            -e 'No events logged from the Agent Rest API' \
+            -e 'x509: certificate has expired or is not yet valid' \
+            "$err" || true
+          tail -n 40 .openshift_install.log >&2 || true
+          exit "$rc"
+        chdir: "{{ manifests_dir }}"
+      timeout: "{{ mabi_task_timeout }}"
+      register: _mabi_install_output
+      changed_when: false
+      retries: "{{ 10 if (mabi_retry_install_complete_check | bool) else 0 }}"
+      delay: 60
+      until: >-
+        (_mabi_install_output.rc | default(124)) != 124
+        and (
+        'Attempted to gather ClusterOperator status after wait failure: Listing ClusterOperator objects'
+        not in (_mabi_install_output.stdout | default(''))
+        or 'No events logged from the Agent Rest API' in (_mabi_install_output.stdout | default(''))
+        or 'x509: certificate has expired or is not yet valid' in (_mabi_install_output.stdout | default(''))
+        )
+
+  rescue:
+    - name: Re-check install completion
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          set +e
+          timeout "{{ mabi_recheck_timeout }}" \
+            "{{ agent_based_installer_path }}" --log-level=error agent wait-for install-complete \
+            >"$err" 2>&1
+          rc=$?
+          set -e
+          cat "$err" >> .openshift_install.log
+          tail -n 40 .openshift_install.log >&2 || true
+          exit "$rc"
+        chdir: "{{ manifests_dir }}"
+      register: _mabi_recheck
+      changed_when: false
+      failed_when: false
+
+    - name: Gather logs from installation
+      when: _mabi_recheck.rc != 0
+      vars:
+        rendezvous_ip_address: "{{ hostvars[agent_based_installer_bootstrap_node][host_ip_keyword] }}"
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          set +e
+          timeout "{{ mabi_wait_timeout }}" \
+            "{{ agent_based_installer_path }}" --log-level=debug gather bootstrap \
+            --bootstrap {{ rendezvous_ip_address }} \
+            >"$err" 2>&1
+          rc=$?
+          set -e
+          cat "$err" >> "{{ manifests_dir }}/.openshift_install.log"
+          tail -n 40 "{{ manifests_dir }}/.openshift_install.log" >&2 || true
+          exit "$rc"
+        chdir: "{{ repo_root_path }}"
+      timeout: "{{ mabi_task_timeout }}"
+      register: command_result
+      until: command_result.rc == 0
+      retries: 6
+      delay: 20
+      failed_when: false
+      changed_when: false
+
+    - name: Fail properly because installation was not completed
+      when: _mabi_recheck.rc != 0
+      ansible.builtin.fail:
+        msg: "Installation was not completed"

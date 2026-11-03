@@ -146,7 +146,11 @@
               export KUBECONFIG="{{ kubeconfig }}"
               export PERF_TEST_PROFILE=performance
               export IMAGE_REGISTRY="registry.stage.redhat.io/"
+              {% if ocp_version is version('5.0', '>=') %}
+              export CNF_TESTS_IMAGE=openshift5/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
+              {% else %}
               export CNF_TESTS_IMAGE=openshift4/cnf-tests-{{ base_rhel_image }}:v{{ ocp_version }}
+              {% endif %}
               export NTO_IMAGE={{ nto_image }}
               export BUSY_CPUS_IMAGE=${CNF_TESTS_IMAGE}
               export TEST_FOLDER_PATH='test/e2e/performanceprofile/functests'

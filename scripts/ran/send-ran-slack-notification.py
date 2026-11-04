@@ -80,6 +80,13 @@ def construct_message(args):
         section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
+    # O-RAN section
+    if args.reportportal_url_oran:
+        section = "\n*O-RAN*\n____________"
+        section += f"\nSent to Report Portal: {args.reportportal_url_oran}"
+        section += f"\nSent to Polarion: {args.polarion_url}"
+        sections.append(section)
+
     # Footer with Prow job URL
     if args.job_url:
         sections.append(f"\nProw Job: {args.job_url}")
@@ -131,6 +138,7 @@ def parse_arguments():
     parser.add_argument("--reportportal-url-sno-day2-worker", required=False,
                         help="Report Portal URL for SNO Day2 Worker")
     parser.add_argument("--reportportal-url-ibu", required=False, help="Report Portal URL for IBU")
+    parser.add_argument("--reportportal-url-oran", required=False, help="Report Portal URL for O-RAN")
     return parser.parse_args()
 
 

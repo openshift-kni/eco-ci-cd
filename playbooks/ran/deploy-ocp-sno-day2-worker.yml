@@ -603,6 +603,11 @@
           loop_control:
             label: "{{ item.name }}"
           register: operator_config_results
+          until: >-
+            operator_config_results is succeeded and
+            operator_config_results.resources | default([]) | length > 0
+          retries: 30
+          delay: 30
 
         - name: Assert that the operator configs were found
           ansible.builtin.assert:

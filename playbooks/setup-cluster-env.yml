@@ -44,6 +44,12 @@
     ocp_release_version_file_name: "cluster_version"
     cluster_name_file_name: "cluster_name"
     cluster_release_map:
+      "5.1":
+        cluster_name: kni-qe-98
+        nics:
+          - intel_810
+          - mlx_cx_7
+          - intel_E830
       "5.0":
         cluster_name: kni-qe-92
         nics:

@@ -227,37 +227,6 @@
       delay: 2
       when: create_admin_cli.changed
 
-# === Create API token ===
-- name: Create API token for hypervisor Gitea
-  when: gitea_api_token is not defined or gitea_api_token == ""
-  block:
-    - name: Generate API token via HTTP Basic Auth
-      ansible.builtin.uri:
-        url: "{{ gitea_api_base }}/users/{{ gitea_admin_user }}/tokens"
-        method: POST
-        user: "{{ gitea_admin_user }}"
-        password: "{{ gitea_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          name: "ansible-automation-{{ ansible_date_time.epoch }}"
-          scopes:
-            - write:repository
-            - write:user
-            - write:organization
-        status_code: [201, 422]
-        timeout: 45
-      register: token_result
-      no_log: "{{ ansible_verbosity < 3 }}"
-
-    - name: Extract API token
-      ansible.builtin.set_fact:
-        gitea_api_token: "{{ token_result.json.sha1 }}"
-      when:
-        - token_result.status == 201
-        - token_result.json.sha1 is defined
-      no_log: "{{ ansible_verbosity < 3 }}"
-
 # === Create report repository ===
 - name: Check if report repository exists on hypervisor Gitea
   ansible.builtin.uri:

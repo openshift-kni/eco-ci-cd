@@ -1,0 +1,108 @@
+---
+# Deduplicate and rename artifact directories
+# This task is reusable - called after tarball extraction
+
+- name: Find extracted artifact directories
+  ansible.builtin.find:
+    paths: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
+    file_type: directory
+    patterns: "*-{{ spoke_cluster }}-*"
+  register: artifact_dirs
+
+- name: Deduplicate artifact directories (keep only latest per test)
+  when: artifact_dirs.files | length > 0
+  block:
+    - name: Parse artifact directory names to extract test names and timestamps
+      ansible.builtin.set_fact:
+        parsed_artifacts: >-
+          {{
+            parsed_artifacts | default([]) +
+            [{
+              'path': artifact_file.path,
+              'basename': artifact_file.path | basename,
+              'test_name': (artifact_file.path | basename | regex_replace('^(.+)-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$', '\1')),
+              'timestamp': (artifact_file.path | basename | regex_replace('^.+-' + spoke_cluster + '-([0-9]{8}-[0-9]{6})$', '\1'))
+            }]
+          }}
+      loop: "{{ artifact_dirs.files }}"
+      loop_control:
+        loop_var: artifact_file
+      when: artifact_file.path | basename | regex_search('^.+-' + spoke_cluster + '-[0-9]{8}-[0-9]{6}$')
+
+    - name: Group artifacts by test name and find latest timestamp for each
+      ansible.builtin.set_fact:
+        latest_artifacts: >-
+          {{
+            latest_artifacts | default({}) | combine({
+              artifact.test_name: (
+                latest_artifacts[artifact.test_name] | default({'timestamp': '00000000-000000'})
+                if (latest_artifacts[artifact.test_name] | default({'timestamp': '00000000-000000'})).timestamp > artifact.timestamp
+                else artifact
+              )
+            })
+          }}
+      loop: "{{ parsed_artifacts | default([]) }}"
+      loop_control:
+        loop_var: artifact
+
+    - name: Identify directories to delete (older than latest per test)
+      ansible.builtin.set_fact:
+        dirs_to_delete: >-
+          {{
+            dirs_to_delete | default([]) +
+            [old_artifact.path]
+          }}
+      loop: "{{ parsed_artifacts | default([]) }}"
+      loop_control:
+        loop_var: old_artifact
+      when: >-
+        latest_artifacts[old_artifact.test_name] is defined and
+        old_artifact.timestamp != latest_artifacts[old_artifact.test_name].timestamp
+
+    - name: Delete older artifact directories
+      ansible.builtin.file:
+        path: "{{ dir_path }}"
+        state: absent
+      loop: "{{ dirs_to_delete | default([]) }}"
+      loop_control:
+        loop_var: dir_path
+
+    - name: Rename latest artifact directories to remove timestamps
+      ansible.builtin.command:
+        cmd: >-
+          mv "{{ latest_entry.value.basename }}" "{{ latest_entry.key }}"
+        chdir: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
+      loop: "{{ latest_artifacts | dict2items }}"
+      loop_control:
+        loop_var: latest_entry
+      when: >-
+        latest_entry.value.basename != latest_entry.key
+      register: rename_result
+      changed_when: rename_result.rc == 0
+      failed_when: false
+
+    - name: Remove pre-existing target directories before rename (if rename failed)
+      ansible.builtin.file:
+        path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/{{ cleanup_entry.key }}"
+        state: absent
+      loop: "{{ latest_artifacts | dict2items }}"
+      loop_control:
+        loop_var: cleanup_entry
+        index_var: cleanup_index
+      when: >-
+        cleanup_entry.value.basename != cleanup_entry.key and
+        rename_result.results[cleanup_index].rc | default(0) != 0
+
+    - name: Retry rename after cleanup
+      ansible.builtin.command:
+        cmd: >-
+          mv "{{ retry_entry.value.basename }}" "{{ retry_entry.key }}"
+        chdir: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
+      loop: "{{ latest_artifacts | dict2items }}"
+      loop_control:
+        loop_var: retry_entry
+        index_var: retry_index
+      when: >-
+        retry_entry.value.basename != retry_entry.key and
+        rename_result.results[retry_index].rc | default(0) != 0
+      changed_when: true

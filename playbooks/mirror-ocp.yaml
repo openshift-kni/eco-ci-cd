@@ -5,7 +5,7 @@
     release: "4.22"
     arch: "x86_64"
     pull_secret_file: "/tmp/pull-secret.json"
-    wipe_registry: true
+    wipe_registry: false
   tasks:
     - name: Set OCP version facts
       ansible.builtin.import_role:

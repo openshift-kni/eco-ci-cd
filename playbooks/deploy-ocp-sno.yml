@@ -42,7 +42,10 @@
 #     matching '*.yml' are picked up - a '.yaml' suffix is silently ignored.
 #     Populate it with ./playbooks/system/deploy-hub-sno-extra-manifests.yaml, which
 #     renders the Day0 templates (console password, LSO partition table,
-#     OperatorHub) onto the bastion.
+#     OperatorHub) onto the bastion. When disconnected=true, this playbook also
+#     renders an OperatorHub resource into this folder before copying it to Day0.
+#     This resource disables all the default OperatorHub catalog sources, and
+#     is never copied for connected installations.
 #
 # Console access:
 # - The console password MachineConfig ('core' user, password 'redhat', for BMC console
@@ -640,6 +643,45 @@
     # Copied after both generate_manifests branches above: the role removes the
     # whole generated/<cluster_name> tree when it runs, so anything dropped in
     # earlier is lost.
+
+    - name: Create extra manifests directory
+      when:
+        - extra_manifests_folder is defined
+        - extra_manifests_folder | length > 0
+      ansible.builtin.file:
+        path: "{{ extra_manifests_folder }}"
+        state: directory
+        mode: "0755"
+
+    # The folder may contain this file from a previous disconnected run or the
+    # separate extra-manifests playbook. Remove it before find/copy so connected
+    # clusters retain the default OperatorHub catalog sources.
+    - name: Remove OperatorHub manifest for connected installs
+      when:
+        - not (disconnected | bool)
+        - extra_manifests_folder is defined
+        - extra_manifests_folder | length > 0
+      ansible.builtin.file:
+        path: >-
+          {{ extra_manifests_folder }}/operatorhub-disable-default-sources.yml
+        state: absent
+
+    # Disable all default OperatorHub catalog sources during Day0 installation.
+    # On disconnected clusters these sources cannot reach their external
+    # registries.
+    - name: Render disconnected OperatorHub manifest
+      when:
+        - disconnected | bool
+        - extra_manifests_folder is defined
+        - extra_manifests_folder | length > 0
+      vars:
+        disable_default_catalog_sources: true
+      ansible.builtin.template:
+        src: templates/operatorhub-disable-default-sources.j2
+        dest: >-
+          {{ extra_manifests_folder }}/operatorhub-disable-default-sources.yml
+        mode: "0644"
+
     - name: Get extra manifests files
       ansible.builtin.find:
         paths: "{{ extra_manifests_folder }}"

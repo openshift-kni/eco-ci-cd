@@ -1,0 +1,177 @@
+---
+# Ansible Playbook for Read-Only SNO CNF Baseline Assessment
+# ----------------------------------------------------------
+# Verify that a Single Node OpenShift cluster is ready for CNF network
+# configuration. Unlike deploy-cnf-config.yaml, this playbook only reads
+# cluster resources and asserts their state; it does not patch the Network
+# operator, label nodes, or create MachineConfigs/MCPs.
+#
+# Checks:
+# - One Ready control-plane/worker node without CNF/PTP labels, regardless of
+#   its name, addresses, IP stack, or OpenShift version.
+# - Updated, non-degraded master pool; no nodes in other pools; absence of the
+#   fec-workaround, load-sctp-module and load-xt-u32-module MachineConfigs.
+# - Settled Network operator and no CNF-specific network settings.
+#
+# Requirements:
+# - Ansible with the kubernetes.core collection and its Python Kubernetes client
+#   available in the execution environment on the bastion.
+# - An inventory host named bastion and API connectivity from that host.
+# - A readable kubeconfig with permission to get/list the checked resources.
+#
+# Required variable:
+# - kubeconfig: absolute path to the kubeconfig on the bastion (passed as an
+#   Ansible extra variable; K8S_AUTH_KUBECONFIG is set from this value).
+# No other playbook variables, roles, templates or cluster writes are required.
+#
+# Usage (when running Ansible directly on the bastion):
+#   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
+#   ansible-playbook -i bastion, -c local \
+#     -e "kubeconfig=$KUBECONFIG" playbooks/cnf/assess-cnf-config-sno.yaml
+#
+# This checks topology and pre-CNF configuration, not a specific site.
+- name: Assess SNO CNF baseline without changing the cluster
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Read nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes
+
+    - name: Require one Ready control-plane and worker node without CNF labels
+      ansible.builtin.assert:
+        that:
+          - nodes.resources | length == 1
+          - >-
+            'node-role.kubernetes.io/master' in
+            nodes.resources[0].metadata.labels
+          - >-
+            'node-role.kubernetes.io/worker' in
+            nodes.resources[0].metadata.labels
+          - >-
+            'node-role.kubernetes.io/workercnf' not in
+            nodes.resources[0].metadata.labels
+          - "'ptp/grandmaster' not in nodes.resources[0].metadata.labels"
+          - "'ptp/slave' not in nodes.resources[0].metadata.labels"
+          - >-
+            nodes.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Ready') |
+            selectattr('status', 'equalto', 'True') |
+            list | length == 1
+        fail_msg: >-
+          The cluster is not a Ready, unconfigured single-node installation.
+
+    - name: Read MachineConfigPools
+      kubernetes.core.k8s_info:
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfigPool
+      register: pools
+
+    - name: Read MachineConfigs
+      kubernetes.core.k8s_info:
+        api_version: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+      register: machine_configs
+
+    - name: Require an updated master pool and no CNF machine configuration
+      ansible.builtin.assert:
+        that:
+          - >-
+            pools.resources |
+            selectattr('metadata.name', 'equalto', 'master') |
+            selectattr('status.machineCount', 'equalto', 1) |
+            selectattr('status.updatedMachineCount', 'equalto', 1) |
+            selectattr('status.degradedMachineCount', 'equalto', 0) |
+            list | length == 1
+          - >-
+            pools.resources |
+            selectattr('metadata.name', 'equalto', 'master') |
+            map(attribute='status.conditions') | flatten |
+            selectattr('type', 'equalto', 'Updated') |
+            selectattr('status', 'equalto', 'True') |
+            list | length == 1
+          - >-
+            pools.resources |
+            selectattr('metadata.name', 'equalto', 'master') |
+            map(attribute='status.conditions') | flatten |
+            selectattr('type', 'equalto', 'Degraded') |
+            selectattr('status', 'equalto', 'False') |
+            list | length == 1
+          - >-
+            pools.resources |
+            rejectattr('metadata.name', 'equalto', 'master') |
+            map(attribute='status.machineCount') |
+            map('int') | sum == 0
+          - >-
+            machine_configs.resources |
+            map(attribute='metadata.name') |
+            intersect([
+              'fec-workaround', 'load-sctp-module', 'load-xt-u32-module'
+            ]) | length == 0
+        fail_msg: MachineConfigPool or CNF MachineConfig baseline has changed.
+
+    - name: Read network operator configuration
+      kubernetes.core.k8s_info:
+        api_version: operator.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: network
+
+    - name: Read network ClusterOperator
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterOperator
+        name: network
+      register: network_operator
+
+    - name: Require settled network without CNF-specific settings
+      ansible.builtin.assert:
+        that:
+          - network.resources | length == 1
+          - network_operator.resources | length == 1
+          - >-
+            not (network.resources[0].spec.additionalNetworks |
+            default([], true))
+          - >-
+            (network.resources[0].spec.useMultiNetworkPolicy |
+            default(false)) == false
+          - >-
+            (network.resources[0].spec.defaultNetwork.ovnKubernetesConfig
+            .gatewayConfig.routingViaHost | default(false)) == false
+          - >-
+            network.resources[0].spec.defaultNetwork.ovnKubernetesConfig
+            .gatewayConfig.ipForwarding | default('') == ''
+          - >-
+            network.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Available') |
+            selectattr('status', 'equalto', 'True') |
+            list | length == 1
+          - >-
+            network.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Degraded') |
+            selectattr('status', 'equalto', 'False') |
+            list | length == 1
+          - >-
+            network.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Progressing') |
+            selectattr('status', 'equalto', 'False') |
+            list | length == 1
+          - >-
+            network_operator.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Available') |
+            selectattr('status', 'equalto', 'True') |
+            list | length == 1
+          - >-
+            network_operator.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Degraded') |
+            selectattr('status', 'equalto', 'False') |
+            list | length == 1
+        fail_msg: Network operator or CNF network baseline is not ready.
+
+    - name: Confirm read-only SNO assessment
+      ansible.builtin.debug:
+        msg: SNO CNF baseline passed; no cluster resources were changed.

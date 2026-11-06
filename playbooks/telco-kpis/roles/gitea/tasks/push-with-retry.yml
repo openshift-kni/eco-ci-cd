@@ -24,7 +24,7 @@
       register: _commit_result
 
     - name: Push to repository  # noqa: command-instead-of-module
-      ansible.builtin.command: git push origin {{ report_publish_branch }}
+      ansible.builtin.command: git push origin {{ report_repo_branch }}
       args:
         chdir: "{{ git_work_dir }}"
       environment:
@@ -80,7 +80,7 @@
           changed_when: true
 
         - name: Pull latest changes from remote  # noqa: command-instead-of-module
-          ansible.builtin.command: git pull --rebase --autostash origin {{ report_publish_branch }}
+          ansible.builtin.command: git pull --rebase --autostash origin {{ report_repo_branch }}
           args:
             chdir: "{{ git_work_dir }}"
           environment:
@@ -137,7 +137,6 @@
             chdir: "{{ git_work_dir }}"
           changed_when: false
 
-        - name: Sleep briefly to reduce thundering herd
-          ansible.builtin.wait_for:
-            timeout: "{{ range(1, 5) | random }}"
-          delegate_to: localhost
+        - name: Sleep briefly (1-5s) to reduce thundering herd
+          ansible.builtin.pause:
+            seconds: "{{ range(1, 6) | random }}"

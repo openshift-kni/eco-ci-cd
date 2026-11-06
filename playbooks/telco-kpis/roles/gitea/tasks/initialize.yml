@@ -233,7 +233,3 @@
     - name: Display admin user status
       ansible.builtin.debug:
         msg: "{{ 'Admin user exists' if user_check.status == 200 else 'Admin user created via CLI' }}"
-
-    - name: Display API token status
-      ansible.builtin.debug:
-        msg: "API Token: {{ 'Created' if token_result.status == 201 else 'Already exists or failed' }}"

@@ -67,14 +67,13 @@
 - name: Set production repository metadata
   ansible.builtin.set_fact:
     gitea_repo_web_url: "{{ report_repo_url | regex_replace('\\.git$', '') }}"
-    report_publish_branch: "{{ report_repo_branch }}"
     gitea_admin_email: "{{ report_repo_user | default('telco-kpis-automation', true) }}@telco-kpis-ci.redhat.com"
 
 - name: Verify production repository is accessible
   ansible.builtin.git:
     repo: "{{ gitea_repo_http_url }}"
     dest: "/tmp/report-repo-verify-{{ ansible_date_time.epoch }}"
-    version: "{{ report_publish_branch }}"
+    version: "{{ report_repo_branch }}"
     depth: 1
   register: _repo_verify
   environment:
@@ -93,5 +92,5 @@
       - "Production Repository Verified"
       - "=========================================="
       - "Web URL: {{ gitea_repo_web_url }}"
-      - "Branch: {{ report_publish_branch }}"
+      - "Branch: {{ report_repo_branch }}"
       - "=========================================="

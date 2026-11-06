@@ -1,0 +1,144 @@
+---
+# Ansible Playbook for Read-Only SNO SR-IOV Readiness Assessment
+# --------------------------------------------------------------
+# Check whether the single-node OpenShift cluster and its two designated Intel
+# test NICs are ready for a later SR-IOV configuration. This playbook only
+# reads cluster resources and asserts their state. It does not create or patch
+# SriovNetworkNodePolicies, VFs, NetworkAttachmentDefinitions, MachineConfigs,
+# or any other cluster resources.
+#
+# Checks:
+# - master0 exists, is Ready, and has both control-plane and worker roles.
+# - The SR-IOV operator reports a synchronized node state for master0.
+# - ens7f0np0 and ens7f3np3 are reported with totalvfs greater than zero.
+# - Existing SR-IOV node policy names are reported without changing them.
+#
+# This is specific to the current kni-qe-136 SNO hardware. The Jenkins child
+# separately checks the NIC MAC addresses, carrier state, and management routes.
+# A positive totalvfs value establishes reported device capability only; it
+# does not select a VF count, policy mode, resource name, or confirm available
+# VF capacity. Approve those values before adding an apply-mode playbook.
+#
+# Requirements:
+# - Ansible with the kubernetes.core collection and its Python Kubernetes client
+#   available in the execution environment on the bastion.
+# - An inventory host named bastion and API connectivity from that host.
+# - A readable kubeconfig with permission to get/list Nodes,
+#   SriovNetworkNodeStates, and SriovNetworkNodePolicies.
+#
+# Required variable:
+# - kubeconfig: absolute path to the kubeconfig on the bastion (passed as an
+#   Ansible extra variable; K8S_AUTH_KUBECONFIG is set from this value).
+# The node and NIC names are defined in this playbook; no other variables,
+# roles, templates, or cluster writes are required.
+#
+# Usage (when running Ansible directly on the bastion):
+#   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
+#   ansible-playbook -i bastion, -c local \
+#     -e "kubeconfig=$KUBECONFIG" playbooks/cnf/assess-cnf-sriov-sno.yaml
+#
+# A successful run is a read-only readiness result, not approval to configure
+# SR-IOV or to run networking tests.
+- name: Assess SNO SR-IOV readiness without changing the cluster
+  hosts: bastion
+  gather_facts: false
+  vars:
+    sno_node_name: master0
+    sno_management_nic: eno12399np0
+    sno_sriov_test_nics:
+      - ens7f0np0
+      - ens7f3np3
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Read the SNO node
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ sno_node_name }}"
+      register: sno_node
+
+    - name: Require the Ready SNO control-plane and worker node
+      ansible.builtin.assert:
+        that:
+          - sno_node.resources | length == 1
+          - >-
+            'node-role.kubernetes.io/master' in
+            sno_node.resources[0].metadata.labels
+          - >-
+            'node-role.kubernetes.io/worker' in
+            sno_node.resources[0].metadata.labels
+          - >-
+            sno_node.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Ready') |
+            selectattr('status', 'equalto', 'True') |
+            list | length == 1
+        fail_msg: >-
+          The SNO node is not a Ready control-plane/worker; refusing the SR-IOV
+          readiness assessment.
+
+    - name: Read the SNO SR-IOV node state
+      kubernetes.core.k8s_info:
+        api_version: sriovnetwork.openshift.io/v1
+        kind: SriovNetworkNodeState
+        name: "{{ sno_node_name }}"
+        namespace: openshift-sriov-network-operator
+      register: sno_sriov_state
+
+    - name: Require a synchronized SR-IOV node state
+      ansible.builtin.assert:
+        that:
+          - sno_sriov_state.resources | length == 1
+          - >-
+            sno_sriov_state.resources[0].status.syncStatus | default('') ==
+            'Succeeded'
+        fail_msg: >-
+          The SR-IOV operator has not reported a synchronized node state.
+
+    - name: Extract discovered SR-IOV interfaces
+      ansible.builtin.set_fact:
+        sno_sriov_interfaces: >-
+          {{ sno_sriov_state.resources[0].status.interfaces |
+             default([], true) }}
+
+    - name: Require each selected Intel test NIC to be SR-IOV-capable
+      ansible.builtin.assert:
+        that:
+          - >-
+            sno_sriov_interfaces |
+            selectattr('name', 'equalto', item) |
+            selectattr('totalvfs', 'defined') |
+            selectattr('totalvfs', 'gt', 0) |
+            list | length == 1
+        fail_msg: >-
+          {{ item }} is not reported as an SR-IOV-capable interface by the
+          operator. No SR-IOV policy or VF configuration was applied.
+      loop: "{{ sno_sriov_test_nics }}"
+
+    - name: Read existing SR-IOV node policies
+      kubernetes.core.k8s_info:
+        api_version: sriovnetwork.openshift.io/v1
+        kind: SriovNetworkNodePolicy
+        namespace: openshift-sriov-network-operator
+      register: sno_sriov_policies
+
+    - name: Report existing policy names without changing them
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Existing SR-IOV node policies:
+            {{ sno_sriov_policies.resources |
+               map(attribute='metadata.name') | list }}
+          - >-
+            Management NIC {{ sno_management_nic }} is excluded from this
+            preflight's test-NIC selection.
+          - >-
+            No SriovNetworkNodePolicy, VF, NetworkAttachmentDefinition,
+            MachineConfig, or other cluster resource was changed.
+
+    - name: Report SR-IOV capacity of selected Intel test NICs
+      ansible.builtin.debug:
+        msg: "{{ item.name }} reports totalvfs={{ item.totalvfs }}"
+      loop: >-
+        {{ sno_sriov_interfaces |
+           selectattr('name', 'in', sno_sriov_test_nics) | list }}

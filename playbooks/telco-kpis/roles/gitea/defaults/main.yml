@@ -41,15 +41,17 @@ gitea_push_min_retries: 3
 # Maximum push retry attempts for concurrent access handling
 gitea_push_max_retries: 6
 
-# Report publishing branch (overridden by report_repo_branch for production repos)
-report_publish_branch: "telco-kpis-reports"
+# Report repository branch (used to clone and push reports in every mode)
+# dev-bastion / dev-hypervisor: local Gitea repos are created with main (see
+#   create-repository.yml), so reports are published there.
+# prod: external report repository branch, overridable from vault.
+report_repo_branch: "{{ 'main' if report_publish_mode | default('prod') in ['dev-bastion', 'dev-hypervisor'] else 'telco-kpis-reports' }}"
 
 # Production/external repository configuration (from vault)
 # When report_repo_url is set and development_mode is false, reports are published
 # to this external repository instead of the local Gitea instance.
 # development_mode always takes precedence for debug/troubleshooting.
 report_repo_url: ""
-report_repo_branch: "telco-kpis-reports"
 report_repo_token: ""
 report_repo_user: ""
 report_repo_password: ""

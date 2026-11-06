@@ -37,7 +37,7 @@
   ansible.builtin.git:
     repo: "{{ gitea_repo_http_url }}"
     dest: "{{ git_work_dir }}"
-    version: "{{ report_publish_branch }}"
+    version: "{{ report_repo_branch }}"
     force: true
   environment:
     GIT_TERMINAL_PROMPT: "0"
@@ -330,7 +330,7 @@
         Web URL: {{ gitea_repo_web_url }}{{
         '/-/tree/' if report_publish_mode | default('prod') == 'prod'
         else '/src/branch/' }}{{
-        report_publish_branch }}{{
+        report_repo_branch }}{{
         '/reports' if report_publish_mode | default('prod') != 'dev-bastion' else '' }}/{{
         report_dir_name }}/{{ spoke_cluster }}
       - "=========================================="

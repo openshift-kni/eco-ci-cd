@@ -1,34 +1,6 @@
 ---
-# Spoke lockdown support:
-# - Use bundle digest if available (always - ensures bit-identical mirroring)
-# - Only extract catalog if no bundle digest available
-# - Generate flag controls metadata accumulation, not digest usage
-
-- name: Detect if bundle digest available (skip catalog extraction)
-  ansible.builtin.set_fact:
-    _skip_catalog_extraction: >-
-      {{
-        (operator.bundle is defined) and ((operator.bundle | length) > 0)
-      }}
-
-- name: Set extract directory path
-  ansible.builtin.set_fact:
-    extract_dir: "{{ ocp_operator_mirror_fbc_extract_dir }}/{{ operator.name }}-{{ ocp_operator_mirror_version }}"
-  changed_when: false
-
-- name: Remove extract directory if present
-  ansible.builtin.file:
-    path: "{{ extract_dir }}"
-    state: absent
-
-- name: Create extract directory
-  ansible.builtin.file:
-    path: "{{ extract_dir }}"
-    state: directory
-    mode: '0755'
-
 - name: Compute FBC tag
-  changed_when: false
+  when: operator.fbc | default('') | length == 0
   ansible.builtin.set_fact:
     fbc_tag: >-
       {{
@@ -38,385 +10,104 @@
         else 'ocp__' ~ ocp_operator_mirror_version ~ '__' ~ operator.fbc_iib_repo
       }}
 
-- name: Remove FBC index image (if present)
-  containers.podman.podman_image:
-    name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
-    tag: "{{ fbc_tag }}"
-    state: absent
-    force: true
+- name: Set FBC workspace and source catalog
+  ansible.builtin.set_fact:
+    fbc_image: >-
+      {{ operator.fbc if operator.fbc | default('') | length > 0
+         else (operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base)) ~ ':' ~ fbc_tag }}
 
-- name: Pull FBC index image
-  register: image_info
-  retries: 3
-  delay: 10
-  until: image_info is success
-  containers.podman.podman_image:
-    name: "{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}"
-    tag: "{{ fbc_tag }}"
-    state: present
-    force: true
-    authfile: "{{ ocp_operator_mirror_pull_secret_path }}"
-
-- name: Print FBC index image digest # noqa: ignore-errors
-  failed_when: false
-  ignore_errors: true
-  ansible.builtin.debug:
-    msg: >-
-      FBC {{
-      operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base)
-      }}:{{ fbc_tag }} index image digest:
-      {{ image_info.image[0].Digest }}
-
-- name: Mirror FBC index image to internal registry (if missing)
-  changed_when: true
-  ansible.builtin.command: >-
-    skopeo copy --all --retry-times 3 --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
-    "docker://{{ operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base) }}:{{ fbc_tag }}"
-    "docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
-
-- name: Mirror sigstore signature for FBC index image (stage, OCP 4.21+ workaround)
-  when:
-    - (operator.ocp_operator_mirror_fbc_image_base | default('')) | length > 0
-    - (ocp_operator_mirror_version.split('.')[0] | int >= 5) or (ocp_operator_mirror_version.split('.')[1] | int >= 21)
+# Pin the source so the workaround tag and lockdown metadata describe the
+# exact catalog consumed by oc-mirror, even if its tag changes during the run.
+- name: Resolve source catalog digest
+  when: "'@' not in fbc_image"
   block:
-    - name: Resolve FBC index image digest
+    - name: Read source catalog image metadata
       ansible.builtin.command: >-
-        skopeo inspect
-        --no-tags
+        skopeo inspect --no-tags
         --format {% raw %}'{{ .Digest }}'{% endraw %}
-        --authfile {{ ocp_operator_mirror_pull_secret_path }}
-        docker://{{ operator.ocp_operator_mirror_fbc_image_base }}:{{ fbc_tag }}
-      register: _fbc_digest_result
+        --authfile {{ ocp_operator_mirror_pull_secret_path | quote }}
+        {{ ('docker://' ~ fbc_image) | quote }}
+      register: fbc_source_info
       changed_when: false
 
-    - name: Mirror sigstore .sig artifact to disconnected registry
-      vars:
-        _fbc_digest: "{{ _fbc_digest_result.stdout | replace(':', '-') }}"
-      ansible.builtin.command: >-
-        {{ ansible_user_dir }}/.local/bin/oc image mirror
-        --insecure=true
-        -a {{ ocp_operator_mirror_pull_secret_path }}
-        "{{ operator.ocp_operator_mirror_fbc_image_base }}:{{ _fbc_digest }}.sig"
-        "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}:{{ _fbc_digest }}.sig"
-      register: _fbc_sig_mirror_result
-      changed_when: _fbc_sig_mirror_result.rc == 0
-      failed_when: false
-      ignore_errors: true
+    - name: Pin source catalog digest
+      ansible.builtin.set_fact:
+        fbc_image: >-
+          {{ fbc_image | regex_replace('(@.*|:[^/:]+)$', '') }}@{{ fbc_source_info.stdout | trim }}
 
-- name: Create temporary container
-  containers.podman.podman_container:
-    name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"
-    image: "{{ (operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base)) }}:{{ fbc_tag }}"
-    state: created
-
-- name: Copy /configs from container
-  ansible.builtin.command:
-    argv:
-      - podman
-      - cp
-      - "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}:/configs"
-      - "{{ extract_dir }}/"
-  changed_when: true
-
-- name: Remove temporary container
-  containers.podman.podman_container:
-    name: "{{ ocp_operator_mirror_fbc_tmp_container_prefix }}{{ operator.fbc_iib_repo }}"
-    state: absent
-
-- name: Find package directory under /configs
-  ansible.builtin.find:
-    paths: "{{ extract_dir }}/configs"
-    file_type: directory
-    depth: 1
-  register: fbc_pkg_dirs
-
-- name: Fail if package directory count is not 1
-  ansible.builtin.fail:
-    msg: "Expected exactly one directory under /configs in {{ fbc_image }}, found {{ fbc_pkg_dirs.matched | default(0) }}"
-  when: (fbc_pkg_dirs.matched | default(0)) | int != 1
-
-- name: Set package directory path
+- name: Compute requested FBC target
+  vars:
+    target_catalog: "{{ operator.fbc_target_catalog | default(ocp_operator_mirror_folder ~ '/' ~ (operator.fbc_iib_repo | default(operator.catalog)), true) }}"
+    target_tag: "{{ operator.fbc_target_tag | default(ocp_operator_mirror_fbc_target_tag, true) }}"
   ansible.builtin.set_fact:
-    fbc_pkg_catalog_dir: "{{ (fbc_pkg_dirs.files | first).path }}"
+    fbc_target_catalog: "{{ target_catalog }}"
+    fbc_target_tag: "{{ target_tag }}"
 
-- name: Check if catalog.json exists
-  ansible.builtin.stat:
-    path: "{{ fbc_pkg_catalog_dir }}/catalog.json"
-  register: json_catalog
-
-- name: Check if catalog.yaml already exists
-  ansible.builtin.stat:
-    path: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
-  register: yaml_catalog
-
-- name: Convert catalog.json to catalog.yaml
-  when: json_catalog.stat.exists and not yaml_catalog.stat.exists
-  block:
-    - name: Read the catalog.json file
-      ansible.builtin.slurp:
-        src: "{{ fbc_pkg_catalog_dir }}/catalog.json"
-      register: remote_json_file
-
-    - name: Convert JSON stream to YAML and save
-      ansible.builtin.copy:
-        mode: '0644'
-        dest: "{{ fbc_pkg_catalog_dir }}/catalog.yaml"
-        content: |
-          {% set raw = remote_json_file.content | b64decode | trim %}
-          {% for item in ('[' + (raw | regex_replace('}\s*{', '}, {')) + ']') | from_json %}
-          ---
-          {{ item | to_nice_yaml(indent=2) }}
-          {% endfor %}
-
-- name: Extract bundle from catalog (generation mode or no bundle digest)
-  when: not (_skip_catalog_extraction | bool)
-  block:
-    - name: Set FBC catalog file path (bundles.yaml vs catalog.yaml)
-      ansible.builtin.set_fact:
-        catalog_path: "{{ fbc_pkg_catalog_dir }}/{{ 'bundles.yaml' if ((operator.multifile_catalog | default(false)) | bool) else 'catalog.yaml' }}"
-
-    - name: Read catalog file
-      ansible.builtin.slurp:
-        src: "{{ catalog_path }}"
-      register: cat
-
-    - name: Parse catalog file into documents
-      changed_when: false
-      ansible.builtin.set_fact:
-        docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
-
-    - name: Detect package name from catalog
-      changed_when: false
-      ansible.builtin.set_fact:
-        package: >-
-          {{
-            (docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | first)
-            if ((operator.multifile_catalog | default(false)) | bool)
-            else (docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | first)
-          }}
-
-    - name: Assert package is present in catalog
-      ansible.builtin.assert:
-        that:
-          - package is defined
-          - package | length > 0
-        fail_msg: >-
-          No package found in catalog (multifile_catalog={{ operator.multifile_catalog | default(false) }}).
-          olm.package names: {{ docs | selectattr('schema', 'equalto', 'olm.package') | map(attribute='name') | list }}.
-          olm.bundle package values: {{ docs | selectattr('schema', 'equalto', 'olm.bundle') | map(attribute='package') | unique | list }}.
-
-    - name: Collect all entry names for package/channel
-      changed_when: false
-      ansible.builtin.set_fact:
-        # Prefer olm.channel entries when present; fallback to all bundle names for this package (FBC may have only bundles.yaml)
-        _channel_entries: >-
-          {{
-            (docs
-              | selectattr('schema','equalto','olm.channel')
-              | selectattr('package','equalto', package)
-              | selectattr('name','equalto', operator.channel)
-              | map(attribute='entries') | first | default([])
-              | map(attribute='name') | list)
-          }}
-
-    - name: Set entry_names from channel or from bundles
-      ansible.builtin.set_fact:
-        entry_names: >-
-          {{ _channel_entries if (_channel_entries | length) > 0 else
-          (docs | selectattr('schema', 'equalto', 'olm.bundle') | selectattr('package', 'equalto', package) | map(attribute='name') | list)
-          }}
-      changed_when: false
-
-    - name: Ensure channel has entries
-      ansible.builtin.assert:
-        that:
-          - (entry_names | default([])) | length > 0
-        fail_msg: >-
-          No entries for package '{{ package }}' channel '{{ operator.channel }}'.
-          Available channels: {{
-            docs | selectattr('schema','equalto','olm.channel')
-                 | selectattr('package','equalto', package)
-                 | map(attribute='name') | list
-          }}
-
-    - name: Filter entry names by version substring (optional)
-      changed_when: false
-      ansible.builtin.set_fact:
-        filtered_names: >-
-          {{
-            (entry_names | select('search', operator.bundle_version) | list)
-            if (operator.bundle_version is defined and (operator.bundle_version | length) > 0)
-            else entry_names
-          }}
-
-    - name: Ensure version filter matches at least one entry
-      ansible.builtin.fail:
-        msg: "No bundle entry matched version filter '{{ operator.bundle_version }}' in channel '{{ operator.channel }}'"
-      when: filtered_names | length == 0
-
-    - name: Select bundle (latest or filtered)
-      changed_when: false
-      ansible.builtin.set_fact:
-        chosen_name: "{{ (filtered_names | community.general.version_sort | last) }}"
-
-    - name: Collect images from selected bundle
-      changed_when: false
-      ansible.builtin.set_fact:
-        chosen_images: >-
-          {{
-            (docs
-            | selectattr('schema','equalto','olm.bundle')
-            | selectattr('name','equalto', chosen_name))
-            | first
-            | combine({})
-            | dict2items
-            | selectattr('key','in',['image','relatedImages'])
-            | map(attribute='value')
-          }}
-
-    - name: Build unique image list
-      changed_when: false
-      ansible.builtin.set_fact:
-        _image_list: "{{ ([chosen_images.0] + ((chosen_images.1 | default([])) | map(attribute='image') | list)) | unique }}"
-
-- name: Use bundle digest directly (apply mode with bundle digest)
-  when: _skip_catalog_extraction | bool
+- name: Compute temporary FBC catalog
   ansible.builtin.set_fact:
-    _image_list: ["{{ operator.bundle }}"]
+    fbc_generated_catalog: >-
+      {{ 'fbc-' ~ (fbc_target_catalog | hash('sha256'))[:7]
+         if '_' in fbc_target_catalog else fbc_target_catalog }}
 
-- name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
-  changed_when: false
+- name: Compute temporary FBC tag
+  vars:
+    digest: "{{ fbc_image.split('@')[-1].split(':')[-1] }}"
   ansible.builtin.set_fact:
-    _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
-  when:
-    - not (('acm' in ((operator.catalog | default('')) | lower)) or ('mce' in ((operator.catalog | default('')) | lower)))
+    fbc_generated_tag: >-
+      {{ (digest if digest[:7] in fbc_generated_catalog else digest[:7])
+         if fbc_target_tag in fbc_generated_catalog else fbc_target_tag }}
 
-- name: Collect unique source repositories (strip digests)
-  changed_when: false
+- name: Validate workaround tag
+  ansible.builtin.assert:
+    that:
+      - fbc_generated_tag not in fbc_generated_catalog
+    fail_msg: "The generated FBC tag occurs in the target catalog {{ fbc_generated_catalog }}"
+  when: fbc_target_tag in fbc_generated_catalog
+
+- name: Validate FBC catalog mappings
+  vars:
+    existing_source: "{{ fbc_catalogs | selectattr('catalog', 'equalto', fbc_image) | list }}"
+    existing_source_target: "{{ fbc_catalog_targets | selectattr('source', 'equalto', fbc_image) | list }}"
+    target_image: "{{ ocp_operator_mirror_registry_url ~ '/' ~ fbc_target_catalog ~ ':' ~ fbc_target_tag }}"
+    existing_target: "{{ fbc_catalog_targets | selectattr('target_image', 'equalto', target_image) | list }}"
+    generated_image: "{{ ocp_operator_mirror_registry_url ~ '/' ~ fbc_generated_catalog ~ ':' ~ fbc_generated_tag }}"
+    existing_generated: "{{ fbc_catalog_targets | selectattr('image', 'equalto', generated_image) | list }}"
+  ansible.builtin.assert:
+    that:
+      - >-
+        existing_source | length == 0 or
+        (existing_source[0].targetCatalog == fbc_generated_catalog and existing_source[0].targetTag == fbc_generated_tag)
+      - existing_source_target | length == 0 or existing_source_target[0].target_image == target_image
+      - existing_target | length == 0 or existing_target[0].name == operator.catalog
+      - existing_generated | length == 0 or (existing_generated[0].target_image == target_image and existing_generated[0].source == fbc_image)
+      - fbc_catalog_targets | selectattr('image', 'equalto', target_image) | rejectattr('target_image', 'equalto', target_image) | list | length == 0
+      - fbc_catalog_targets | selectattr('target_image', 'equalto', generated_image) | rejectattr('image', 'equalto', generated_image) | list | length == 0
+    fail_msg: "FBC source and target mappings must be consistent for {{ operator.catalog }}"
+
+- name: Add FBC catalog to configuration
+  vars:
+    fbc_package:
+      name: "{{ operator.name }}"
+      defaultChannel: "{{ operator.channel }}"
+      channels:
+        - name: "{{ operator.channel }}"
+    existing: "{{ fbc_catalogs | selectattr('catalog', 'equalto', fbc_image) | list }}"
   ansible.builtin.set_fact:
-    source_repos: "{{ _image_list | map('regex_replace', '@.*', '') | list | unique }}"
+    fbc_catalogs: >-
+      {{ (fbc_catalogs | rejectattr('catalog', 'equalto', fbc_image) | list)
+         + [{'catalog': fbc_image, 'targetCatalog': fbc_generated_catalog, 'targetTag': fbc_generated_tag,
+             'packages': (existing[0].packages if existing | length else []) + [fbc_package]}] }}
+    fbc_catalog_targets: >-
+      {{ fbc_catalog_targets + [{'image': ocp_operator_mirror_registry_url ~ '/' ~ fbc_generated_catalog ~ ':' ~ fbc_generated_tag,
+                                 'target_image': ocp_operator_mirror_registry_url ~ '/' ~ fbc_target_catalog ~ ':' ~ fbc_target_tag,
+                                 'source': fbc_image,
+                                 'name': operator.catalog}] }}
 
-- name: Select source repositories for mirror mapping
-  changed_when: false
-  ansible.builtin.set_fact:
-    loop_source_repos: "{{ source_repos | map('replace', 'registry.stage.redhat.io', 'registry.redhat.io') | list }}"
-
-- name: Set empty image_digest_mirrors
-  changed_when: false
-  ansible.builtin.set_fact:
-    image_digest_mirrors: []
-
-- name: Set mirror mapping for each repository
-  changed_when: false
-  ansible.builtin.set_fact:
-    image_digest_mirrors: >-
-      {{
-        image_digest_mirrors
-        + [ {
-          'source': item,
-          'mirrors': [
-            item | regex_replace('^[^/]+', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder)
-          ]
-        } ]
-      }}
-  loop: "{{ loop_source_repos }}"
-
-- name: Apply ImageDigestMirrorSet for fbc images
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: config.openshift.io/v1
-      kind: ImageDigestMirrorSet
-      metadata:
-        name: "operators-fbc-mirror-{{ operator.name }}"
-      spec:
-        imageDigestMirrors: "{{ image_digest_mirrors }}"
-    kubeconfig: "{{ ocp_operator_mirror_kubeconfig | default(omit) }}"
-
-- name: Build source/destination image pairs (map prod digest to FBC share; preserve original repo for destination)
-  changed_when: false
-  ansible.builtin.set_fact:
-    _image_pairs: >-
-      {{
-        (_image_pairs | default([])) + [
-          {
-            'src': (
-                    (ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')))
-                    if ((operator.art_fbc | default(false)) | bool)
-                    else image),
-            'dst': (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder))
-          }
-        ]
-      }}
-  loop: "{{ _image_list }}"
-  loop_control:
-    loop_var: image
-    label: "{{ image }}"
-
-- name: Build source/destination image pairs for ACM/MCE catalog
-  when: >-
-    ('acm' in ((operator.catalog | default('')) | lower))
-    or ('mce' in ((operator.catalog | default('')) | lower))
-  block:
-    - name: Reset image pairs for this FBC operator
-      changed_when: false
-      ansible.builtin.set_fact:
-        _image_pairs: []
-
-    - name: Build source/destination image pairs (ACM/MCE catalog; FBC source remap to acm-d / quay)
-      changed_when: false
-      ansible.builtin.set_fact:
-        _image_pairs: >-
-          {{
-            (_image_pairs | default([])) + [
-              {
-                'src': (
-                  (image
-                  | replace('registry.redhat.io/rhacm2', 'registry.stage.redhat.io/rhacm2')
-                  | replace('registry.redhat.io/multicluster-engine', 'registry.stage.redhat.io/multicluster-engine'))
-                  if (((operator.ocp_operator_mirror_fbc_image_base | default(ocp_operator_mirror_fbc_image_base | default(''))) | length) > 0)
-                  else ((image | regex_search('@sha256:[0-9a-f]{64}'))
-                        | ternary(ocp_operator_mirror_art_images_share ~ (image | regex_search('@sha256:[0-9a-f]{64}')), image))
-                ),
-                'dst': (
-                  (image | regex_replace('^([^/]+)', ocp_operator_mirror_registry_url+'/'+ocp_operator_mirror_folder))
-                )
-              }
-            ]
-          }}
-      loop: "{{ _image_list }}"
-      loop_control:
-        loop_var: image
-        label: "{{ image }}"
-
-- name: Set image pairs
-  ansible.builtin.set_fact:
-    image_pairs: "{{ (image_pairs | default([])) + (_image_pairs | default([])) }}"
-  changed_when: false
-
-- name: Ensure CatalogSource for mirrored index is present
-  kubernetes.core.k8s:
-    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
-    state: present
-    definition:
-      apiVersion: operators.coreos.com/v1alpha1
-      kind: CatalogSource
-      metadata:
-        name: "{{ operator.catalog }}"
-        namespace: "openshift-marketplace"
-      spec:
-        sourceType: grpc
-        image: "{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}/{{ operator.fbc_iib_repo }}"
-
-- name: Accumulate lockdown metadata (spoke lockdown generation mode)
-  when:
-    - ocp_operator_mirror_generate_lockdown | default(false) | bool
-    - _image_list is defined
-    - (_image_list | length) > 0
+- name: Capture FBC lockdown metadata
+  when: ocp_operator_mirror_generate_lockdown | default(false) | bool
   ansible.builtin.include_role:
     name: lockdowns
     tasks_from: spoke/accumulate-metadata-fbc.yml
   vars:
     lockdown_operator_data: "{{ operator }}"
-    lockdown_bundle_digest: "{{ _image_list[0] }}"
-    lockdown_fbc_digest: "{{ operator.fbc | default(image_info.image[0].Digest) }}"
+    lockdown_fbc_digest: "{{ fbc_image }}"

@@ -1,0 +1,41 @@
+---
+# Generate README.md index from all reports
+# This task is reusable - called initially and after each failed push
+
+- name: Find all report markdown files
+  ansible.builtin.find:
+    paths: "{{ _reports_dir }}"
+    patterns: "*.md"
+    recurse: true
+  register: found_reports
+
+- name: Build report list for README
+  ansible.builtin.set_fact:
+    report_list: "{{ found_reports.files | map(attribute='path') | map('regex_replace', _reports_dir + '/', '') | list }}"
+
+- name: Find all report index JSON files
+  ansible.builtin.find:
+    paths: "{{ _reports_dir }}"
+    patterns: "report-index.json"
+    recurse: true
+  register: _found_indexes
+
+- name: Read report index files
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ _found_indexes.files }}"
+  register: _index_contents
+
+- name: Build report metadata list for README
+  vars:
+    _path_parts: "{{ item.item.path | regex_replace('^' + _reports_dir + '/', '') | split('/') }}"
+    _meta: "{{ item.content | b64decode | from_json }}"
+  ansible.builtin.set_fact:
+    report_metadata_list: "{{ (report_metadata_list | default([])) + [_meta | combine({'date': _path_parts[0]})] }}"
+  loop: "{{ _index_contents.results | default([]) }}"
+
+- name: Update reports index README.md
+  ansible.builtin.template:
+    src: README.md.j2
+    dest: "{{ _reports_dir }}/README.md"
+    mode: '0644'

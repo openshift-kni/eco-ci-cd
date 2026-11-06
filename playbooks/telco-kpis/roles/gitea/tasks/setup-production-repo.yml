@@ -14,7 +14,7 @@
       - "Production Repository Configuration"
       - "=========================================="
       - "Repository URL: {{ report_repo_url }}"
-      - "Branch: {{ report_repo_branch | default('main') }}"
+      - "Branch: {{ report_repo_branch }}"
       - "Auth method: {{ 'Token' if (report_repo_token | default('') | length > 0) else 'Password' }}"
       - "Username: {{ report_repo_user | default('(not set)') }}"
       - "=========================================="
@@ -67,7 +67,7 @@
 - name: Set production repository metadata
   ansible.builtin.set_fact:
     gitea_repo_web_url: "{{ report_repo_url | regex_replace('\\.git$', '') }}"
-    report_publish_branch: "{{ report_repo_branch | default('main') }}"
+    report_publish_branch: "{{ report_repo_branch }}"
     gitea_admin_email: "{{ report_repo_user | default('telco-kpis-automation', true) }}@telco-kpis-ci.redhat.com"
 
 - name: Verify production repository is accessible

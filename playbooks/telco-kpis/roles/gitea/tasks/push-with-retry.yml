@@ -1,0 +1,143 @@
+---
+# Single push attempt with retry logic for concurrent access
+# Called in a loop from publish-report.yml
+
+- name: Attempt commit and push with retry on conflict
+  when: not _push_succeeded
+  block:
+
+    - name: Increment attempt counter
+      ansible.builtin.set_fact:
+        _push_attempt: "{{ (_push_attempt | int) + 1 }}"
+
+    - name: Display push attempt info
+      ansible.builtin.debug:
+        msg: "Push attempt {{ _push_attempt }}/{{ _max_attempts }} for {{ spoke_cluster }}"
+
+    - name: Commit changes  # noqa: command-instead-of-module
+      ansible.builtin.command: >
+        git commit -m "Add test report for {{ spoke_cluster }} - {{ report_date }}"
+      args:
+        chdir: "{{ git_work_dir }}"
+      changed_when: true
+      failed_when: false
+      register: _commit_result
+
+    - name: Push to repository  # noqa: command-instead-of-module
+      ansible.builtin.command: git push origin {{ report_publish_branch }}
+      args:
+        chdir: "{{ git_work_dir }}"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+      register: _push_result
+      failed_when: false
+      changed_when: _push_result.rc == 0
+
+    - name: Mark push as succeeded if rc is 0
+      ansible.builtin.set_fact:
+        _push_succeeded: true
+      when: _push_result.rc == 0
+
+    - name: Handle push failure and prepare for retry
+      when:
+        - _push_result.rc != 0
+        - (_push_attempt | int) < (_max_attempts | int)
+      block:
+        - name: Log push failure (will retry)
+          ansible.builtin.debug:
+            msg:
+              - "Push failed (attempt {{ _push_attempt }}/{{ _max_attempts }})"
+              - "Another job pushed first - will regenerate README.md and retry"
+              - "Error: {{ _push_result.stderr | default('unknown') }}"
+
+        - name: Reset to HEAD (undo commit, keep changes)  # noqa: command-instead-of-module
+          ansible.builtin.command: git reset --soft HEAD~1
+          args:
+            chdir: "{{ git_work_dir }}"
+          changed_when: true
+
+        - name: Unstage all files  # noqa: command-instead-of-module
+          ansible.builtin.command: git reset HEAD
+          args:
+            chdir: "{{ git_work_dir }}"
+          changed_when: true
+
+        - name: Get relative path for README.md
+          ansible.builtin.set_fact:
+            _readme_rel_path: "{{ (_reports_dir | relpath(git_work_dir)) }}/README.md"
+
+        - name: Discard stale README.md  # noqa: command-instead-of-module
+          ansible.builtin.command: git checkout HEAD -- {{ _readme_rel_path }}
+          args:
+            chdir: "{{ git_work_dir }}"
+          changed_when: true
+          failed_when: false
+
+        - name: Remove all untracked files to avoid merge conflicts  # noqa: command-instead-of-module
+          ansible.builtin.command: git clean -fd
+          args:
+            chdir: "{{ git_work_dir }}"
+          changed_when: true
+
+        - name: Pull latest changes from remote  # noqa: command-instead-of-module
+          ansible.builtin.command: git pull --rebase --autostash origin {{ report_publish_branch }}
+          args:
+            chdir: "{{ git_work_dir }}"
+          environment:
+            GIT_TERMINAL_PROMPT: "0"
+          changed_when: true
+          register: _pull_result
+          failed_when: _pull_result.rc != 0
+
+        - name: Restore report directory structure after pull
+          ansible.builtin.file:
+            path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
+            state: directory
+            mode: '0755'
+
+        - name: Restore report markdown file after pull
+          ansible.builtin.copy:
+            src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_file }}"
+            dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/{{ report_file }}"
+            mode: '0644'
+
+        - name: Restore report index sidecar after pull
+          ansible.builtin.copy:
+            src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/report-index.json"
+            dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/report-index.json"
+            mode: '0644'
+          failed_when: false
+
+        - name: Re-extract artifacts tarball after pull
+          ansible.builtin.unarchive:
+            src: "{{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/reports/{{ report_tarball }}"
+            dest: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}/"
+            remote_src: false
+
+        - name: Clear cached artifact facts before deduplication
+          ansible.builtin.set_fact:
+            parsed_artifacts: []
+            latest_artifacts: {}
+            dirs_to_delete: []
+
+        - name: Deduplicate and rename artifact directories after pull
+          ansible.builtin.include_tasks: deduplicate-artifacts.yml
+
+        - name: Clear cached report metadata for fresh regeneration
+          ansible.builtin.set_fact:
+            report_list: []
+            report_metadata_list: []
+
+        - name: Regenerate README.md with fresh data
+          ansible.builtin.include_tasks: generate-readme.yml
+
+        - name: Re-add all files to git  # noqa: command-instead-of-module
+          ansible.builtin.command: git add -A
+          args:
+            chdir: "{{ git_work_dir }}"
+          changed_when: false
+
+        - name: Sleep briefly to reduce thundering herd
+          ansible.builtin.wait_for:
+            timeout: "{{ range(1, 5) | random }}"
+          delegate_to: localhost

@@ -1,0 +1,71 @@
+# Configure one VLAN-backed bridge on an existing hypervisor without restarting
+# its physical parent interface or any other bridge.
+# Supply secondary_networks in the hypervisor inventory, for example:
+#   secondary_networks: |
+#     br-vlan418:
+#       vlan: 418
+#       ifname: eno12399
+#       vlan_ifname: eno12399.418
+# Run: ansible-playbook playbooks/infra/configure-vlan-bridge.yml -i /path/to/inventory.yml
+---
+- name: Configure a VLAN-backed bridge on an existing hypervisor
+  hosts: hypervisor
+  become: true
+  gather_facts: true
+  vars:
+    bridge_network: "{{ (secondary_networks | from_yaml | dict2items) | first }}"
+    vlan_connection_name: "{{ bridge_network.value.vlan_ifname | default('vlan' ~ bridge_network.value.vlan) }}"
+  tasks:
+    - name: Validate the requested VLAN bridge
+      ansible.builtin.assert:
+        that:
+          - secondary_networks is defined
+          - (secondary_networks | from_yaml | dict2items | length) == 1
+          - bridge_network.key | length > 0
+          - bridge_network.value.ifname is defined
+          - bridge_network.value.ifname in ansible_facts.interfaces
+          - bridge_network.value.vlan is defined
+          - (bridge_network.value.vlan | int) >= 1
+          - (bridge_network.value.vlan | int) <= 4094
+          - vlan_connection_name | length > 0
+        fail_msg: >-
+          Define one secondary_networks bridge with a valid VLAN, an existing
+          parent interface, and optionally vlan_ifname.
+
+    - name: Configure secondary VLAN bridge and interface
+      ansible.builtin.import_tasks: tasks/configure-secondary-networks.yml
+
+    - name: Check bridge connection state
+      ansible.builtin.command:
+        argv: [nmcli, -g, GENERAL.STATE, connection, show, "{{ bridge_network.key }}"]
+      register: bridge_connection_state
+      changed_when: false
+
+    - name: Activate bridge if necessary
+      ansible.builtin.command:
+        argv: [nmcli, connection, up, "{{ bridge_network.key }}"]
+      when: not bridge_connection_state.stdout.startswith('activated')
+      changed_when: true
+
+    - name: Check VLAN connection state
+      ansible.builtin.command:
+        argv: [nmcli, -g, GENERAL.STATE, connection, show, "{{ vlan_connection_name }}"]
+      register: vlan_connection_state
+      changed_when: false
+
+    - name: Activate VLAN interface if necessary
+      ansible.builtin.command:
+        argv: [nmcli, connection, up, "{{ vlan_connection_name }}"]
+      when: not vlan_connection_state.stdout.startswith('activated')
+      changed_when: true
+
+    - name: Inspect VLAN interface attachment
+      ansible.builtin.command:
+        argv: [ip, -j, link, show, dev, "{{ vlan_connection_name }}"]
+      register: vlan_link
+      changed_when: false
+
+    - name: Verify VLAN interface is attached to the requested bridge
+      ansible.builtin.assert:
+        that:
+          - (vlan_link.stdout | from_json | first).master == bridge_network.key

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+echo "Cleaning up containers"
+podman stop -f nrop-container-tests || true
+
+podman system prune -f

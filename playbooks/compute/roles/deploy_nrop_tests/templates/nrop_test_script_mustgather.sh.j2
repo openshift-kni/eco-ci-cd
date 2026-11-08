@@ -1,3 +1,6 @@
+{% include "cleanup_containers.sh.j2" %}
+
+
 podman run --rm --name nrop-container-tests \
 --entrypoint /usr/local/bin/run-e2e-nrop-must-gather.sh \
 --net=host \

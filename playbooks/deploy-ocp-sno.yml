@@ -417,6 +417,12 @@
         network_config: "{{ network_config_string | from_yaml }}"
         mac_interface_map: "{{ mac_interface_map_string | from_yaml }}"
 
+    - name: Render master root device hints
+      when: root_device_hints_map_string is defined
+      delegate_to: bastion
+      ansible.builtin.set_fact:
+        root_device_hints: "{{ root_device_hints_map_string | from_yaml }}"
+
     - name: Capture node IPv4 default route details before removing default route (disconnected)
       delegate_to: bastion
       when: disconnected | bool

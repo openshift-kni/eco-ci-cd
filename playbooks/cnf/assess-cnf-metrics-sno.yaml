@@ -27,7 +27,8 @@
 # - kubeconfig: absolute path to the kubeconfig on the bastion (passed as an
 #   Ansible extra variable; K8S_AUTH_KUBECONFIG and KUBECONFIG use this value).
 # Optional variable:
-# - metric_test_image: test image to check (default quay.io/centos/centos:7).
+# - metric_test_image: candidate default-interface test image to check
+#   (default quay.io/centos/centos:stream10; the full suite also needs ping).
 # No cluster writes, roles, or templates are required.
 #
 # Usage (when running Ansible directly on the bastion):
@@ -41,7 +42,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    metric_test_image: quay.io/centos/centos:7
+    metric_test_image: quay.io/centos/centos:stream10
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
     KUBECONFIG: "{{ kubeconfig }}"

@@ -1,0 +1,139 @@
+---
+# Ansible Playbook for SNO Network Metrics Test Image Mirroring
+# ------------------------------------------------------------
+# Mirror the provisional CentOS Stream 10 test image to the disconnected
+# registry, then create an ImageTagMirrorSet for that image repository. Unlike
+# assess-cnf-metrics-sno.yaml, this playbook WRITES to the registry and cluster.
+# Run it only as a separate, explicitly approved preparation step; it does not
+# run tests, create VFs or NADs, or touch the management network.
+#
+# Requirements:
+# - The secured kni-qe-136 SNO inventory with a bastion host, registry host,
+#   registry port, and base64-encoded pull_secret_string for the destination.
+# - Bastion access to quay.io and the local registry, skopeo, and a trusted
+#   destination registry certificate (TLS verification is mandatory).
+# - A kubeconfig with permission to read Nodes and ImageTagMirrorSets and to
+#   create the dedicated network-metrics-daemon-images-sno ImageTagMirrorSet.
+# ImageTagMirrorSets match a repository, not one tag: all pulls from the
+# quay.io/centos/centos repository may be redirected after this change.
+# Reruns leave an identical rule and an up-to-date mirrored image unchanged;
+# a conflicting rule is never overwritten.
+#
+# Required variable:
+# - kubeconfig: absolute path to the SNO cluster's kubeconfig on the bastion.
+# The image and mirror target are intentionally fixed for this SNO slice.
+# The upstream runner must use the same source image reference. The default-
+# interface-only test slice and a subsequent node pull still need validation.
+- name: Mirror SNO network metrics test image and configure tag mirror
+  hosts: bastion
+  gather_facts: false
+  vars:
+    sno_metrics_image: quay.io/centos/centos:stream10
+    sno_metrics_mirror_set_name: network-metrics-daemon-images-sno
+    sno_metrics_mirror_repo: disconnected.registry.local:5000/tests/centos
+    cluster_disconnected: true
+    use_pull_secret: true
+    dest_tls_verify: true
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Require the approved SNO registry and credentials
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig | length > 0
+          - disconnected_registry_url | default('') == 'disconnected.registry.local'
+          - disconnected_registry_port | default('') | string == '5000'
+          - pull_secret_string | default('') | length > 0
+          - images | default([]) | length == 0
+          - test_image_mirrors | default([]) | length == 0
+        fail_msg: >-
+          An approved SNO kubeconfig, disconnected.registry.local:5000,
+          registry pull secret, and empty shared mirroring task variables are
+          required before mirroring.
+
+    - name: Read cluster nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: sno_nodes
+
+    - name: Require a Ready single-node control-plane and worker
+      ansible.builtin.assert:
+        that:
+          - sno_nodes.resources | length == 1
+          - "'node-role.kubernetes.io/master' in sno_nodes.resources[0].metadata.labels"
+          - "'node-role.kubernetes.io/worker' in sno_nodes.resources[0].metadata.labels"
+          - >-
+            sno_nodes.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Ready') |
+            selectattr('status', 'equalto', 'True') | list | length == 1
+
+    - name: Read the dedicated ImageTagMirrorSet
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ImageTagMirrorSet
+        name: "{{ sno_metrics_mirror_set_name }}"
+      register: existing_metrics_mirror_set
+
+    - name: Require any existing mirror configuration to match this SNO image
+      ansible.builtin.assert:
+        that:
+          - existing_metrics_mirror_set.resources | length <= 1
+          - >-
+            existing_metrics_mirror_set.resources | length == 0 or
+            existing_metrics_mirror_set.resources[0].spec.imageTagMirrors == [
+              {'source': 'quay.io/centos/centos',
+               'mirrors': [sno_metrics_mirror_repo]}
+            ]
+        fail_msg: >-
+          {{ sno_metrics_mirror_set_name }} exists with different repository
+          mirroring rules. Refusing to overwrite cluster-wide configuration.
+
+    - name: Read the current upstream test image digest
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --no-tags
+          - "docker://{{ sno_metrics_image }}"
+      register: sno_metrics_source_inspect
+      changed_when: false
+
+    - name: Read the mirrored test image digest if available
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --no-tags
+          - "docker://{{ sno_metrics_mirror_repo }}:stream10"
+      register: sno_metrics_dest_inspect
+      changed_when: false
+      failed_when: false
+
+    - name: Decide whether the image or mirror rule needs updating
+      ansible.builtin.set_fact:
+        sno_metrics_mirror_needs_update: >-
+          {{ existing_metrics_mirror_set.resources | length == 0 or
+             sno_metrics_dest_inspect.rc != 0 or
+             (sno_metrics_source_inspect.stdout | from_json).Digest !=
+             (sno_metrics_dest_inspect.stdout | default('{}', true) |
+              from_json).get('Digest', '') }}
+
+    # The shared MNO task copies the image with skopeo, checks its result,
+    # and only then creates the ImageTagMirrorSet. Do not use the MNO caller's
+    # clusterNetwork length gate: this disconnected SNO is dual-stack.
+    - name: Mirror the image and create the dedicated ImageTagMirrorSet
+      ansible.builtin.import_tasks: tasks/mirror_images_if_disconnected.yaml
+      when: sno_metrics_mirror_needs_update | bool
+      vars:
+        image_tag_mirror_set_name: "{{ sno_metrics_mirror_set_name }}"
+        test_images:
+          - "{{ sno_metrics_image }}"
+
+    - name: Report image mirroring scope
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Updated' if sno_metrics_mirror_needs_update else 'Already current' }}:
+          {{ sno_metrics_image }} at {{ sno_metrics_mirror_repo }}:stream10 and
+          {{ sno_metrics_mirror_set_name }}.

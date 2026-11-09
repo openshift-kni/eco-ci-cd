@@ -1,0 +1,197 @@
+---
+# Ansible Playbook for Read-Only SNO Network Metrics Readiness Assessment
+# -----------------------------------------------------------------------
+# Check prerequisites for the network-metrics-daemon test suite on a SNO.
+# This playbook reads cluster resources and queries Prometheus; it does not
+# prepare the runner, pull an image, create metrictest, or run tests.
+#
+# Checks:
+# - One Ready node selected by the worker label and a ready metrics DaemonSet.
+# - A ServiceMonitor, healthy Prometheus scrape target, and network-name metrics.
+# - The fixed metrictest namespace does not already exist.
+# - Report whether the selected test image appears in the node's image cache.
+#
+# Image cache status is informational, not a readiness gate: a cached image
+# does not prove a future pull will work, and a cache miss is expected before
+# provisioning. Registry, mirror, and pull-policy behavior require separate,
+# explicitly approved validation before tests can be enabled.
+#
+# Requirements:
+# - Ansible with the kubernetes.core collection and its Python Kubernetes client
+#   available in the execution environment on the bastion.
+# - An inventory host named bastion and API access to the checked resources.
+# - The OpenShift client at /home/telcov10n/.local/bin/oc on the bastion, with
+#   permission to exec wget in the running Prometheus pod for read-only queries.
+#
+# Required variable:
+# - kubeconfig: absolute path to the kubeconfig on the bastion (passed as an
+#   Ansible extra variable; K8S_AUTH_KUBECONFIG and KUBECONFIG use this value).
+# Optional variable:
+# - metric_test_image: test image to check (default quay.io/centos/centos:7).
+# No cluster writes, roles, or templates are required.
+#
+# Usage (when running Ansible directly on the bastion):
+#   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
+#   ansible-playbook -i bastion, -c local \
+#     -e "kubeconfig=$KUBECONFIG" playbooks/cnf/assess-cnf-metrics-sno.yaml
+#
+# A successful run confirms only the read-only cluster prerequisites; image
+# availability remains unverified and success is not approval to run tests.
+- name: Assess SNO network metrics test prerequisites without cluster writes
+  hosts: bastion
+  gather_facts: false
+  vars:
+    metric_test_image: quay.io/centos/centos:7
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+    KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Read worker-labeled nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - node-role.kubernetes.io/worker
+      register: worker_nodes
+
+    - name: Require one Ready SNO worker-labeled node
+      ansible.builtin.assert:
+        that:
+          - worker_nodes.resources | length == 1
+          - >-
+            worker_nodes.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Ready') |
+            selectattr('status', 'equalto', 'True') | list | length == 1
+
+    - name: Read network metrics daemon
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        namespace: openshift-multus
+        name: network-metrics-daemon
+      register: metrics_daemon
+
+    - name: Require daemon ready on the SNO
+      ansible.builtin.assert:
+        that:
+          - metrics_daemon.resources | length == 1
+          - metrics_daemon.resources[0].status.desiredNumberScheduled | default(0) == 1
+          - metrics_daemon.resources[0].status.numberReady | default(0) == 1
+
+    - name: Read daemon scrape configuration
+      kubernetes.core.k8s_info:
+        api_version: monitoring.coreos.com/v1
+        kind: ServiceMonitor
+        namespace: openshift-multus
+        name: monitor-network
+      register: metrics_monitor
+
+    - name: Require daemon ServiceMonitor
+      ansible.builtin.assert:
+        that:
+          - metrics_monitor.resources | length == 1
+          - >-
+            metrics_monitor.resources[0].spec.selector.matchLabels.service |
+            default('') == 'network-metrics-service'
+
+    - name: Read Prometheus pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-monitoring
+        label_selectors:
+          - app.kubernetes.io/name=prometheus
+      register: prometheus_pods
+
+    - name: Require one running Prometheus pod
+      ansible.builtin.assert:
+        that:
+          - prometheus_pods.resources | length == 1
+          - prometheus_pods.resources[0].status.phase == 'Running'
+
+    # localhost:9090 is Prometheus's own read-only HTTP query endpoint. Exec
+    # starts wget in the existing pod; it creates no Kubernetes resources.
+    - name: Query the daemon scrape target in Prometheus
+      ansible.builtin.command:
+        argv:
+          - /home/telcov10n/.local/bin/oc
+          - exec
+          - -n
+          - openshift-monitoring
+          - "{{ prometheus_pods.resources[0].metadata.name }}"
+          - -c
+          - prometheus
+          - --
+          - wget
+          - -qO-
+          - 'http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22network-metrics-service%22%7D'
+      register: daemon_up_query
+      changed_when: false
+
+    - name: Require a healthy daemon scrape target
+      ansible.builtin.assert:
+        that:
+          - (daemon_up_query.stdout | from_json).status == 'success'
+          - >-
+            (daemon_up_query.stdout | from_json).data.result |
+            selectattr('value.1', 'equalto', '1') | list | length > 0
+
+    - name: Query network-name metrics in Prometheus
+      ansible.builtin.command:
+        argv:
+          - /home/telcov10n/.local/bin/oc
+          - exec
+          - -n
+          - openshift-monitoring
+          - "{{ prometheus_pods.resources[0].metadata.name }}"
+          - -c
+          - prometheus
+          - --
+          - wget
+          - -qO-
+          - 'http://127.0.0.1:9090/api/v1/query?query=pod_network_name_info'
+      register: network_name_query
+      changed_when: false
+
+    - name: Require network-name metrics in Prometheus
+      ansible.builtin.assert:
+        that:
+          - (network_name_query.stdout | from_json).status == 'success'
+          - (network_name_query.stdout | from_json).data.result | length > 0
+
+    - name: Read fixed test namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: metrictest
+      register: metric_namespace
+
+    - name: Refuse to use an existing test namespace
+      ansible.builtin.assert:
+        that:
+          - metric_namespace.resources | length == 0
+        fail_msg: >-
+          metrictest already exists; the upstream suite deletes pods, NADs,
+          and the namespace. Confirm exclusive test ownership before proceeding.
+
+    - name: Check the selected test image against the node's reported cache
+      ansible.builtin.set_fact:
+        metric_image_cached: >-
+          {{ worker_nodes.resources[0].status.images | default([]) |
+             map(attribute='names') | flatten |
+             select('equalto', metric_test_image) |
+             list | length > 0 }}
+
+    - name: Report read-only image check
+      ansible.builtin.debug:
+        msg: >-
+          Test image {{ metric_test_image }} cached on
+          {{ worker_nodes.resources[0].metadata.name }}: {{ metric_image_cached }}.
+          Image availability is NOT VERIFIED by this check. Verify the approved
+          registry/mirror and a pod pull separately before enabling tests.
+
+    - name: Report read-only preflight scope
+      ansible.builtin.debug:
+        msg: >-
+          SNO daemon, Prometheus, and test namespace prerequisites passed.
+          Test-image pullability remains unverified; tests stay disabled.

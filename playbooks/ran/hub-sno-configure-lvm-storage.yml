@@ -122,17 +122,6 @@
         vol_group_name: "{{ hostvars['master0'].vol_group_name }}"
       loop: "{{ hostvars['master0'].local_volume_name }}"
 
-    - name: Make local-sc the default storage class
-      kubernetes.core.k8s:
-        state: patched
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: local-sc
-            annotations:
-              storageclass.kubernetes.io/is-default-class: "true"
-
     - name: Wait for LocalVolume resources to be created and ready
       kubernetes.core.k8s_info:
         kind: LocalVolume
@@ -145,3 +134,24 @@
       retries: 30
       delay: 10
       loop: "{{ hostvars['master0'].local_volume_name }}"
+
+    - name: Wait for local-sc storage class to be created
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: local-sc
+      register: local_storage_class_info
+      until: local_storage_class_info.resources | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Make local-sc the default storage class
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: local-sc
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"

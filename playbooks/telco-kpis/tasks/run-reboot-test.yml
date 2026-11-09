@@ -23,7 +23,7 @@
       Supports optional execution modifiers via test_options.
     test_default_reboot_count: "{{ telco_kpis_default_reboot_count }}"
     test_command: "bash scripts/test_reboot.sh reboot={{
-      [ reboot_count
+      [reboot_count
       | default(telco_kpis_default_reboot_count)
       | string, test_options
       | default('')]

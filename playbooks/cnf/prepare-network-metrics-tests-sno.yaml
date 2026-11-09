@@ -1,0 +1,118 @@
+---
+# Prepare (but do not run) the default-interface network-metrics-daemon tests.
+# This is the SNO-only counterpart to deploy-run-metric-tests-script.yaml.
+# It never runs the unfiltered MNO suite, mirrors images, or modifies the
+# cluster. The generated runner creates the upstream metrictest namespace only
+# when separately invoked, and refuses to start if that namespace exists.
+#
+# Required: kubeconfig on the bastion and a writable, unused work directory.
+# Usage: ansible-playbook -i bastion, -c local \
+#   -e "kubeconfig=/home/telcov10n/project/generated/kni-qe-136/auth/kubeconfig" \
+#   playbooks/cnf/prepare-network-metrics-tests-sno.yaml
+- name: Assess SNO network metrics prerequisites
+  import_playbook: assess-cnf-metrics-sno.yaml
+
+- name: Prepare isolated SNO default-interface metrics runner
+  hosts: bastion
+  gather_facts: false
+  vars:
+    sno_metrics_workdir: /home/telcov10n/project/sno-network-metrics
+    sno_metrics_source_revision: 82a60353740a54e16ae88e9cbd963a00f7f74a33
+    sno_metrics_image: quay.io/centos/centos:stream10
+    sno_metrics_junit: "{{ sno_metrics_workdir }}/report/nmd_sno_default_interface.xml"
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Require a readable SNO kubeconfig and a fresh work directory
+      ansible.builtin.stat:
+        path: "{{ sno_metrics_workdir }}"
+      register: sno_metrics_existing_workdir
+
+    - name: Refuse to overwrite an earlier runner or other work
+      ansible.builtin.assert:
+        that:
+          - kubeconfig is defined
+          - kubeconfig == '/home/telcov10n/project/generated/kni-qe-136/auth/kubeconfig'
+          - not sno_metrics_existing_workdir.stat.exists
+          - sno_metrics_image == 'quay.io/centos/centos:stream10'
+        fail_msg: >-
+          Use the kni-qe-136 kubeconfig, Stream 10 test image, and an unused
+          SNO work directory. This playbook never removes an existing directory.
+
+    - name: Create a SNO-only work directory
+      ansible.builtin.file:
+        path: "{{ sno_metrics_workdir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Clone the reviewed upstream release-5.0 revision
+      ansible.builtin.git:
+        repo: https://github.com/openshift/network-metrics-daemon.git
+        dest: "{{ sno_metrics_workdir }}/source"
+        version: "{{ sno_metrics_source_revision }}"
+        refspec: '+refs/heads/release-5.0:refs/remotes/origin/release-5.0'
+        update: false
+
+    - name: Read the reviewed default-interface suite source
+      ansible.builtin.slurp:
+        src: "{{ sno_metrics_workdir }}/source/test/network-metrics-daemon/network_metrics_daemon.go"
+      register: sno_metrics_tests_source
+
+    - name: Require the separate default-interface and secondary-network contexts
+      ansible.builtin.assert:
+        that:
+          - >-
+            (sno_metrics_tests_source.content | b64decode).count(
+              'ginkgo.Context("Network interface metrics", func()') == 1
+          - >-
+            (sno_metrics_tests_source.content | b64decode).count(
+              'ginkgo.Context("Network Name metric", func()') == 1
+        fail_msg: Upstream test contexts have changed; do not run the focused suite.
+
+    # The upstream go.mod requires Go 1.26.5.
+    # GOTOOLCHAIN=auto must resolve the matching toolchain before test time.
+    - name: Resolve the Go toolchain required by the pinned suite
+      ansible.builtin.command:
+        argv:
+          - /usr/local/go/bin/go
+          - version
+        chdir: "{{ sno_metrics_workdir }}/source"
+      environment:
+        GOPATH: "{{ sno_metrics_workdir }}/go"
+        GOTOOLCHAIN: auto
+      register: sno_metrics_go_version
+      changed_when: false
+
+    - name: Require Go 1.26.5 for the pinned release-5.0 suite
+      ansible.builtin.assert:
+        that:
+          - "'go1.26.5' in sno_metrics_go_version.stdout"
+        fail_msg: >-
+          The upstream suite requires Go 1.26.5. Resolve its toolchain on the
+          bastion before using the SNO runner.
+
+    - name: Install the upstream suite's Ginkgo v1 CLI into this work directory
+      ansible.builtin.command:
+        argv:
+          - /usr/local/go/bin/go
+          - install
+          - github.com/onsi/ginkgo/ginkgo@v1.16.5
+        chdir: "{{ sno_metrics_workdir }}/source"
+        creates: "{{ sno_metrics_workdir }}/bin/ginkgo"
+      environment:
+        GOPATH: "{{ sno_metrics_workdir }}/go"
+        GOBIN: "{{ sno_metrics_workdir }}/bin"
+        GOTOOLCHAIN: auto
+
+    - name: Render the opt-in SNO-only runner
+      ansible.builtin.template:
+        src: run_network_metrics_daemon_tests_sno.j2
+        dest: "{{ sno_metrics_workdir }}/run-default-interface.sh"
+        mode: '0700'
+
+    - name: Report preparation without running tests
+      ansible.builtin.debug:
+        msg: >-
+          Prepared {{ sno_metrics_workdir }}/run-default-interface.sh with
+          {{ sno_metrics_image }} and Go {{ sno_metrics_go_version.stdout }}.
+          No networking tests ran and no cluster resources were changed.

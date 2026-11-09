@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# SNO-only, default-interface subset. Do not replace this with make run-test:
+# upstream's make target runs the secondary macvlan/NAD tests as well.
+set -euo pipefail
+
+export KUBECONFIG="{{ kubeconfig }}"
+export METRIC_TEST_IMAGE="{{ sno_metrics_image }}"
+export JUNIT_OUTPUT="{{ sno_metrics_junit }}"
+export GOPATH="{{ sno_metrics_workdir }}/go"
+export GOFLAGS=-mod=vendor
+export GOTOOLCHAIN=auto
+export PATH="/usr/local/go/bin:{{ sno_metrics_workdir }}/bin:$PATH"
+
+source_dir="{{ sno_metrics_workdir }}/source"
+ginkgo="{{ sno_metrics_workdir }}/bin/ginkgo"
+lock_file="/home/telcov10n/project/sno-network-metrics-default-interface.lock"
+
+# An independent job using metrictest cannot be excluded by this lock. Never
+# take ownership of a pre-existing namespace or clean it up on failure.
+exec 9>"$lock_file"
+flock -n 9 || { echo 'Another SNO metrics runner holds the lock.' >&2; exit 2; }
+
+cd -- "$source_dir"
+[[ "$(git rev-parse HEAD)" == "{{ sno_metrics_source_revision }}" ]] || {
+    echo 'The reviewed upstream revision changed; refusing to run.' >&2
+    exit 2
+}
+[[ -z "$(git status --porcelain -- test)" ]] || {
+    echo 'Upstream tests have local changes; refusing to run.' >&2
+    exit 2
+}
+[[ -x "$ginkgo" && -r "$KUBECONFIG" && ! -e "$JUNIT_OUTPUT" ]] || {
+    echo 'Missing Ginkgo/kubeconfig or an existing JUnit report; refusing to run.' >&2
+    exit 2
+}
+[[ "$(/home/telcov10n/.local/bin/oc get node master0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == True ]] || {
+    echo 'SNO node is not Ready.' >&2
+    exit 2
+}
+existing_namespace=$(/home/telcov10n/.local/bin/oc get namespace metrictest --ignore-not-found -o name)
+[[ -z "$existing_namespace" ]] || {
+    echo 'metrictest already exists; upstream deletes it. Refusing to run.' >&2
+    exit 2
+}
+
+mkdir -p -- "$(dirname -- "$JUNIT_OUTPUT")"
+
+# Ginkgo v1 focus/skip expressions match the upstream Describe/Context text.
+# Two default-interface specs are expected; the Network Name metric context
+# (which creates macvlan NADs and uses ping) must never run here.
+status=0
+"$ginkgo" -focus='NetworkMetricsDaemon Network interface metrics' \
+    -skip='Network Name metric' ./test -- -junit "$JUNIT_OUTPUT" || status=$?
+
+if [[ -s "$JUNIT_OUTPUT" ]]; then
+    python3 - "$JUNIT_OUTPUT" <<'PY' || status=1
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+cases = [case for case in root.iter('testcase') if case.find('skipped') is None]
+if (root.get('tests') != '2' or len(cases) != 2 or
+        any('Network interface metrics' not in case.get('name', '') for case in cases)):
+    sys.exit('Unexpected test selection: expected exactly two default-interface specs')
+print('Verified JUnit selection: two default-interface specs; no secondary-network specs')
+PY
+else
+    echo 'No JUnit report generated; focused test run is invalid.' >&2
+    status=1
+fi
+
+# The upstream suite deletes metrictest in AfterSuite. Do not delete it here:
+# an interrupted run or foreign resources require a human ownership review.
+remaining_namespace=$(/home/telcov10n/.local/bin/oc get namespace metrictest --ignore-not-found -o name) || status=1
+if [[ -n "$remaining_namespace" ]]; then
+    echo 'WARNING: metrictest remains; inspect ownership before cleanup.' >&2
+    status=1
+fi
+exit "$status"

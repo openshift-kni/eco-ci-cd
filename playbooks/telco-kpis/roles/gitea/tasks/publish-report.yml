@@ -275,7 +275,7 @@
       ansible.builtin.set_fact:
         _push_attempt: 0
         _push_succeeded: false
-        _min_attempts: "{{ gitea_push_min_retries | int }}"
+        _min_attempts: "{{ gitea_push_min_retries | int }}"
         _max_attempts: "{{ [gitea_push_max_retries | int, gitea_push_min_retries | int] | max }}"
 
     - name: Commit and push attempt

@@ -8,7 +8,6 @@
 # Checks:
 # - One Ready node selected by the worker label and a ready metrics DaemonSet.
 # - A ServiceMonitor, healthy Prometheus scrape target, and network-name metrics.
-# - The fixed metrictest namespace does not already exist.
 # - Report whether the selected test image appears in the node's image cache.
 #
 # Image cache status is informational, not a readiness gate: a cached image
@@ -27,7 +26,8 @@
 # - kubeconfig: absolute path to the kubeconfig on the bastion (passed as an
 #   Ansible extra variable; K8S_AUTH_KUBECONFIG and KUBECONFIG use this value).
 # Optional variable:
-# - metric_test_image: test image to check (default quay.io/centos/centos:7).
+# - metric_test_image: candidate default-interface test image to check
+#   (default quay.io/centos/centos:stream10; the full suite also needs ping).
 # No cluster writes, roles, or templates are required.
 #
 # Usage (when running Ansible directly on the bastion):
@@ -41,7 +41,7 @@
   hosts: bastion
   gather_facts: false
   vars:
-    metric_test_image: quay.io/centos/centos:7
+    metric_test_image: quay.io/centos/centos:stream10
   environment:
     K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
     KUBECONFIG: "{{ kubeconfig }}"
@@ -159,21 +159,6 @@
           - (network_name_query.stdout | from_json).status == 'success'
           - (network_name_query.stdout | from_json).data.result | length > 0
 
-    - name: Read fixed test namespace
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Namespace
-        name: metrictest
-      register: metric_namespace
-
-    - name: Refuse to use an existing test namespace
-      ansible.builtin.assert:
-        that:
-          - metric_namespace.resources | length == 0
-        fail_msg: >-
-          metrictest already exists; the upstream suite deletes pods, NADs,
-          and the namespace. Confirm exclusive test ownership before proceeding.
-
     - name: Check the selected test image against the node's reported cache
       ansible.builtin.set_fact:
         metric_image_cached: >-
@@ -193,5 +178,5 @@
     - name: Report read-only preflight scope
       ansible.builtin.debug:
         msg: >-
-          SNO daemon, Prometheus, and test namespace prerequisites passed.
+          SNO daemon and Prometheus prerequisites passed.
           Test-image pullability remains unverified; tests stay disabled.

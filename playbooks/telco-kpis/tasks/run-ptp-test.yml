@@ -20,7 +20,7 @@
       captures results. Supports optional execution modifiers via test_options.
     test_default_duration: "{{ telco_kpis_default_duration_ptp }}"
     test_command: "bash scripts/test_ptp.sh ptp={{
-      [ duration
+      [duration
       | default(telco_kpis_default_duration_ptp), test_options
       | default('')]
       | select

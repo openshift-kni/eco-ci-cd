@@ -239,6 +239,7 @@
             dest: "{{ gitea_clone_dir }}"
             version: "{{ _freshness_branch }}"
             depth: 10
+            single_branch: true
           failed_when: false
           register: gitea_clone_result
           environment:

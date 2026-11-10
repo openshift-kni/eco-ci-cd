@@ -131,8 +131,8 @@
         - name: Regenerate README.md with fresh data
           ansible.builtin.include_tasks: generate-readme.yml
 
-        - name: Re-add all files to git  # noqa: command-instead-of-module
-          ansible.builtin.command: git add -A
+        - name: Re-add all report files to git  # noqa: command-instead-of-module
+          ansible.builtin.command: git add -A -- {{ _reports_dir | relpath(git_work_dir) }}
           args:
             chdir: "{{ git_work_dir }}"
           changed_when: false

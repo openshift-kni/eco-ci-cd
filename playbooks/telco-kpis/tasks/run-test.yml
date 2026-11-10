@@ -52,219 +52,285 @@
 - name: Initialize infrastructure issue tracking
   ansible.builtin.set_fact:
     test_infra_failures: []
+    test_unexpected_failure: ""
 
-- name: Record test start time
-  ansible.builtin.include_role:
-    name: test_duration
-    tasks_from: start.yml
+# Execute and validate the test inside a block so that an unexpected failure
+# still reaches artifact collection in the always section below. The play
+# fails once at the end, after artifacts have been collected.
+- name: Execute test and validate results
+  block:
+    - name: Record test start time
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: start.yml
 
-- name: Display test configuration
-  ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "{{ test_display_name }} Test Configuration"
-      - "=========================================="
-      - "Spoke Cluster: {{ spoke_cluster }}"
-      - "Kubeconfig: {{ spoke_kubeconfig }}"
-      - "Duration: {{ duration | default(test_default_duration | default('N/A')) }}"
-      - "{% if test_name == 'cpu_util' %}Baseline Mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
-      - "{% if test_name == 'reboot' %}Reboot Count: {{ reboot_count | default(test_default_reboot_count | default('N/A')) }}{% endif %}"
-      - "Disconnected Registry: {{ test_disconnected_registry }}"
-      - "Artifacts: {{ artifacts_dir.path }}"
-      - "=========================================="
+    - name: Display test configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "{{ test_display_name }} Test Configuration"
+          - "=========================================="
+          - "Spoke Cluster: {{ spoke_cluster }}"
+          - "Kubeconfig: {{ spoke_kubeconfig }}"
+          - "Duration: {{ duration | default(test_default_duration | default('N/A')) }}"
+          - "{% if test_name == 'cpu_util' %}Baseline Mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
+          - "{% if test_name == 'reboot' %}Reboot Count: {{ reboot_count | default(test_default_reboot_count | default('N/A')) }}{% endif %}"
+          - "Disconnected Registry: {{ test_disconnected_registry }}"
+          - "Artifacts: {{ artifacts_dir.path }}"
+          - "=========================================="
 
-- name: Gather network facts for container etc_hosts configuration
-  ansible.builtin.setup:
-    gather_subset:
-      - network
+    - name: Gather network facts for container etc_hosts configuration
+      ansible.builtin.setup:
+        gather_subset:
+          - network
 
-- name: Ensure kubeconfig is readable by podman container
-  ansible.builtin.file:
-    path: "{{ spoke_kubeconfig }}"
-    mode: '0644'
+    - name: Ensure kubeconfig is readable by podman container
+      ansible.builtin.file:
+        path: "{{ spoke_kubeconfig }}"
+        mode: '0644'
 
-- name: Display monitoring instructions for real-time log viewing
-  ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "To monitor test execution in real-time:"
-      - "=========================================="
-      - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
-      - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
-      - ""
-      - "Or from local:"
-      - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
-      - "=========================================="
-      - "Container name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
-      - "Podman logs:    podman logs -f telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
-      - "=========================================="
+    - name: Display monitoring instructions for real-time log viewing
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "To monitor test execution in real-time:"
+          - "=========================================="
+          - "SSH to bastion: ssh {{ ansible_user }}@{{ ansible_host }}"
+          - "Tail the log:   tail -f {{ artifacts_dir.path }}/podman-run.log"
+          - ""
+          - "Or from local:"
+          - "ssh {{ ansible_user }}@{{ ansible_host }} 'tail -f {{ artifacts_dir.path }}/podman-run.log'"
+          - "=========================================="
+          - "Container name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
+          - "Podman logs:    podman logs -f telco-kpis-{{ test_name }}-{{ spoke_cluster }}"
+          - "=========================================="
 
-- name: Template test script to bastion - {{ test_display_name }}
-  ansible.builtin.template:
-    src: templates/run_test.sh.j2
-    dest: "{{ artifacts_dir.path }}/run_{{ test_name }}_test.sh"
-    mode: '0755'
+    - name: Template test script to bastion - {{ test_display_name }}
+      ansible.builtin.template:
+        src: templates/run_test.sh.j2
+        dest: "{{ artifacts_dir.path }}/run_{{ test_name }}_test.sh"
+        mode: '0755'
 
-- name: Run test in podman container - {{ test_display_name }}
-  containers.podman.podman_container:
-    name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
-    image: "{{ telco_kpis_test_runner_image }}"
-    state: started
-    detach: false
-    rm: true
-    command: /workspace/artifacts/run_{{ test_name }}_test.sh
-    env:
-      DISABLE_PUSHGATEWAY_RAN_METRICS_UPLOAD: "true"
-      DISABLE_OPENSEARCH_RAN_METRICS_UPLOAD: "true"
-    volume:
-      - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
-      - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
-      - "/tmp/telco-kpis-disconnected-auth.json:/run/containers/0/auth.json:ro,Z"
-      - "/tmp/telco-kpis-ca-bundle.pem:/etc/pki/tls/certs/ca-bundle.crt:ro,Z"
-    etc_hosts:
-      disconnected.registry.local: "{{ ansible_default_ipv4.address }}"
-  register: test_result
-  failed_when: false
-  changed_when: false
+    - name: Run test in podman container - {{ test_display_name }}
+      containers.podman.podman_container:
+        name: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+        image: "{{ telco_kpis_test_runner_image }}"
+        state: started
+        detach: false
+        rm: true
+        command: /workspace/artifacts/run_{{ test_name }}_test.sh
+        env:
+          DISABLE_PUSHGATEWAY_RAN_METRICS_UPLOAD: "true"
+          DISABLE_OPENSEARCH_RAN_METRICS_UPLOAD: "true"
+        volume:
+          - "{{ spoke_kubeconfig }}:/tmp/kubeconfig-ro:ro,Z"
+          - "{{ artifacts_dir.path }}:/workspace/artifacts:rw,Z"
+          - "/tmp/telco-kpis-disconnected-auth.json:/run/containers/0/auth.json:ro,Z"
+          - "/tmp/telco-kpis-ca-bundle.pem:/etc/pki/tls/certs/ca-bundle.crt:ro,Z"
+        etc_hosts:
+          disconnected.registry.local: "{{ ansible_default_ipv4.address }}"
+      register: test_result
+      failed_when: false
+      changed_when: false
 
-- name: Save container output to log file
-  ansible.builtin.copy:
-    content: "{{ test_result.stdout }}"
-    dest: "{{ artifacts_dir.path }}/podman-run.log"
-    mode: '0644'
+    - name: Save container output to log file
+      ansible.builtin.copy:
+        content: "{{ test_result.stdout }}"
+        dest: "{{ artifacts_dir.path }}/podman-run.log"
+        mode: '0644'
 
-- name: Extract container exit code
-  ansible.builtin.set_fact:
-    test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
+    - name: Extract container exit code
+      ansible.builtin.set_fact:
+        test_exit_code: "{{ test_result.container.State.ExitCode | default(0) }}"
 
-- name: Validate test results were generated (JUnit XML presence check)
-  ansible.builtin.find:
-    paths: "{{ artifacts_dir.path }}"
-    patterns: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
-    file_type: file
-  register: junit_files
+    - name: Validate test results were generated (JUnit XML presence check)
+      ansible.builtin.find:
+        paths: "{{ artifacts_dir.path }}"
+        patterns: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
+        file_type: file
+      register: junit_files
 
-# Record the issue instead of failing here: the play must continue so that
-# artifact_management can still collect everything. The play fails at the end.
-- name: Record missing test results as an infrastructure issue
-  ansible.builtin.set_fact:
-    test_infra_failures: >-
-      {{ test_infra_failures + [
-        'JUnit XML not generated: pattern "' ~ (test_junit_pattern | default(test_name + '_report.xml'))
-        ~ '" not found in ' ~ artifacts_dir.path
-        ~ ' (container exit code ' ~ (test_exit_code | string) ~ ')'
-      ] }}
-  when: junit_files.matched == 0
+    # Record the issue instead of failing here: the play must continue so that
+    # artifact_management can still collect everything. The play fails at the end.
+    - name: Record missing test results as an infrastructure issue
+      ansible.builtin.set_fact:
+        test_infra_failures: >-
+          {{ test_infra_failures + [
+            'JUnit XML not generated: pattern "' ~ (test_junit_pattern | default(test_name + '_report.xml'))
+            ~ '" not found in ' ~ artifacts_dir.path
+            ~ ' (container exit code ' ~ (test_exit_code | string) ~ ')'
+          ] }}
+      when: junit_files.matched == 0
 
-- name: Record test duration and save metadata
-  ansible.builtin.include_role:
-    name: test_duration
-    tasks_from: stop.yml
-  vars:
-    test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
+    - name: Record test duration and save metadata
+      ansible.builtin.include_role:
+        name: test_duration
+        tasks_from: stop.yml
+      vars:
+        test_duration_artifacts_dir: "{{ artifacts_dir.path }}"
 
-- name: Check if duration validation result file exists
-  ansible.builtin.stat:
-    path: "{{ artifacts_dir.path }}/duration-validation-result.txt"
-  register: duration_validation_file
-  when: duration is defined
+    - name: Check if duration validation result file exists
+      ansible.builtin.stat:
+        path: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+      register: duration_validation_file
+      when: duration is defined
 
-- name: Read duration validation result
-  ansible.builtin.slurp:
-    src: "{{ artifacts_dir.path }}/duration-validation-result.txt"
-  register: duration_validation_content
-  when:
-    - duration is defined
-    - duration_validation_file.stat.exists
+    - name: Read duration validation result
+      ansible.builtin.slurp:
+        src: "{{ artifacts_dir.path }}/duration-validation-result.txt"
+      register: duration_validation_content
+      when:
+        - duration is defined
+        - duration_validation_file.stat.exists
 
-- name: Parse duration validation result
-  ansible.builtin.set_fact:
-    duration_validation: "{{ dict(duration_validation_content['content'] | b64decode | regex_findall('^(.+)=(.+)$', multiline=True)) }}"
-  when:
-    - duration is defined
-    - duration_validation_file.stat.exists
+    - name: Parse duration validation result
+      ansible.builtin.set_fact:
+        duration_validation: "{{ dict(duration_validation_content['content'] | b64decode | regex_findall('^(.+)=(.+)$', multiline=True)) }}"
+      when:
+        - duration is defined
+        - duration_validation_file.stat.exists
 
-# Record the issue instead of failing here: the play must continue so that
-# artifact_management can still collect everything. The play fails at the end.
-- name: Record suspiciously short test duration as an infrastructure issue
-  ansible.builtin.set_fact:
-    test_infra_failures: >-
-      {{ test_infra_failures + [
-        'Test duration suspiciously short (infrastructure failure): expected '
-        ~ (duration_validation.EXPECTED_DURATION | default(duration)) ~ 's, actual '
-        ~ (duration_validation.ACTUAL_DURATION | default('unknown')) ~ 's, margin '
-        ~ (duration_validation.MARGIN | default('unknown')) ~ 's'
-      ] }}
-  when:
-    - duration is defined
-    - duration_validation_file.stat.exists
-    - (duration_validation | default({})).VALIDATION_STATUS | default('') == 'FAILED'
+    # Record the issue instead of failing here: the play must continue so that
+    # artifact_management can still collect everything. The play fails at the end.
+    - name: Record suspiciously short test duration as an infrastructure issue
+      ansible.builtin.set_fact:
+        test_infra_failures: >-
+          {{ test_infra_failures + [
+            'Test duration suspiciously short (infrastructure failure): expected '
+            ~ (duration_validation.EXPECTED_DURATION | default(duration)) ~ 's, actual '
+            ~ (duration_validation.ACTUAL_DURATION | default('unknown')) ~ 's, margin '
+            ~ (duration_validation.MARGIN | default('unknown')) ~ 's'
+          ] }}
+      when:
+        - duration is defined
+        - duration_validation_file.stat.exists
+        - (duration_validation | default({})).VALIDATION_STATUS | default('') == 'FAILED'
 
-- name: Remove temporary auth.json file
-  ansible.builtin.file:
-    path: "{{ artifacts_dir.path }}/auth.json"
-    state: absent
+    - name: Display test execution result
+      ansible.builtin.debug:
+        msg:
+          - "Test exit code: {{ test_exit_code }}"
+          - "{{ 'Test PASSED' if test_exit_code | int == 0 else 'Test FAILED' }}"
+          - "{% if test_name == 'cpu_util' %}Baseline mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
+          - "{% if test_name == 'reboot' %}Reboot count: {{ reboot_count | default(test_default_reboot_count) }}{% endif %}"
 
-- name: Display test execution result
-  ansible.builtin.debug:
-    msg:
-      - "Test exit code: {{ test_exit_code }}"
-      - "{{ 'Test PASSED' if test_exit_code | int == 0 else 'Test FAILED' }}"
-      - "{% if test_name == 'cpu_util' %}Baseline mode: {{ 'ENABLED' if (baseline | default(false) | bool) else 'DISABLED' }}{% endif %}"
-      - "{% if test_name == 'reboot' %}Reboot count: {{ reboot_count | default(test_default_reboot_count) }}{% endif %}"
+    - name: Convert test duration to seconds
+      ansible.builtin.set_fact:
+        duration_seconds: "{{ (duration | default(test_default_duration | default('0m'))) | community.general.to_seconds }}"
 
-- name: Convert test duration to seconds
-  ansible.builtin.set_fact:
-    duration_seconds: "{{ (duration | default(test_default_duration | default('0m'))) | community.general.to_seconds }}"
+    # If no JUnit XML was produced and the container reported success, the
+    # generated fallback JUnit must still report a failure - missing results are
+    # an infrastructure failure even when the exit code looks clean.
+    - name: Determine exit code for JUnit report fallback
+      ansible.builtin.set_fact:
+        test_junit_rc: >-
+          {{ test_exit_code | int
+             if (test_exit_code | int != 0 or junit_files.matched | int > 0)
+             else 1 }}
 
-# If no JUnit XML was produced and the container reported success, the
-# generated fallback JUnit must still report a failure - missing results are
-# an infrastructure failure even when the exit code looks clean.
-- name: Determine exit code for JUnit report fallback
-  ansible.builtin.set_fact:
-    test_junit_rc: >-
-      {{ test_exit_code | int
-         if (test_exit_code | int != 0 or junit_files.matched | int > 0)
-         else 1 }}
+  rescue:
+    - name: Record unexpected failure
+      ansible.builtin.set_fact:
+        test_unexpected_failure: >-
+          {{ (ansible_failed_task.name | default('unknown task'))
+             ~ ': ' ~ (ansible_failed_result.msg | default('no failure message')) }}
 
-- name: Manage test artifacts (collect, share, report)
-  ansible.builtin.include_role:
-    name: artifact_management
-  vars:
-    artifact_management_test_name: "{{ test_name }}"
-    artifact_management_spoke_cluster: "{{ spoke_cluster }}"
-    artifact_management_temp_dir: "{{ artifacts_dir.path }}"
-    artifact_management_test_rc: "{{ test_junit_rc }}"
-    artifact_management_test_duration: "{{ duration_seconds }}"
-    artifact_management_junit_source_pattern: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
+    - name: Write unexpected failure summary to the artifacts directory
+      ansible.builtin.copy:
+        content: |
+          Unexpected failure before artifact collection completed.
+          Test: {{ test_name }} ({{ test_display_name | default(test_name | upper) }})
+          Spoke cluster: {{ spoke_cluster }}
+          Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+          Failed task: {{ ansible_failed_task.name | default('unknown task') }}
+          Failure message:
+          {{ ansible_failed_result.msg | default('no failure message') }}
+        dest: "{{ artifacts_dir.path }}/infra-failure.txt"
+        mode: '0644'
 
-- name: Cleanup artifacts directory on bastion
-  ansible.builtin.file:
-    path: "{{ artifacts_dir.path }}"
-    state: absent
+  always:
+    - name: Default artifact metadata when execution stopped unexpectedly
+      ansible.builtin.set_fact:
+        test_exit_code: "{{ test_exit_code | default(-1) }}"
+        duration_seconds: "{{ duration_seconds | default(0) }}"
+        # Execution aborted before a real result code was available: the
+        # fallback JUnit must report a failure (an existing XML is used as-is).
+        test_junit_rc: "{{ test_junit_rc | default(1) }}"
+
+    # Must run before collection so credentials never land in CI/shared artifacts.
+    - name: Remove temporary auth.json file
+      ansible.builtin.file:
+        path: "{{ artifacts_dir.path }}/auth.json"
+        state: absent
+
+    - name: Collect test artifacts regardless of test outcome
+      block:
+        - name: Manage test artifacts (collect, share, report)
+          ansible.builtin.include_role:
+            name: artifact_management
+          vars:
+            artifact_management_test_name: "{{ test_name }}"
+            artifact_management_spoke_cluster: "{{ spoke_cluster }}"
+            artifact_management_temp_dir: "{{ artifacts_dir.path }}"
+            artifact_management_test_rc: "{{ test_junit_rc }}"
+            artifact_management_test_duration: "{{ duration_seconds }}"
+            artifact_management_junit_source_pattern: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
+      rescue:
+        - name: Record artifact collection failure
+          ansible.builtin.set_fact:
+            test_artifact_collection_failed: >-
+              {{ (ansible_failed_task.name | default('artifact_management'))
+                 ~ ': ' ~ (ansible_failed_result.msg | default('no failure message')) }}
+
+        - name: Warn that artifacts could not be collected
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: artifact collection failed; keeping the temporary
+              artifacts directory {{ artifacts_dir.path }} on the bastion for
+              manual inspection.
+
+    - name: Cleanup artifacts directory on bastion
+      ansible.builtin.file:
+        path: "{{ artifacts_dir.path }}"
+        state: absent
+      when: test_artifact_collection_failed is not defined
+
 
 - name: Display test completion message
   ansible.builtin.debug:
     msg: "{{ test_display_name }} test completed with exit code {{ test_exit_code }}"
+  when:
+    - test_unexpected_failure | length == 0
+    - test_artifact_collection_failed is not defined
 
 # Artifacts have been collected by this point, so it is safe to fail the play
-# and propagate the infrastructure failure to Jenkins/Prow.
-- name: Fail if infrastructure issues were detected during test execution
+# and propagate the failure to Jenkins/Prow.
+- name: Fail if test execution or artifact collection failed
   ansible.builtin.fail:
     msg: |
-      ❌ {{ test_display_name }} test FAILED - infrastructure issue(s) detected
+      ❌ {{ test_display_name }} test FAILED
 
       Test: {{ test_display_name }} ({{ test_name }})
       Spoke cluster: {{ spoke_cluster }}
       Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
       Container exit code: {{ test_exit_code }}
 
+      {% if test_infra_failures | length > 0 %}
       Detected infrastructure issue(s):
       {% for issue in test_infra_failures %}
         - {{ issue }}
       {% endfor %}
+      {% endif %}
+      {% if test_unexpected_failure | length > 0 %}
+      Unexpected failure:
+        {{ test_unexpected_failure }}
+      {% endif %}
+      {% if test_artifact_collection_failed is defined %}
+      Artifact collection error:
+        {{ test_artifact_collection_failed }}
+      {% endif %}
 
-      Artifacts were collected before failing:
+      Artifact locations:
         CI artifact dir:    {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_name }}-{{ spoke_cluster }}
         Bastion shared dir: {{
           telco_kpis_shared_artifact_base | default('/home/telcov10n/telco-kpis-artifacts') }}/{{
@@ -272,4 +338,7 @@
 
       Check the container log inside the collected artifacts for details.
       This indicates an infrastructure failure, not a test/KPI result failure.
-  when: test_infra_failures | length > 0
+  when: >-
+    (test_infra_failures | length > 0)
+    or (test_unexpected_failure | length > 0)
+    or (test_artifact_collection_failed is defined)

@@ -33,12 +33,21 @@
     state: directory
     mode: '0755'
 
+- name: Clone report branch
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Cloninig branch: {{ report_repo_branch }}"
+      - "=========================================="
+
 - name: Clone repository
   ansible.builtin.git:
     repo: "{{ gitea_repo_http_url }}"
     dest: "{{ git_work_dir }}"
     version: "{{ report_repo_branch }}"
     force: true
+    depth: 1
+    single_branch: true
   environment:
     GIT_TERMINAL_PROMPT: "0"
   no_log: "{{ ansible_verbosity < 3 }}"
@@ -253,20 +262,19 @@
     - git config user.name "Telco KPIs Automation"
   changed_when: false
 
-- name: Add all files to git  # noqa: command-instead-of-module
-  ansible.builtin.command: git add -A
+- name: Add report files to git  # noqa: command-instead-of-module
+  ansible.builtin.command: git add -A -- {{ _reports_dir | relpath(git_work_dir) }}
   args:
     chdir: "{{ git_work_dir }}"
   changed_when: false
 
 - name: Check if there are changes to commit  # noqa: command-instead-of-module
-  ansible.builtin.command: git diff --cached --exit-code
+  ansible.builtin.command: git diff --cached --quiet
   args:
     chdir: "{{ git_work_dir }}"
   register: git_diff
   failed_when: false
   changed_when: git_diff.rc != 0
-  no_log: true
 
 - name: Commit and push changes with retry loop for concurrent access
   when: git_diff.rc != 0
@@ -275,7 +283,7 @@
       ansible.builtin.set_fact:
         _push_attempt: 0
         _push_succeeded: false
-        _min_attempts: "{{ gitea_push_min_retries | int }}"
+        _min_attempts: "{{ gitea_push_min_retries | int }}"
         _max_attempts: "{{ [gitea_push_max_retries | int, gitea_push_min_retries | int] | max }}"
 
     - name: Commit and push attempt

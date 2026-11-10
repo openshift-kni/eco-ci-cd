@@ -49,6 +49,10 @@
     path: /tmp
   register: artifacts_dir
 
+- name: Initialize infrastructure issue tracking
+  ansible.builtin.set_fact:
+    test_infra_failures: []
+
 - name: Record test start time
   ansible.builtin.include_role:
     name: test_duration
@@ -140,19 +144,16 @@
     file_type: file
   register: junit_files
 
-- name: Fail if test results not generated
-  ansible.builtin.fail:
-    msg: |
-      ❌ Test execution FAILED - Results not generated
-
-      Expected JUnit XML pattern: {{ test_junit_pattern | default(test_name + '_report.xml') }}
-      Artifacts directory: {{ artifacts_dir.path }}
-      Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
-      Container exit code: {{ test_exit_code }}
-
-      This indicates the test script did not complete successfully.
-      Check container logs for details:
-        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+# Record the issue instead of failing here: the play must continue so that
+# artifact_management can still collect everything. The play fails at the end.
+- name: Record missing test results as an infrastructure issue
+  ansible.builtin.set_fact:
+    test_infra_failures: >-
+      {{ test_infra_failures + [
+        'JUnit XML not generated: pattern "' ~ (test_junit_pattern | default(test_name + '_report.xml'))
+        ~ '" not found in ' ~ artifacts_dir.path
+        ~ ' (container exit code ' ~ (test_exit_code | string) ~ ')'
+      ] }}
   when: junit_files.matched == 0
 
 - name: Record test duration and save metadata
@@ -183,34 +184,21 @@
     - duration is defined
     - duration_validation_file.stat.exists
 
-- name: Fail if test duration suspiciously short (infrastructure failure)
-  ansible.builtin.fail:
-    msg: |
-      ❌ Test execution FAILED - Duration suspiciously short (infrastructure failure)
-
-      Test: {{ test_display_name }}
-      Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
-
-      Expected duration: {{ duration }} ({{ duration_validation.EXPECTED_DURATION }}s)
-      Actual duration: {{ duration_validation.ACTUAL_DURATION }}s
-      Margin: {{ duration_validation.MARGIN }}s
-      Threshold: {{ duration_validation.EXPECTED_DURATION }}s
-
-      Validation failed: {{ duration_validation.ACTUAL_DURATION }}s + {{ duration_validation.MARGIN }}s < threshold
-
-      This indicates an infrastructure failure, not a test failure.
-      Possible causes:
-        - Pod failed to reach Ready state
-        - Container startup failure
-        - Cluster unreachable
-        - Test script early exit due to error
-
-      Check container logs for details:
-        ssh {{ ansible_user }}@{{ ansible_host }} 'cat {{ artifacts_dir.path }}/podman-run.log'
+# Record the issue instead of failing here: the play must continue so that
+# artifact_management can still collect everything. The play fails at the end.
+- name: Record suspiciously short test duration as an infrastructure issue
+  ansible.builtin.set_fact:
+    test_infra_failures: >-
+      {{ test_infra_failures + [
+        'Test duration suspiciously short (infrastructure failure): expected '
+        ~ (duration_validation.EXPECTED_DURATION | default(duration)) ~ 's, actual '
+        ~ (duration_validation.ACTUAL_DURATION | default('unknown')) ~ 's, margin '
+        ~ (duration_validation.MARGIN | default('unknown')) ~ 's'
+      ] }}
   when:
     - duration is defined
     - duration_validation_file.stat.exists
-    - duration_validation.VALIDATION_STATUS == 'FAILED'
+    - (duration_validation | default({})).VALIDATION_STATUS | default('') == 'FAILED'
 
 - name: Remove temporary auth.json file
   ansible.builtin.file:
@@ -229,6 +217,16 @@
   ansible.builtin.set_fact:
     duration_seconds: "{{ (duration | default(test_default_duration | default('0m'))) | community.general.to_seconds }}"
 
+# If no JUnit XML was produced and the container reported success, the
+# generated fallback JUnit must still report a failure - missing results are
+# an infrastructure failure even when the exit code looks clean.
+- name: Determine exit code for JUnit report fallback
+  ansible.builtin.set_fact:
+    test_junit_rc: >-
+      {{ test_exit_code | int
+         if (test_exit_code | int != 0 or junit_files.matched | int > 0)
+         else 1 }}
+
 - name: Manage test artifacts (collect, share, report)
   ansible.builtin.include_role:
     name: artifact_management
@@ -236,7 +234,7 @@
     artifact_management_test_name: "{{ test_name }}"
     artifact_management_spoke_cluster: "{{ spoke_cluster }}"
     artifact_management_temp_dir: "{{ artifacts_dir.path }}"
-    artifact_management_test_rc: "{{ test_exit_code }}"
+    artifact_management_test_rc: "{{ test_junit_rc }}"
     artifact_management_test_duration: "{{ duration_seconds }}"
     artifact_management_junit_source_pattern: "{{ test_junit_pattern | default(test_name + '_report.xml') }}"
 
@@ -248,3 +246,30 @@
 - name: Display test completion message
   ansible.builtin.debug:
     msg: "{{ test_display_name }} test completed with exit code {{ test_exit_code }}"
+
+# Artifacts have been collected by this point, so it is safe to fail the play
+# and propagate the infrastructure failure to Jenkins/Prow.
+- name: Fail if infrastructure issues were detected during test execution
+  ansible.builtin.fail:
+    msg: |
+      ❌ {{ test_display_name }} test FAILED - infrastructure issue(s) detected
+
+      Test: {{ test_display_name }} ({{ test_name }})
+      Spoke cluster: {{ spoke_cluster }}
+      Container: telco-kpis-{{ test_name }}-{{ spoke_cluster }}
+      Container exit code: {{ test_exit_code }}
+
+      Detected infrastructure issue(s):
+      {% for issue in test_infra_failures %}
+        - {{ issue }}
+      {% endfor %}
+
+      Artifacts were collected before failing:
+        CI artifact dir:    {{ lookup('env', 'ARTIFACT_DIR') | default('/artifacts', true) }}/{{ test_name }}-{{ spoke_cluster }}
+        Bastion shared dir: {{
+          telco_kpis_shared_artifact_base | default('/home/telcov10n/telco-kpis-artifacts') }}/{{
+          spoke_cluster }}/{{ shared_artifact_dir_name | default('<unavailable>') }}
+
+      Check the container log inside the collected artifacts for details.
+      This indicates an infrastructure failure, not a test/KPI result failure.
+  when: test_infra_failures | length > 0

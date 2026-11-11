@@ -1,0 +1,129 @@
+---
+# Read-only host checks for the SNO CNF baseline and SR-IOV preflights.
+# The SSH hostname and IPv4 addresses come from the secured inventory, never
+# from job parameters or DNS alone. DNS and the cluster API are checked before
+# the read-only SSH inspection; SSH host-key verification is not performed.
+# Requires the secured master0/bastion inventory, a mounted kubeconfig, and a
+# mounted Jenkins node SSH credential at /tmp/sno-node-key.
+# sno_check_intel_nics is true for SR-IOV readiness and false for CNF baseline.
+- name: Verify SNO inventory, DNS, and cluster node identity
+  hosts: bastion
+  connection: local
+  gather_facts: false
+  vars:
+    sno_node_name: master0
+    sno_node_host: "{{ hostvars[sno_node_name].hostname }}"
+    sno_node_ipv4: "{{ hostvars[sno_node_name].ansible_host }}"
+    sno_bastion_ipv4: "{{ hostvars['bastion'].ansible_host }}"
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Require the approved single-node inventory and SSH credential path
+      ansible.builtin.assert:
+        that:
+          - hostvars[sno_node_name].role == 'master'
+          - sno_node_host is match('(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$')
+          - sno_node_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+          - sno_bastion_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+          - sno_ssh_key_path == '/tmp/sno-node-key'
+          - sno_check_intel_nics is boolean
+        fail_msg: Invalid SNO target inventory or missing approved SSH key.
+
+    - name: Resolve the inventory node hostname on the bastion
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ sno_node_host }}"]
+      register: sno_node_dns
+      changed_when: false
+
+    - name: Require DNS to resolve only to the inventory IPv4 address
+      ansible.builtin.assert:
+        that:
+          - >-
+            sno_node_dns.stdout_lines |
+            map('split') | map('first') | unique | list == [sno_node_ipv4]
+
+    - name: Read all cluster nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: sno_cluster_nodes
+
+    - name: Require one Ready SNO node at the inventory IPv4 address
+      ansible.builtin.assert:
+        that:
+          - sno_cluster_nodes.resources | length == 1
+          - sno_cluster_nodes.resources[0].metadata.name == sno_node_name
+          - >-
+            sno_cluster_nodes.resources[0].status.conditions |
+            selectattr('type', 'equalto', 'Ready') |
+            selectattr('status', 'equalto', 'True') | list | length == 1
+          - >-
+            sno_node_ipv4 in (sno_cluster_nodes.resources[0].status.addresses |
+            selectattr('type', 'equalto', 'InternalIP') |
+            map(attribute='address') | list)
+
+- name: Verify SNO management path and optionally the Intel test NICs
+  hosts: master0
+  gather_facts: false
+  vars:
+    # Use the inventory hostname after validating its DNS and cluster IP.
+    ansible_host: "{{ hostvars['master0'].hostname }}"
+    ansible_user: core
+    ansible_ssh_private_key_file: "{{ sno_ssh_key_path }}"
+    ansible_ssh_host_key_checking: false
+    ansible_ssh_common_args: >-
+      -4 -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    # RHCOS does not need Python for these SSH-only, read-only checks.
+    sno_management_nic:
+      name: eno12399np0
+      mac: 40:a6:b7:91:92:c8
+    sno_intel_test_nics:
+      - {name: ens7f0np0, mac: '40:a6:b7:a0:fd:10'}
+      - {name: ens7f3np3, mac: '40:a6:b7:a0:fd:13'}
+  tasks:
+    - name: Read the approved NIC MAC addresses without configuring them
+      ansible.builtin.raw: "cat /sys/class/net/{{ item.name }}/address"
+      loop: "{{ [sno_management_nic] + (sno_intel_test_nics if sno_check_intel_nics | bool else []) }}"
+      register: sno_nic_addresses
+      changed_when: false
+
+    - name: Read the approved NIC carrier states
+      ansible.builtin.raw: "cat /sys/class/net/{{ item.name }}/carrier"
+      loop: "{{ [sno_management_nic] + (sno_intel_test_nics if sno_check_intel_nics | bool else []) }}"
+      register: sno_nic_carriers
+      changed_when: false
+
+    - name: Require expected NIC MAC addresses and active links
+      ansible.builtin.assert:
+        that:
+          - (sno_nic_addresses.results[index].stdout | trim) == item.mac
+          - (sno_nic_carriers.results[index].stdout | trim) == '1'
+        fail_msg: "Unexpected MAC address or carrier for {{ item.name }}."
+      loop: "{{ [sno_management_nic] + (sno_intel_test_nics if sno_check_intel_nics | bool else []) }}"
+      loop_control:
+        index_var: index
+
+    - name: Read the IPv4 route back to the bastion
+      ansible.builtin.raw: "/usr/sbin/ip -color=never -4 route get {{ hostvars['bastion'].ansible_host }}"
+      register: sno_ipv4_route
+      changed_when: false
+
+    - name: Read the IPv6 default route
+      ansible.builtin.raw: /usr/sbin/ip -color=never -6 route show default
+      register: sno_ipv6_routes
+      changed_when: false
+
+    - name: Show captured management routes
+      ansible.builtin.debug:
+        msg:
+          ipv4: "{{ sno_ipv4_route.stdout }}"
+          ipv6: "{{ sno_ipv6_routes.stdout }}"
+          ipv4_matches: "{{ ' dev br-ex ' in sno_ipv4_route.stdout }}"
+
+    - name: Require management routing through br-ex
+      ansible.builtin.assert:
+        that:
+          - "' dev br-ex ' in sno_ipv4_route.stdout"
+          - "' dev br-ex' in sno_ipv6_routes.stdout"
+        fail_msg: SNO management routing has changed; do not configure test NICs.

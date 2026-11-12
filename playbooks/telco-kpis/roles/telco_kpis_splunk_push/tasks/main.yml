@@ -100,67 +100,24 @@
   register: _tksp_time_window
   changed_when: false
 
-- name: Set Splunk dashboard time parameters (URL encode with urlencode filter)
-  ansible.builtin.set_fact:
-    _tksp_time_earliest: "{{ _tksp_time_window.stdout_lines[0] | urlencode }}"
-    _tksp_time_latest: "{{ _tksp_time_window.stdout_lines[1] | urlencode }}"
-
-- name: Generate Splunk dashboard URLs for each test
+- name: Build dashboard links for the pushed tests
+  ansible.builtin.include_role:
+    name: telco_kpis_dashboard_links
   vars:
-    _tksp_ocp_version: "{{ tksp_report_data.cluster_info.sw_version | default('') }}"
-    _tksp_kernel: "{{ tksp_report_data.cluster_info.kernel_version | default('') | urlencode }}"
-    _tksp_base_url: "{{ tksp_splunk_dashboard_base_url }}"
-    # Dashboard name: 'rfc2544' for rfc-2544 test, otherwise use test_type as-is
-    _tksp_dashboard_name: >-
-      {{ 'rfc2544' if item.value.test_type == 'rfc-2544' else item.value.test_type }}
-    # Dashboard suffix: '_' for rfc2544, '_kpis' for others
-    _tksp_dashboard_suffix: >-
-      {{ '_' if item.value.test_type == 'rfc-2544' else '_kpis' }}
-    # Test-specific parameters inserted before standard middle params
-    _tksp_pre_middle_params: >-
-      {{ 'form.high_cpu_treshhold=0.005&'
-         if item.value.test_type == 'cpu_util'
-         else '' }}
-    # Standard middle parameters (excluded for rfc-2544 and deployment which have custom params)
-    _tksp_standard_middle: >-
-      {{ '' if item.value.test_type in ['rfc-2544', 'deployment']
-         else 'form.selected_duration=*&' }}
-    # Test-specific parameters before the last parameter
-    _tksp_custom_params: >-
-      {{ 'form.bubble_chart_legend=kernel&form.histogram=' ~ _tksp_ocp_version ~ '&form.test_durations=*&'
-         if item.value.test_type == 'rfc-2544'
-         else ('form.ocp_view=ocp_build&' if item.value.test_type not in ['cpu_util', 'deployment'] else '') }}
-    # Last form parameter varies by test type
-    _tksp_last_param: >-
-      {{ 'form.charts_comparison=ocp_build' if item.value.test_type == 'deployment'
-         else 'form.dashboard_kernels=' ~ _tksp_kernel }}
-    # Trailing parameters appended at the very end
-    _tksp_trailing: >-
-      {{ '&tab=layout_1' if item.value.test_type == 'cpu_util' else '' }}
-    # Build URL in parts for readability
-    _tksp_url_base_path: >-
-      {{ _tksp_base_url ~ '/en-US/app/search/' ~ _tksp_dashboard_name ~ _tksp_dashboard_suffix }}
-    _tksp_url_time_params: >-
-      {{ '?form.global_time.earliest=' ~ _tksp_time_earliest ~
-         '&form.global_time.latest=' ~ _tksp_time_latest }}
-    _tksp_url_common_params: >-
-      {{ '&form.ocp_version=' ~ _tksp_ocp_version ~
-         '&form.ocp_build=' ~ _tksp_ocp_version ~
-         '&form.node_name=' ~ tksp_spoke_cluster ~
-         '&form.general_statistics=' ~ _tksp_ocp_version ~
-         '&form.formal_tag=*&' }}
-    _tksp_url_dynamic_params: >-
-      {{ _tksp_pre_middle_params ~ _tksp_custom_params ~
-         _tksp_standard_middle ~ _tksp_last_param ~ _tksp_trailing }}
+    tkdl_backend: "{{ tksp_dashboard_backend }}"
+    tkdl_ocp_version: "{{ _tksp_common.ocp_version }}"
+    tkdl_node_name: "{{ tksp_spoke_cluster }}"
+    tkdl_kernel: "{{ tksp_report_data.cluster_info.kernel_version | default('') }}"
+    tkdl_time_earliest: "{{ _tksp_time_window.stdout_lines[0] }}"
+    tkdl_time_latest: "{{ _tksp_time_window.stdout_lines[1] }}"
+    tkdl_test_types: >-
+      {{ tksp_report_data.test_results.values()
+         | map(attribute='test_type', default='')
+         | reject('equalto', '') | list | unique }}
+
+- name: Record dashboard links for the push result
   ansible.builtin.set_fact:
-    _tksp_dashboard_urls: >-
-      {{ _tksp_dashboard_urls | default({}) | combine({
-        item.value.test_type: _tksp_url_base_path ~ _tksp_url_time_params ~
-                              _tksp_url_common_params ~ _tksp_url_dynamic_params
-      }) }}
-  loop: "{{ tksp_report_data.test_results | dict2items }}"
-  loop_control:
-    label: "{{ item.value.test_type }}"
+    _tksp_dashboard_urls: "{{ dashboard_links }}"
 
 - name: Push events to Splunk
   block:

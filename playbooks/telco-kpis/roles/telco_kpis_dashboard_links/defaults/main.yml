@@ -1,0 +1,143 @@
+---
+# Single source of truth for KPI dashboard links.
+#
+# Consumers:
+#   - roles/telco_kpis_splunk_push  -> "urls" in push-to-data-lake-result-*.json
+#   - roles/report_generator        -> links in the Markdown report
+#
+# Everything here is a default and can be overridden (group_vars, extra-vars),
+# so no board id or hostname is hardcoded in the code that builds the links.
+
+# sumologic | splunk
+tkdl_backend: "sumologic"
+
+# Label used in the Markdown report, e.g. "[KPI Dashboard](...)"
+tkdl_link_label: "KPI Dashboard"
+
+# Print a one-line summary of linked/unavailable boards
+tkdl_verbose: false
+
+tkdl_base_urls:
+  splunk: "https://rhcorporate.splunkcloud.com"
+  sumologic: "https://rhcorporate.sumologic.com"
+
+# Link time window (ISO-8601 UTC, e.g. 2026-11-10T12:35:44.000Z).
+# When left empty the role computes "now -5m" / "now +15m" (legacy behaviour).
+tkdl_time_earliest: ""
+tkdl_time_latest: ""
+
+# Report context (required: ocp version and cluster name)
+tkdl_ocp_version: ""
+tkdl_node_name: ""
+tkdl_kernel: ""
+tkdl_formal_tag: "*"
+
+# The overall_*_statisitcs_of_version variables use the minor version ("5.0"),
+# not the build ("5.0.0-rc.7").
+tkdl_stats_version: "{{ tkdl_ocp_version | regex_replace('^(\\d+\\.\\d+).*$', '\\1') }}"
+
+# The two producers use different names for the same test.
+tkdl_test_aliases:
+  rfc-2544: rfc2544
+  deployment: ztp_ai_deployment_time
+
+# Defaults to every configured board; callers normally pass the tests present
+# in the current run.
+tkdl_test_types: "{{ tkdl_boards.keys() | list }}"
+
+# Per-test dashboard configuration.
+#
+# Placeholders available in *_params:
+#   {ver} {node} {kernel} {formal} {stats_version}
+#
+# A link is generated only when the board exists for the selected backend:
+#   - splunk     -> splunk_dashboard must be set
+#   - sumologic  -> sumologic_board_id must be set
+# Otherwise the test is reported as "unavailable" (see dashboard_links_unavailable)
+# and the report renders "<label>: unavailable" instead of a dead link.
+tkdl_boards:
+  oslat:
+    splunk_dashboard: "oslat_kpis"
+    splunk_params: "form.ocp_view=ocp_build&form.selected_duration=*&form.dashboard_kernels={kernel}"
+    sumologic_board_id: "FZeYujRSMDID9G2D6INyXFc7rWRLk0OYoLi8N1b4Zox7k6SkXA3S6bYJwyAl"
+    sumologic_params:
+      - "Formal_Tag:{formal}"
+      - "Dashboard_OCP_Versions:{ver}"
+      - "Dashboard_OCP_Builds:{ver}"
+      - "Dashboard_Clusters:{node}"
+      - "Dashboard_Kernels:{kernel}"
+      - "Worst_Core_Metrcis_ocp_view:ocp_build"
+
+  ptp:
+    splunk_dashboard: "ptp_kpis"
+    splunk_params: "form.bubble_chart_legend=ocp_build&form.test_durations=*&form.dashboard_kernels={kernel}"
+    # TODO: create the PTP KPIs board in Sumo Logic, then set sumologic_board_id
+    #       (format: 64-char id from https://<host>/ui/#/dashboardv2/<id>)
+    #       and add sumologic_params. Until then the link renders as unavailable.
+    sumologic_board_id: ""
+    sumologic_params: []
+
+  cyclictest:
+    splunk_dashboard: "cyclictest_kpis"
+    splunk_params: "form.ocp_view=ocp_build&form.selected_duration=*&form.dashboard_kernels={kernel}"
+    sumologic_board_id: "GAK0toeQd7rHBLYj00U77eGn8PGQKrTPB45ViG0AzeEFOB3eUtwa8LwE9ZC3"
+    sumologic_params:
+      - "Formal_Tag:{formal}"
+      - "Dashboard_OCP_Versions:{ver}"
+      - "Dashboard_OCP_Builds:{ver}"
+      - "Dashboard_Clusters:{node}"
+      - "Dashboard_Kernels:{kernel}"
+      - "Worst_thread_metrcis_ocp_view:ocp_build"
+
+  cpu_util:
+    splunk_dashboard: "cpu_util_kpis"
+    splunk_params: "form.high_cpu_treshhold=0.005&form.selected_duration=*&form.dashboard_kernels={kernel}"
+    splunk_trailing: "&tab=layout_1"
+    # NOTE: this board uses lower-case variable names on purpose
+    #       (Dashboard_OCP_versions / _builds / kernels, test_formal_tag).
+    sumologic_board_id: "vRd43hxRoYXZ6US8c2qU4pVZuy47A6VnRW2PsnZDnCRz5QJm3c7ss8uJ9cLJ"
+    sumologic_params:
+      - "test_formal_tag:{formal}"
+      - "Dashboard_OCP_versions:{ver}"
+      - "Dashboard_OCP_builds:{ver}"
+      - "Dashboard_Clusters:{node}"
+      - "Dashboard_kernels:{kernel}"
+      - "select_test_durations:*"
+      - "high_avg_cpu_treshhold:0.005"
+
+  reboot:
+    splunk_dashboard: "reboot_kpis"
+    splunk_params: "form.charts_comparison=ocp_build&form.reboot_type=soft_reboot&form.dashboard_kernels={kernel}"
+    splunk_ocp_build: "*"   # reboot is the only board that does not pin the build
+    # Using "Reboot KPI's Optimized" rather than the older "Reboot KPIs" board.
+    sumologic_board_id: "t7vStJFNdgTWVa9SRS9YGYqtPk9IDGx5aDV6VD8C8rH0wIfJjkVQqk6F9Awb"
+    sumologic_params:
+      - "formal_tag:{formal}"
+      - "Dashboard_OCP_Versions:{ver}"
+      - "Dashboard_OCP_Builds:*"
+      - "Dashboard_Clusters:{node}"
+      - "Dashboard_Kernels:{kernel}"
+      - "overall_reboot_statisitcs_of_version:{stats_version}"
+      - "charts_comparison:ocp_build"
+      - "reboot_type-stage_iteration_line_charts:soft_reboot"
+
+  rfc2544:
+    splunk_dashboard: "rfc2544_"
+    splunk_params: "form.bubble_chart_legend=kernel&form.histogram={ver}&form.test_durations=*&form.dashboard_kernels={kernel}"
+    # TODO: create the RFC2544 KPIs board in Sumo Logic, then set sumologic_board_id
+    #       (format: 64-char id from https://<host>/ui/#/dashboardv2/<id>)
+    #       and add sumologic_params. Until then the link renders as unavailable.
+    sumologic_board_id: ""
+    sumologic_params: []
+
+  ztp_ai_deployment_time:
+    splunk_dashboard: "deployment_kpis"
+    splunk_params: "form.charts_comparison=ocp_build"
+    sumologic_board_id: "wChBgJTOElPXWrn4UD0YhQodT5fgyJZ6nwA2wCUBVxPIFiFWF9JwyXfYAEWK"
+    sumologic_params:
+      - "formal_tag:{formal}"
+      - "Dashboard_OCP_Versions:{ver}"
+      - "Dashboard_OCP_Builds:{ver}"
+      - "Dashboard_Clusters:{node}"
+      - "overall_deplyoment_statisitcs_of_version:{stats_version}"
+      - "charts_comparison:ocp_build"

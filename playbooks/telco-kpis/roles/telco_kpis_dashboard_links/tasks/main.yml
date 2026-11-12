@@ -1,0 +1,109 @@
+---
+# Builds one dashboard link per test type.
+#
+# Inputs : tkdl_* (see defaults/main.yml), normally tkdl_test_types
+# Outputs: dashboard_links             dict  test_type -> URL
+#          dashboard_links_unavailable list  test_types with no board configured
+#          dashboard_link_label        str   label for the report
+
+- name: Validate dashboard link context
+  ansible.builtin.assert:
+    that:
+      - tkdl_ocp_version | length > 0
+      - tkdl_node_name | length > 0
+    fail_msg: "telco_kpis_dashboard_links requires tkdl_ocp_version and tkdl_node_name"
+
+- name: Compute dashboard link time window
+  ansible.builtin.shell:
+    cmd: |
+      echo "$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%S.000Z)"
+      echo "$(date -u -d '+15 minutes' +%Y-%m-%dT%H:%M:%S.000Z)"
+    executable: /bin/bash
+  register: _tkdl_window
+  changed_when: false
+  when: tkdl_time_earliest | length == 0 or tkdl_time_latest | length == 0
+
+- name: Resolve dashboard link time window
+  ansible.builtin.set_fact:
+    _tkdl_earliest: "{{ tkdl_time_earliest if tkdl_time_earliest | length > 0 else _tkdl_window.stdout_lines[0] }}"
+    _tkdl_latest: "{{ tkdl_time_latest if tkdl_time_latest | length > 0 else _tkdl_window.stdout_lines[1] }}"
+    dashboard_link_label: "{{ tkdl_link_label }}"
+    dashboard_links: {}
+    dashboard_links_unavailable: []
+
+- name: Generate dashboard links
+  vars:
+    _tkdl_key: "{{ tkdl_test_aliases[item] | default(item) }}"
+    _tkdl_cfg: "{{ tkdl_boards[_tkdl_key] | default({}) }}"
+    _tkdl_kernel_enc: "{{ tkdl_kernel | replace('+', '%2B') }}"
+    # Tests without a dashboard concept at all (rds_compare, bios_validation)
+    # are neither linked nor reported as unavailable — they are simply skipped.
+    _tkdl_known: "{{ _tkdl_key in tkdl_boards }}"
+    _tkdl_configured: >-
+      {{ (_tkdl_cfg.splunk_dashboard | default('') | length > 0)
+         if tkdl_backend == 'splunk'
+         else (_tkdl_cfg.sumologic_board_id | default('') | length > 0) }}
+    # Epoch millis via timedelta arithmetic: the ISO strings are UTC, and
+    # strftime('%s') would interpret them as local time (off by the TZ offset).
+    _tkdl_iso_fmt: "%Y-%m-%dT%H:%M:%S.000Z"
+    _tkdl_epoch_iso: "1970-01-01T00:00:00.000Z"
+    _tkdl_from_sec: >-
+      {{ ((_tkdl_earliest | to_datetime(_tkdl_iso_fmt))
+          - (_tkdl_epoch_iso | to_datetime(_tkdl_iso_fmt))).total_seconds() }}
+    _tkdl_to_sec: >-
+      {{ ((_tkdl_latest | to_datetime(_tkdl_iso_fmt))
+          - (_tkdl_epoch_iso | to_datetime(_tkdl_iso_fmt))).total_seconds() }}
+    _tkdl_from_ms: "{{ (_tkdl_from_sec | int) * 1000 }}"
+    _tkdl_to_ms: "{{ (_tkdl_to_sec | int) * 1000 }}"
+    # Splunk: legacy parameter layout, kept so the backend can be flipped back.
+    _tkdl_splunk_params: >-
+      {{ _tkdl_cfg.splunk_params | default('')
+         | replace('{ver}', tkdl_ocp_version)
+         | replace('{node}', tkdl_node_name)
+         | replace('{kernel}', _tkdl_kernel_enc) }}
+    _tkdl_splunk_url: >-
+      {{ tkdl_base_urls.splunk ~ '/en-US/app/search/' ~ _tkdl_cfg.splunk_dashboard ~
+         '?form.global_time.earliest=' ~ (_tkdl_earliest | urlencode) ~
+         '&form.global_time.latest=' ~ (_tkdl_latest | urlencode) ~
+         '&form.ocp_version=' ~ tkdl_ocp_version ~
+         '&form.ocp_build=' ~ (_tkdl_cfg.splunk_ocp_build | default('{ver}') | replace('{ver}', tkdl_ocp_version)) ~
+         '&form.node_name=' ~ tkdl_node_name ~
+         '&form.general_statistics=' ~ tkdl_ocp_version ~
+         '&form.formal_tag=*&' ~
+         _tkdl_splunk_params ~
+         (_tkdl_cfg.splunk_trailing | default('')) }}
+    # Sumo: all filters packed into one "variables=" blob, time as epoch millis.
+    _tkdl_sumo_vars: >-
+      {{ _tkdl_cfg.sumologic_params | default([])
+         | map('replace', '{ver}', tkdl_ocp_version)
+         | map('replace', '{node}', tkdl_node_name)
+         | map('replace', '{kernel}', _tkdl_kernel_enc)
+         | map('replace', '{formal}', tkdl_formal_tag)
+         | map('replace', '{stats_version}', tkdl_stats_version)
+         | join(';') }}
+    _tkdl_sumo_url: >-
+      {{ tkdl_base_urls.sumologic ~ '/ui/#/dashboardv2/' ~ _tkdl_cfg.sumologic_board_id ~
+         '?variables=' ~ _tkdl_sumo_vars ~
+         '&from=' ~ (_tkdl_from_ms | string) ~ '&to=' ~ (_tkdl_to_ms | string) ~
+         '&useDefaultTimeRange=false' }}
+    _tkdl_url: "{{ _tkdl_splunk_url if tkdl_backend == 'splunk' else _tkdl_sumo_url }}"
+  ansible.builtin.set_fact:
+    dashboard_links: >-
+      {{ (dashboard_links | combine({item: _tkdl_url}))
+         if (_tkdl_known | bool and _tkdl_configured | bool)
+         else dashboard_links }}
+    dashboard_links_unavailable: >-
+      {{ (dashboard_links_unavailable + [item])
+         if (_tkdl_known | bool and not (_tkdl_configured | bool))
+         else dashboard_links_unavailable }}
+  loop: "{{ tkdl_test_types }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Show dashboard link summary
+  ansible.builtin.debug:
+    msg:
+      - "Backend:      {{ tkdl_backend }}"
+      - "Linked:       {{ dashboard_links.keys() | list | join(', ') if dashboard_links else 'none' }}"
+      - "Unavailable:  {{ dashboard_links_unavailable | join(', ') if dashboard_links_unavailable else 'none' }}"
+  when: tkdl_verbose | default(false) | bool

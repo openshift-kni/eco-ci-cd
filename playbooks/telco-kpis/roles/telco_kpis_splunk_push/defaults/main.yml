@@ -13,7 +13,11 @@ tksp_spoke_cluster: ""
 tksp_splunk_hec_url: ""
 tksp_splunk_hec_token: ""
 tksp_splunk_index: "ecosystem-telco"
-tksp_splunk_dashboard_base_url: "https://rhcorporate.splunkcloud.com"
+
+# Which dashboard links to emit in the push result.
+# sumologic | splunk — boards and base URLs live in
+# roles/telco_kpis_dashboard_links/defaults/main.yml
+tksp_dashboard_backend: "sumologic"
 
 # Test metadata
 tksp_formal_test: false

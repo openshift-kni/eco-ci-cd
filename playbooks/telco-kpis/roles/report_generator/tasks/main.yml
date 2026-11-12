@@ -42,6 +42,23 @@
 - name: Normalize duration values to XhYYmZZs format
   ansible.builtin.include_tasks: normalize_durations.yml
 
+# Dashboard links are generated from one shared config
+# (roles/telco_kpis_dashboard_links) so the report and the push-to-data-lake
+# artifact cannot drift apart. Skipped when dashboard linking is disabled.
+- name: Build dashboard links for the report
+  ansible.builtin.include_role:
+    name: telco_kpis_dashboard_links
+  vars:
+    tkdl_backend: "{{ dashboard_links_backend | default('sumologic') }}"
+    tkdl_ocp_version: "{{ report_data.cluster_info.sw_version | default('') }}"
+    tkdl_node_name: "{{ spoke_cluster }}"
+    tkdl_kernel: "{{ report_data.cluster_info.kernel_version | default('') }}"
+    tkdl_test_types: >-
+      {{ report_data.test_results.values()
+         | map(attribute='test_type', default='')
+         | reject('equalto', '') | list | unique }}
+  when: splunk_push_enabled | default(false) | bool
+
 - name: Generate Markdown report from templates
   ansible.builtin.include_tasks: generate_markdown.yml
 

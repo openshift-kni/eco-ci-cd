@@ -1,0 +1,47 @@
+---
+- name: Read the temporary NROP CatalogSource
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: "{{ nrop_stage_temp_catalog }}"
+  register: nrop_stage_temp_current
+
+- name: Read subscriptions before temporary catalog cleanup
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+  register: nrop_stage_temp_subscriptions
+
+- name: Require the temporary catalog to remain unused and owned
+  ansible.builtin.assert:
+    that:
+      - nrop_stage_temp_current.resources | length <= 1
+      - >-
+        nrop_stage_temp_current.resources | length == 0 or
+        (nrop_stage_temp_current.resources[0].metadata.uid == nrop_stage_temp_created.result.metadata.uid and
+         nrop_stage_temp_current.resources[0].metadata.labels['nrop-ci.openshift.io/temporary-catalog'] | default('') == 'true')
+      - >-
+        nrop_stage_temp_subscriptions.resources | selectattr('spec.source', 'defined')
+        | selectattr('spec.source', 'equalto', nrop_stage_temp_catalog)
+        | selectattr('spec.sourceNamespace', 'defined')
+        | selectattr('spec.sourceNamespace', 'equalto', 'openshift-marketplace') | list | length == 0
+    fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} changed or is in use; it was not removed."
+
+- name: Remove only the temporary NROP CatalogSource
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: "{{ nrop_stage_temp_catalog }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+    delete_options:
+      preconditions:
+        uid: "{{ nrop_stage_temp_current.resources[0].metadata.uid }}"
+        resourceVersion: "{{ nrop_stage_temp_current.resources[0].metadata.resourceVersion }}"
+  when: nrop_stage_temp_current.resources | length == 1

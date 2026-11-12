@@ -1,0 +1,190 @@
+---
+- name: Set catalog facts for artifacts
+  ansible.builtin.set_fact:
+    nrop_artifact_catalog_name: "{{ nrop_operator_spec[0].catalog }}"
+    nrop_artifact_catalog_image: >-
+      {{
+        'registry.redhat.io/redhat/redhat-operator-index:v' ~ nrop_operator_version
+        if nrop_catalog_source == 'prod'
+        else 'quay.io/redhat-user-workloads/telco-5g-tenant/numaresources-operator-fbc-'
+        ~ (nrop_operator_version | replace('.', '-')) ~ ':latest'
+      }}
+    nrop_artifact_scheduler_image: >-
+      {{
+        ('registry.redhat.io' if nrop_catalog_source == 'prod' else 'registry.stage.redhat.io')
+        ~ ('/openshift5/' if nrop_operator_version is version('5.0', '>=') else '/openshift4/')
+        ~ ('noderesourcetopology-scheduler-container-rhel8'
+          if (nrop_operator_version is version('4.14', '<'))
+          else 'noderesourcetopology-scheduler-rhel9')
+        ~ ':v' ~ nrop_operator_version
+      }}
+
+- name: Ensure artifacts directory exists
+  ansible.builtin.file:
+    path: "{{ artifacts_folder }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  become: true
+
+- name: Collect bundle and operator images from cluster
+  ansible.builtin.include_tasks: collect_bundle_operator_images.yml
+
+- name: Read the deployed CatalogSource
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    name: "{{ nrop_artifact_catalog_name }}"
+    namespace: openshift-marketplace
+  register: nrop_artifact_catalog
+
+- name: Require the deployed CatalogSource image
+  ansible.builtin.assert:
+    that:
+      - nrop_artifact_catalog.resources | length == 1
+      - nrop_artifact_catalog.resources[0].spec.image | default('') | length > 0
+
+- name: Read the running catalog image
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: openshift-marketplace
+    label_selectors:
+      - "olm.catalogSource={{ nrop_artifact_catalog_name }}"
+  register: nrop_artifact_catalog_pods
+  until: >-
+    nrop_artifact_catalog_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+    | selectattr('status.phase', 'equalto', 'Running') | selectattr('status.containerStatuses', 'defined')
+    | map(attribute='status.containerStatuses') | flatten | selectattr('name', 'equalto', 'registry-server')
+    | selectattr('ready', 'equalto', true)
+    | selectattr('image', 'equalto', nrop_artifact_catalog.resources[0].spec.image)
+    | map(attribute='imageID') | reject('equalto', '') | unique | list | length == 1
+  retries: 60
+  delay: 10
+
+- name: Record deployed catalog and scheduler digests
+  ansible.builtin.set_fact:
+    nrop_artifact_catalog_deployed: "{{ nrop_artifact_catalog.resources[0].spec.image }}"
+    nrop_artifact_catalog_runtime: >-
+      {{ nrop_artifact_catalog_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+         | selectattr('status.phase', 'equalto', 'Running') | selectattr('status.containerStatuses', 'defined')
+         | map(attribute='status.containerStatuses') | flatten | selectattr('name', 'equalto', 'registry-server')
+         | selectattr('ready', 'equalto', true)
+         | selectattr('image', 'equalto', nrop_artifact_catalog.resources[0].spec.image)
+         | map(attribute='imageID') | reject('equalto', '') | first }}
+    nrop_artifact_scheduler_pinned: "{{ scheduler_image_uri }}"
+
+- name: Require immutable deployed catalog and scheduler images
+  ansible.builtin.assert:
+    that:
+      - nrop_artifact_catalog_runtime is search('sha256:[0-9a-f]{64}')
+      - nrop_artifact_scheduler_pinned is search('@sha256:[0-9a-f]{64}$')
+    fail_msg: The running catalog or selected scheduler has no immutable digest.
+
+- name: Inspect the must-gather digest
+  block:
+    - name: Create a temporary pull-secret file
+      ansible.builtin.tempfile:
+        state: file
+        suffix: nrop-pull-secret
+      register: nrop_artifact_authfile
+      no_log: true
+
+    - name: Write temporary pull secret for skopeo
+      ansible.builtin.copy:
+        content: "{{ pull_secret_string | b64decode }}"
+        dest: "{{ nrop_artifact_authfile.path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Set must-gather image reference
+      ansible.builtin.set_fact:
+        nrop_artifact_mustgather_image: >-
+          {{ ('registry.redhat.io/' if nrop_catalog_source == 'prod' else 'registry.stage.redhat.io/')
+             ~ ('openshift5' if nrop_operator_version is version('5.0', '>=') else 'openshift4')
+             ~ '/numaresources-must-gather-rhel9:v' ~ nrop_operator_version if nrop_operator_version is version('4.14', '>=') else '' }}
+
+    - name: Inspect published NROP must-gather image
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --override-os
+          - linux
+          - --override-arch
+          - amd64
+          - --authfile
+          - "{{ nrop_artifact_authfile.path }}"
+          - "docker://{{ nrop_artifact_mustgather_image }}"
+      register: nrop_mustgather_skopeo
+      retries: 5
+      delay: 5
+      until: nrop_mustgather_skopeo.rc == 0
+      changed_when: false
+      no_log: true
+      when: nrop_artifact_mustgather_image | length > 0
+
+    - name: Remember the must-gather digest
+      ansible.builtin.set_fact:
+        nrop_artifact_mustgather_digest: "{{ (nrop_mustgather_skopeo.stdout | from_json).Digest if nrop_artifact_mustgather_image | length > 0 else '' }}"
+
+  always:
+    - name: Remove temporary pull-secret file
+      ansible.builtin.file:
+        path: "{{ nrop_artifact_authfile.path }}"
+        state: absent
+      when: nrop_artifact_authfile.path is defined
+      no_log: true
+
+- name: Save NROP image digests artifact
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/nrop-image-digests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}.yaml"
+    mode: "0644"
+    content: |
+      target_version: "{{ nrop_operator_version }}"
+      phase: "{{ nrop_artifact_phase }}"
+      nrop_source: "{{ nrop_catalog_source }}"
+      catalog_name: "{{ nrop_artifact_catalog_name }}"
+      catalog_image: "{{ nrop_artifact_catalog_image }}"
+      catalog_deployed_image: "{{ nrop_artifact_catalog_deployed }}"
+      catalog_runtime_image: "{{ nrop_artifact_catalog_runtime }}"
+      catalog_digest: "{{ (nrop_artifact_catalog_deployed | regex_search('sha256:[0-9a-f]{64}'))
+        | default((nrop_artifact_catalog_runtime | regex_search('sha256:[0-9a-f]{64}')), true) }}"
+      catalog_digest_source: "{{ 'catalogsource' if nrop_artifact_catalog_deployed is search('@sha256:[0-9a-f]{64}$') else 'running-pod' }}"
+      bundle_name: "{{ nrop_bundle_name }}"
+      bundle_version: "{{ nrop_bundle_version }}"
+      bundle_image: "{{ nrop_bundle_image }}"
+      bundle_digest: "{{ nrop_bundle_digest }}"
+      operator_image: "{{ nrop_operator_image }}"
+      operator_digest: "{{ nrop_operator_digest }}"
+      scheduler_image: "{{ nrop_artifact_scheduler_image }}"
+      scheduler_image_digest_ref: "{{ nrop_artifact_scheduler_pinned | default('') }}"
+      scheduler_digest: "{{ nrop_artifact_scheduler_pinned | regex_search('sha256:[0-9a-f]{64}') }}"
+      mustgather_image: "{{ nrop_artifact_mustgather_image }}"
+      mustgather_digest: "{{ nrop_artifact_mustgather_digest }}"
+      mustgather_image_digest_ref: "{{ (nrop_artifact_mustgather_image | regex_replace(':[^/]+$', '')) ~ '@' ~ nrop_artifact_mustgather_digest
+        if nrop_artifact_mustgather_digest | length > 0 else '' }}"
+  become: true
+
+- name: Ensure manifests artifact directory exists
+  ansible.builtin.file:
+    path: "{{ artifacts_folder }}/manifests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  become: true
+
+- name: Export applied NROP lane manifests
+  ansible.builtin.shell: |
+    set -euo pipefail
+    DEST="{{ artifacts_folder }}/manifests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}"
+    oc get catalogsource "{{ nrop_artifact_catalog_name }}" -n openshift-marketplace -o yaml > "${DEST}/catalogsource.yaml"
+    oc get namespace openshift-numaresources -o yaml > "${DEST}/namespace.yaml"
+    oc get operatorgroup numaresources-operator -n openshift-numaresources -o yaml > "${DEST}/operatorgroup.yaml" 2>/dev/null \
+      || oc get operatorgroup -n openshift-numaresources -o yaml > "${DEST}/operatorgroup.yaml"
+    oc get subscription -n openshift-numaresources -o yaml > "${DEST}/subscription.yaml"
+    oc get numaresourcesoperator numaresourcesoperator -o yaml > "${DEST}/numaresourcesoperator.yaml"
+    oc get numaresourcesscheduler numaresourcesscheduler -o yaml > "${DEST}/numaresourcesscheduler.yaml"
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  changed_when: false

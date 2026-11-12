@@ -1,0 +1,14 @@
+---
+- name: OCP and NROP hop for minor-long
+  ansible.builtin.include_tasks: ocp_hop.yml
+  vars:
+    nrop_hop_version: "{{ target_ocp_version }}"
+
+- name: Upgrade NROP after OCP hop
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ target_ocp_version }}"
+
+- name: Verify after upgrade
+  ansible.builtin.include_tasks: verify_nrop.yml
+  when: verify_deployment | bool

@@ -1,0 +1,5 @@
+---
+- name: Z-stream NROP upgrade (prod to stage or same catalog sides)
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ cluster_ocp_version }}"

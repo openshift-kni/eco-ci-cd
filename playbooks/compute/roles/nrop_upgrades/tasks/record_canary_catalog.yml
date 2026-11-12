@@ -1,0 +1,14 @@
+---
+- name: Determine the install CatalogSource name
+  ansible.builtin.set_fact:
+    nrop_canary_install_catalog_name: >-
+      {{ ('cs-redhat-operator-index-v' ~ (install_nrop_version | replace('.', '-')))
+         if nrop_env_from == 'prod' else 'numaresources-operator-fbc' }}
+
+- name: Read the install CatalogSource before the lane creates it
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: "{{ nrop_canary_install_catalog_name }}"
+  register: nrop_canary_initial_catalog

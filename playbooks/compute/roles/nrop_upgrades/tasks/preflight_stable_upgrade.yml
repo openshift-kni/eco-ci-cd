@@ -1,0 +1,50 @@
+---
+- name: Read the starting cluster version
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: nrop_stable_cv
+
+- name: Require a readable starting ClusterVersion
+  ansible.builtin.assert:
+    that:
+      - nrop_stable_cv.resources | length == 1
+      - nrop_stable_cv.resources[0].status.desired.version | default('') | length > 0
+      - nrop_stable_cv.resources[0].status.history | default([]) | length > 0
+    fail_msg: Unable to determine the starting OCP version and update state
+
+- name: Resolve the latest stable starting release
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: resolve_stable.yml
+  vars:
+    ocp_stable_minor: "{{ cluster_ocp_version }}"
+
+- name: Require the cluster to be at the completed latest stable starting release
+  ansible.builtin.assert:
+    that:
+      - nrop_stable_cv.resources[0].status.desired.version == ocp_latest_stable_version
+      - nrop_stable_cv.resources[0].status.history[0].version | default('') == ocp_latest_stable_version
+      - nrop_stable_cv.resources[0].status.history[0].state | default('') == 'Completed'
+    fail_msg: >-
+      {{ upgrade_type }} requires completed latest stable OCP {{ ocp_latest_stable_version }};
+      cluster desired version is {{ nrop_stable_cv.resources[0].status.desired.version }},
+      and its latest history state is {{ nrop_stable_cv.resources[0].status.history[0].state | default('unknown') }}.
+
+- name: Check that every latest stable target release is available
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: resolve_stable.yml
+  vars:
+    ocp_stable_minor: "{{ nrop_stable_target_minor }}"
+  loop: "{{ ocp_upgrade_hops }}"
+  loop_control:
+    loop_var: nrop_stable_target_minor
+
+- name: Show the stable release plan
+  ansible.builtin.debug:
+    msg: >-
+      {{ upgrade_type }}: latest stable OCP {{ nrop_stable_cv.resources[0].status.desired.version }} ->
+      {{ ocp_latest_stable_version }} via {{ ocp_upgrade_hops | join(', ') }}; OCP hops use --force.

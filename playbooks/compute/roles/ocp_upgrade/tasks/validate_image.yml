@@ -1,0 +1,49 @@
+---
+- name: Inspect and validate the release image
+  block:
+    - name: Create a temporary registry authentication file
+      ansible.builtin.tempfile:
+        state: file
+        suffix: ocp-release-auth
+      register: ocp_release_authfile
+      when: ocp_upgrade_pull_secret | default('') | length > 0
+      no_log: true
+
+    - name: Write registry authentication
+      ansible.builtin.copy:
+        content: "{{ ocp_upgrade_pull_secret }}"
+        dest: "{{ ocp_release_authfile.path }}"
+        mode: '0600'
+      when: ocp_upgrade_pull_secret | default('') | length > 0
+      no_log: true
+
+    - name: Read release metadata
+      ansible.builtin.command:
+        argv: >-
+          {{ ['oc', 'adm', 'release', 'info', ocp_hop_image, '-o', 'json']
+             + (['--registry-config', ocp_release_authfile.path] if ocp_upgrade_pull_secret | default('') | length > 0 else []) }}
+      register: ocp_release_info
+      changed_when: false
+      no_log: true
+
+    - name: Check the release version and digest
+      ansible.builtin.assert:
+        that:
+          - (ocp_release_info.stdout | from_json).metadata.version is match('^' ~ (ocp_hop_target | regex_escape) ~ '[.][0-9]+([+-].*)?$')
+          - >-
+            ((ocp_release_info.stdout | from_json).listDigest | default('', true) or (ocp_release_info.stdout | from_json).digest)
+            is match('^sha256:[0-9a-f]{64}$')
+        fail_msg: "Release image {{ ocp_hop_image }} does not contain OCP {{ ocp_hop_target }} or has no valid digest."
+
+    - name: Pin the validated release image
+      ansible.builtin.set_fact:
+        ocp_validated_image: >-
+          {{ (ocp_hop_image.split('@')[0] | regex_replace(':[^/]+$', '')) ~ '@'
+             ~ ((ocp_release_info.stdout | from_json).listDigest | default('', true) or (ocp_release_info.stdout | from_json).digest) }}
+  always:
+    - name: Remove temporary registry authentication
+      ansible.builtin.file:
+        path: "{{ ocp_release_authfile.path }}"
+        state: absent
+      when: ocp_release_authfile.path is defined
+      no_log: true

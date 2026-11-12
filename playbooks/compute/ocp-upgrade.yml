@@ -1,0 +1,10 @@
+---
+# Upgrade the current OpenShift cluster to a selected release.
+- name: Upgrade OpenShift
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  roles:
+    - role: ocp_upgrade

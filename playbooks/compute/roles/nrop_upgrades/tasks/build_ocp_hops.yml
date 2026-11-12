@@ -1,0 +1,27 @@
+---
+- name: Build ordered OCP hops
+  ansible.builtin.set_fact:
+    _ocp_hop_build: []
+    _ocp_hop_current_minor: "{{ cluster_ocp_version.split('.')[1] | int }}"
+
+- name: Add hops to each major-version boundary
+  ansible.builtin.include_tasks: build_major_hops.yml
+  loop: "{{ range(cluster_ocp_version.split('.')[0] | int, target_ocp_version.split('.')[0] | int) | list }}"
+  loop_control:
+    loop_var: ocp_hop_major
+  when: upgrade_type == 'range'
+
+- name: Add hops within the target major
+  ansible.builtin.set_fact:
+    _ocp_hop_build: >-
+      {{ _ocp_hop_build +
+         (range((_ocp_hop_current_minor | int) + 1, (target_ocp_version.split('.')[1] | int) + 1)
+          | map('string') | map('regex_replace', '^', target_ocp_version.split('.')[0] ~ '.') | list) }}
+  when: upgrade_type == 'range' or cluster_ocp_version.split('.')[0] == target_ocp_version.split('.')[0]
+
+- name: Use the selected target for a cross-major EUS or canary hop
+  ansible.builtin.set_fact:
+    _ocp_hop_build: ["{{ target_ocp_version }}"]
+  when:
+    - upgrade_type in ['eus', 'canary']
+    - cluster_ocp_version.split('.')[0] != target_ocp_version.split('.')[0]

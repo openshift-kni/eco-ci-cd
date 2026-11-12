@@ -1,0 +1,13 @@
+---
+- name: Validate the custom OCP release
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: validate_image.yml
+  vars:
+    ocp_hop_target: "{{ ocp_custom_image.key }}"
+    ocp_hop_image: "{{ ocp_custom_image.value }}"
+    ocp_upgrade_pull_secret: "{{ pull_secret_string | default('') | b64decode }}"
+
+- name: Use the validated immutable image for this hop
+  ansible.builtin.set_fact:
+    ocp_hop_images: "{{ ocp_hop_images | combine({ocp_custom_image.key: ocp_validated_image}) }}"

@@ -1,0 +1,109 @@
+---
+- name: Wait for the NROP subscription to install its current CSV
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: numaresources-operator
+    namespace: openshift-numaresources
+  register: nrop_subscription
+  until:
+    - nrop_subscription.resources | length == 1
+    - nrop_subscription.resources[0].status.currentCSV | default('') | length > 0
+    - nrop_subscription.resources[0].status.currentCSV | default('') is search('v' ~ (nrop_operator_version | regex_escape) ~ '\\.')
+    - nrop_subscription.resources[0].status.installedCSV | default('') == nrop_subscription.resources[0].status.currentCSV | default('')
+    - nrop_subscription.resources[0].status.state | default('') == 'AtLatestKnown'
+  retries: 90
+  delay: 10
+
+- name: Wait for the installed target CSV
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    name: "{{ nrop_subscription.resources[0].status.installedCSV }}"
+    namespace: openshift-numaresources
+  register: nrop_installed_csv
+  until:
+    - nrop_installed_csv.resources | length == 1
+    - nrop_installed_csv.resources[0].status.phase | default('') == 'Succeeded'
+    - nrop_installed_csv.resources[0].spec.version | default('') is match('^' ~ (nrop_operator_version | regex_escape) ~ '\\.')
+  retries: 90
+  delay: 10
+
+- name: Wait for the current NROP controller deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: numaresources-controller-manager
+    namespace: openshift-numaresources
+  register: nrop_controller
+  until:
+    - nrop_controller.resources | length == 1
+    - nrop_controller.resources[0].metadata.labels['olm.owner'] | default('') == nrop_subscription.resources[0].status.installedCSV
+    - nrop_controller.resources[0].status.updatedReplicas | default(0) | int == nrop_controller.resources[0].spec.replicas | int
+    - nrop_controller.resources[0].status.readyReplicas | default(0) | int == nrop_controller.resources[0].spec.replicas | int
+  retries: 60
+  delay: 10
+
+- name: Read the NROP worker pool machine count
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ nrop_worker_mcp | default('worker') }}"
+  register: nrop_worker_pool
+  until:
+    - nrop_worker_pool.resources | length == 1
+    - nrop_worker_pool.resources[0].status.machineCount | default(0) | int > 0
+  retries: 30
+  delay: 10
+  when: not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+
+- name: Wait for the NROP worker pool RTE DaemonSet
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    name: "numaresourcesoperator-{{ nrop_worker_mcp | default('worker') }}"
+    namespace: openshift-numaresources
+  register: nrop_rte
+  until:
+    - nrop_rte.resources | length == 1
+    - nrop_rte.resources[0].status.desiredNumberScheduled | default(0) | int == nrop_worker_pool.resources[0].status.machineCount | int
+    - nrop_rte.resources[0].status.updatedNumberScheduled | default(0) | int == nrop_rte.resources[0].status.desiredNumberScheduled | int
+    - nrop_rte.resources[0].status.numberReady | default(0) | int == nrop_rte.resources[0].status.desiredNumberScheduled | int
+    - nrop_rte.resources[0].status.observedGeneration | default(0) | int == nrop_rte.resources[0].metadata.generation | int
+  retries: 60
+  delay: 20
+  when: not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+
+- name: Wait for the scheduler deployment to use the selected digest
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: openshift-numaresources
+  register: nrop_scheduler_deployments
+  until: >-
+    nrop_scheduler_deployments.resources
+    | selectattr('metadata.name', 'search', 'scheduler')
+    | selectattr('spec.template.spec.containers', 'defined')
+    | list | length > 0
+  retries: 60
+  delay: 10
+
+- name: Select scheduler deployment
+  ansible.builtin.set_fact:
+    nrop_scheduler_deployment: "{{ nrop_scheduler_deployments.resources | selectattr('metadata.name', 'search', 'scheduler') | first }}"
+
+- name: Wait for scheduler replicas running the selected image
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: openshift-numaresources
+    label_selectors: "{{ nrop_scheduler_deployment.spec.selector.matchLabels | dict2items | community.general.json_query('[].join(`=`, [key, value])') }}"
+  register: nrop_scheduler_pods
+  until:
+    - >-
+      nrop_scheduler_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+      | selectattr('status.phase', 'equalto', 'Running')
+      | community.general.json_query("[?status.conditions[?type=='Ready' && status=='True']].spec.containers[]")
+      | selectattr('image', 'equalto', scheduler_image_uri) | list | length == nrop_scheduler_deployment.spec.replicas | int
+    - nrop_scheduler_deployment.spec.replicas | int > 0
+  retries: 180
+  delay: 10

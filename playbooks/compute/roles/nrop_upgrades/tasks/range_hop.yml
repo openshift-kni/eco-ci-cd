@@ -1,0 +1,8 @@
+---
+- name: Upgrade OCP for range hop
+  ansible.builtin.include_tasks: ocp_hop.yml
+
+- name: Upgrade NROP for range hop
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ nrop_hop_version }}"

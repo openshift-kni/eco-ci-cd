@@ -1,0 +1,39 @@
+---
+- name: Wait for topology resources for all original workers
+  kubernetes.core.k8s_info:
+    api_version: topology.node.k8s.io/v1alpha2
+    kind: NodeResourceTopology
+  register: nrop_canary_nrt
+  until:
+    - nrop_canary_worker_names | difference(nrop_canary_nrt.resources | map(attribute='metadata.name') | list) | length == 0
+  retries: 30
+  delay: 10
+
+- name: Require worker NUMA zones and topology policy information
+  ansible.builtin.assert:
+    that:
+      - item.zones | default([]) | length > 0
+      - item.zones | map(attribute='resources') | select('defined') | reject('equalto', []) | list | length > 0
+      - item.attributes | default([]) | selectattr('name', 'equalto', 'topologyManagerPolicy') | list | length > 0
+    fail_msg: "NodeResourceTopology {{ item.metadata.name }} has no NUMA zones or topology policy"
+  loop: "{{ nrop_canary_nrt.resources | selectattr('metadata.name', 'in', nrop_canary_worker_names) | list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Wait for each worker to report the expected topology policy and scope
+  kubernetes.core.k8s_info:
+    api_version: topology.node.k8s.io/v1alpha2
+    kind: NodeResourceTopology
+    name: "{{ item }}"
+  register: nrop_canary_node_nrt
+  until:
+    - nrop_canary_node_nrt.resources | length == 1
+    - >-
+      nrop_canary_node_nrt.resources[0].attributes | default([]) | selectattr('name', 'equalto', 'topologyManagerPolicy')
+      | selectattr('value', 'equalto', 'single-numa-node') | list | length == 1
+    - >-
+      nrop_canary_node_nrt.resources[0].attributes | default([]) | selectattr('name', 'equalto', 'topologyManagerScope')
+      | selectattr('value', 'equalto', topology_manager_scope) | list | length == 1
+  retries: 30
+  delay: 10
+  loop: "{{ nrop_canary_worker_names }}"

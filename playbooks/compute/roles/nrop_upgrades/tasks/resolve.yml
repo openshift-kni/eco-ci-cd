@@ -1,0 +1,156 @@
+---
+- name: Extract FROM major.minor
+  ansible.builtin.set_fact:
+    from_version_key: "{{ (from_ocp_version | regex_search('[0-9]+\\.[0-9]+')) | default('', true) }}"
+
+- name: Extract TO major.minor
+  ansible.builtin.set_fact:
+    to_version_key: "{{ (to_ocp_version | regex_search('[0-9]+\\.[0-9]+')) | default('', true) if upgrade_type != 'zstream' else '' }}"
+
+- name: Require supported FROM version
+  ansible.builtin.assert:
+    that:
+      - from_version_key is match('^[0-9]+\\.[0-9]+$')
+    fail_msg: FROM_OCP_VERSION must specify a major.minor version or pullspec
+
+- name: Require supported TO version for multi-version lanes
+  ansible.builtin.assert:
+    that:
+      - to_version_key is match('^[0-9]+\\.[0-9]+$')
+    fail_msg: TO_OCP_VERSION must specify a major.minor version or pullspec
+  when: upgrade_type != 'zstream'
+
+- name: Set cluster OCP version for the lane
+  ansible.builtin.set_fact:
+    cluster_ocp_version: "{{ to_version_key if upgrade_type == 'minor-short' else from_version_key }}"
+
+- name: Require major.minor cluster version
+  ansible.builtin.assert:
+    that:
+      - cluster_ocp_version is match('^[0-9]+\\.[0-9]+$')
+    fail_msg: "Cluster OCP version must resolve to major.minor."
+
+- name: Require TO for multi-hop lanes
+  ansible.builtin.assert:
+    that:
+      - to_version_key | length > 0
+      - to_version_key is match('^[0-9]+\\.[0-9]+$')
+      - to_version_key is version(cluster_ocp_version, '>')
+    fail_msg: TO_OCP_VERSION must be a higher major.minor than FROM for {{ upgrade_type }}
+  when: upgrade_type in ['minor-long', 'range', 'eus', 'canary']
+
+- name: Require adjacent minor-long versions
+  ansible.builtin.assert:
+    that:
+      - >-
+        (to_version_key.split('.')[0] == cluster_ocp_version.split('.')[0] and
+         to_version_key.split('.')[1] | int == cluster_ocp_version.split('.')[1] | int + 1) or
+        (to_version_key.split('.')[0] | int == cluster_ocp_version.split('.')[0] | int + 1 and
+         to_version_key.split('.')[1] | int == 0)
+    fail_msg: minor-long requires adjacent FROM and TO versions
+  when: upgrade_type == 'minor-long'
+
+- name: Require adjacent minor-short versions
+  ansible.builtin.assert:
+    that:
+      - >-
+        (to_version_key.split('.')[0] == from_version_key.split('.')[0] and
+         to_version_key.split('.')[1] | int == from_version_key.split('.')[1] | int + 1) or
+        (to_version_key.split('.')[0] | int == from_version_key.split('.')[0] | int + 1 and
+         to_version_key.split('.')[1] | int == 0)
+    fail_msg: minor-short requires adjacent FROM and TO versions
+  when: upgrade_type == 'minor-short'
+
+- name: Set lane facts
+  ansible.builtin.set_fact:
+    nrop_env_from: "{{ upgrade_env.split('-')[0] }}"
+    nrop_env_to: "{{ upgrade_env.split('-')[1] }}"
+    target_ocp_version: "{{ to_version_key | default('') }}"
+    nrop_upgrade_type: "{{ upgrade_type if upgrade_type in ['zstream', 'eus', 'canary'] else 'minor' }}"
+    ocp_from_minor: "{{ cluster_ocp_version.split('.')[1] }}"
+    nrop_worker_mcp: "{{ nrop_canary_profile_worker_pool if upgrade_type == 'canary' else 'worker' }}"
+    nrop_fingerprint_temporary: false
+
+- name: Set install NROP version from FROM
+  ansible.builtin.set_fact:
+    install_nrop_version: "{{ from_version_key }}"
+
+- name: Init OCP hop lists
+  ansible.builtin.set_fact:
+    ocp_upgrade_hops: []
+    ocp_control_plane_hops: []
+    ocp_hop_images: {}
+
+- name: Validate custom hop images
+  ansible.builtin.assert:
+    that:
+      - item is match('^[0-9]+\\.[0-9]+=[^\\s,]+/[^\\s,]+$')
+      - item.split('=', 1)[0] is match('^[0-9]+\\.[0-9]+$')
+    fail_msg: "Invalid CUSTOM_OCP_IMAGES entry: {{ item }}"
+  loop: "{{ custom_ocp_images.split(',') | map('trim') | reject('equalto', '') | list }}"
+
+- name: Build custom hop image map
+  ansible.builtin.set_fact:
+    ocp_hop_images: "{{ ocp_hop_images | combine({item.split('=', 1)[0]: item.split('=', 1)[1]}) }}"
+  loop: "{{ custom_ocp_images.split(',') | map('trim') | reject('equalto', '') | list }}"
+
+- name: Use explicit target pullspec for the final hop
+  ansible.builtin.set_fact:
+    ocp_hop_images: "{{ ocp_hop_images | combine({target_ocp_version: to_ocp_version}) }}"
+  when:
+    - upgrade_type in ['minor-long', 'range', 'eus', 'canary']
+    - "'/' in to_ocp_version"
+
+- name: Require the latest stable target for minor-long
+  ansible.builtin.assert:
+    that:
+      - ocp_hop_images[target_ocp_version] | default('') | length == 0
+    fail_msg: minor-long always uses the latest stable target; remove the explicit target image
+  when: upgrade_type == 'minor-long'
+
+- name: Build OCP hops for range
+  ansible.builtin.include_tasks: build_ocp_hops.yml
+  when: upgrade_type == 'range'
+
+- name: Assign range hops
+  ansible.builtin.set_fact:
+    ocp_upgrade_hops: "{{ _ocp_hop_build }}"
+  when: upgrade_type == 'range'
+
+- name: Set minor-long OCP hop
+  ansible.builtin.set_fact:
+    ocp_upgrade_hops: ["{{ target_ocp_version }}"]
+  when: upgrade_type == 'minor-long'
+
+- name: Require latest stable targets for range
+  ansible.builtin.assert:
+    that:
+      - ocp_upgrade_hops | intersect(ocp_hop_images.keys() | list) | length == 0
+    fail_msg: range always uses latest stable targets; remove custom images for its hops
+  when: upgrade_type == 'range'
+
+- name: Build OCP hops for eus and canary control plane
+  ansible.builtin.include_tasks: build_ocp_hops.yml
+  when: upgrade_type in ['eus', 'canary']
+
+- name: Assign control-plane hops
+  ansible.builtin.set_fact:
+    ocp_control_plane_hops: "{{ _ocp_hop_build }}"
+  when: upgrade_type in ['eus', 'canary']
+
+- name: Assert eus and canary hop shape
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          cluster_ocp_version.split('.')[0] == target_ocp_version.split('.')[0]
+          and (target_ocp_version.split('.')[1] | int) - (cluster_ocp_version.split('.')[1] | int) == 2
+        )
+        or (
+          target_ocp_version.split('.')[0] | int == cluster_ocp_version.split('.')[0] | int + 1
+          and target_ocp_version.split('.')[1] | int == 0
+        )
+    fail_msg: >-
+      {{ upgrade_type }} supports same-major +2 or a transition to the next major,
+      got {{ cluster_ocp_version }} -> {{ target_ocp_version }}
+  when: upgrade_type in ['eus', 'canary']

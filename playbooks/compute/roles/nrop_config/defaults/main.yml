@@ -6,6 +6,12 @@ manifest_dir: "{{ tmp_workdir }}/manifests"
 scheduable_master: false
 is_full_schedulable_cluster: false
 deploy_performance_profile_only: false
+nrop_config_apply_perf_profile: true
+nrop_config_profile_if_missing: false
+nrop_config_target_version: ""
+nrop_config_operator_only: false
+nrop_config_worker_pool: worker
+nrop_config_cpu_discovery_only: false  # Discover CPUs without applying a PerformanceProfile
 topology_manager_scope: "pod"
 scheduler_image_name: noderesourcetopology-scheduler
 image_uri:

@@ -1,0 +1,6 @@
+---
+- name: Range OCP and NROP per hop
+  ansible.builtin.include_tasks: range_hop.yml
+  loop: "{{ ocp_upgrade_hops }}"
+  loop_control:
+    loop_var: nrop_hop_version

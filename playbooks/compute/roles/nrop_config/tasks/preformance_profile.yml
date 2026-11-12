@@ -1,45 +1,27 @@
 ---
-- name: Set performance profile creator image based on OCP version
-  ansible.builtin.set_fact:
-    nrop_ppc_image: >-
-      {{ ppc_image_rhel8 if (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.19', '<') else ppc_image }}
+- name: Read existing performance profiles
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+  register: nrop_existing_profiles
+  when: nrop_config_profile_if_missing | bool
 
-- name: Check if PPC needs to run on both master and worker nodes
-  ansible.builtin.set_fact:
-    pp_target_pool: "{{ 'master,worker' if is_full_schedulable_cluster | default(false) | bool is true else nrop_target_pool }}"
-
-- name: Create temporary must gather directory
-  ansible.builtin.tempfile:
-    state: directory
-    suffix: _must_gather
-  register: tmp_must_gather_dir
-
-- name: Collect Must Gather
-  ansible.builtin.shell: |
-    oc --kubeconfig {{ kubeconfig }} adm must-gather --dest-dir="{{ tmp_must_gather_dir.path }}"
-  register: must_gather
-  no_log: true
-  changed_when: must_gather.rc == 0
-
-- name: Save pull secret
-  ansible.builtin.copy:
-    content: "{{ pull_secret_string | b64decode }}"
-    dest: "{{ tmp_must_gather_dir.path }}/pull_secret"
-    mode: '0660'
-
-- name: Generate Performance Profile {{ pp_target_pool }}
-  ansible.builtin.include_tasks: pp_generator.yml
-  loop: "{{ pp_target_pool.split(',') }}"
+- name: Find target nodes selected by existing performance profiles
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors: >-
+      {{ ['node-role.kubernetes.io/' ~ (nrop_target_pool | default(nrop_config_worker_pool))]
+         + (item.spec.nodeSelector | default({}) | dict2items
+            | community.general.json_query('[].join(`=`, [key, value])')) }}
+  loop: "{{ nrop_existing_profiles.resources | default([]) }}"
   loop_control:
-    loop_var: target
+    label: "{{ item.metadata.name }}"
+  register: nrop_profile_target_nodes
+  when: nrop_config_profile_if_missing | bool
 
-- name: Delete temporary must gather directory
-  ansible.builtin.file:
-    path: "{{ tmp_must_gather_dir.path }}"
-    state: absent
-
-- name: Wait for MCP restart
-  ansible.builtin.include_tasks: wait_for_mcp.yml
-
-- name: Flush handlers
-  ansible.builtin.meta: flush_handlers
+- name: Generate performance profile when needed
+  ansible.builtin.include_tasks: generate_performance_profile.yml
+  when: >-
+    not (nrop_config_profile_if_missing | bool) or
+    nrop_profile_target_nodes.results | default([]) | map(attribute='resources') | flatten | length == 0

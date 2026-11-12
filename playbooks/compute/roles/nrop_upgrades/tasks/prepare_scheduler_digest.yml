@@ -1,0 +1,70 @@
+---
+- name: Select target scheduler image
+  ansible.builtin.set_fact:
+    nrop_upgrade_scheduler_image: >-
+      {{ ('registry.redhat.io' if nrop_catalog_source == 'prod' else 'registry.stage.redhat.io')
+         ~ ('/openshift5/' if nrop_operator_version is version('5.0', '>=') else '/openshift4/')
+         ~ ('noderesourcetopology-scheduler-container-rhel8' if nrop_operator_version is version('4.14', '<') else 'noderesourcetopology-scheduler-rhel9')
+         ~ ':v' ~ nrop_operator_version }}
+
+- name: Resolve the target scheduler digest
+  block:
+    - name: Create a temporary scheduler pull-secret file
+      ansible.builtin.tempfile:
+        state: file
+        suffix: nrop-scheduler-pull-secret
+      register: nrop_upgrade_authfile
+      no_log: true
+
+    - name: Write scheduler pull secret
+      ansible.builtin.copy:
+        content: "{{ pull_secret_string | b64decode }}"
+        dest: "{{ nrop_upgrade_authfile.path }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Inspect target scheduler image
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --override-os
+          - linux
+          - --override-arch
+          - amd64
+          - --authfile
+          - "{{ nrop_upgrade_authfile.path }}"
+          - "docker://{{ nrop_upgrade_scheduler_image }}"
+      register: nrop_upgrade_scheduler_inspect
+      retries: 5
+      delay: 5
+      until: nrop_upgrade_scheduler_inspect.rc == 0
+      changed_when: false
+      no_log: true
+
+    - name: Remember target scheduler digest
+      ansible.builtin.set_fact:
+        nrop_upgrade_scheduler_digest: "{{ (nrop_upgrade_scheduler_inspect.stdout | from_json).Digest }}"
+  always:
+    - name: Remove temporary scheduler pull-secret file
+      ansible.builtin.file:
+        path: "{{ nrop_upgrade_authfile.path }}"
+        state: absent
+      when: nrop_upgrade_authfile.path is defined
+      no_log: true
+
+- name: Update the existing subscription's scheduler digest allow-list
+  kubernetes.core.k8s:
+    state: patched
+    merge_type: merge
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: numaresources-operator
+        namespace: openshift-numaresources
+      spec:
+        config:
+          env:
+            - name: SCHEDULER_IMAGE_DIGESTS
+              value: "{{ nrop_upgrade_scheduler_digest }}"

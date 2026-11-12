@@ -1,0 +1,35 @@
+---
+- name: Read all subscriptions before catalog cleanup
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+  register: nrop_canary_catalog_subscriptions
+
+- name: Read the marked install CatalogSource
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: "{{ nrop_canary_install_catalog_name }}"
+  register: nrop_canary_final_catalog
+
+- name: Remove the lane-created install CatalogSource if no subscription uses it
+  kubernetes.core.k8s:
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: "{{ nrop_canary_install_catalog_name }}"
+    state: absent
+    delete_options:
+      preconditions:
+        uid: "{{ nrop_canary_final_catalog.resources[0].metadata.uid }}"
+        resourceVersion: "{{ nrop_canary_final_catalog.resources[0].metadata.resourceVersion }}"
+  when:
+    - nrop_canary_initial_catalog.resources | length == 0
+    - nrop_canary_final_catalog.resources | length == 1
+    - nrop_canary_final_catalog.resources[0].metadata.labels['nrop-ci.openshift.io/canary-catalog'] | default('') == 'true'
+    - >-
+      nrop_canary_catalog_subscriptions.resources | selectattr('spec.source', 'defined')
+      | selectattr('spec.source', 'equalto', nrop_canary_install_catalog_name)
+      | selectattr('spec.sourceNamespace', 'defined')
+      | selectattr('spec.sourceNamespace', 'equalto', 'openshift-marketplace') | list | length == 0

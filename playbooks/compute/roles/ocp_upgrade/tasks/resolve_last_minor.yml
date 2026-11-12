@@ -1,0 +1,30 @@
+---
+- name: Query the source-major stable release stream
+  ansible.builtin.uri:
+    url: "{{ ocp_stable_stream_base }}/api/v1/releasestream/{{ ocp_boundary_major }}-stable/tags"
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: ocp_boundary_stream
+  retries: 3
+  delay: 5
+  until: ocp_boundary_stream.status | default(0) == 200
+
+- name: Find accepted releases for this major
+  ansible.builtin.set_fact:
+    ocp_boundary_versions: >-
+      {{ ocp_boundary_stream.json.tags | default([])
+         | selectattr('name', 'defined') | selectattr('phase', 'defined')
+         | selectattr('phase', 'equalto', 'Accepted')
+         | selectattr('name', 'match', '^' ~ (ocp_boundary_major | string | regex_escape) ~ '[.][0-9]+[.][0-9]+$')
+         | map(attribute='name') | list }}
+
+- name: Require an accepted release for this major
+  ansible.builtin.assert:
+    that:
+      - ocp_boundary_versions | length > 0
+    fail_msg: "No accepted stable release found for OCP {{ ocp_boundary_major }}.x."
+
+- name: Select the last accepted minor of this major
+  ansible.builtin.set_fact:
+    ocp_boundary_last_minor: "{{ (ocp_boundary_versions | community.general.version_sort | last).split('.')[1] | int }}"

@@ -1,0 +1,72 @@
+---
+- name: Copy EUS script to the bastion
+  ansible.builtin.copy:
+    src: "{{ role_path }}/scripts/nrop-eus-upgrade.sh"
+    dest: /tmp/nrop-eus-upgrade.sh
+    mode: '0755'
+
+- name: EUS setup
+  ansible.builtin.command:
+    cmd: /tmp/nrop-eus-upgrade.sh setup
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MINOR: "{{ ocp_from_minor }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  changed_when: true
+
+- name: Upgrade NROP before control-plane OCP hops
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ target_ocp_version }}"
+
+- name: Upgrade the EUS control plane
+  block:
+    - name: Control-plane OCP hops
+      ansible.builtin.include_tasks: ocp_hop.yml
+      loop: "{{ ocp_control_plane_hops }}"
+      loop_control:
+        loop_var: nrop_hop_version
+  rescue:
+    - name: Report the paused EUS state
+      ansible.builtin.fail:
+        msg: >-
+          An EUS OCP hop failed. The worker MCP and NROP reconciliation may remain paused;
+          no automatic unpause was attempted. Inspect the cluster before recovery.
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('See the earlier failure'), true) }}
+
+- name: EUS unpause workers
+  ansible.builtin.command:
+    cmd: /tmp/nrop-eus-upgrade.sh unpause
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MINOR: "{{ ocp_from_minor }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  changed_when: true
+
+- name: Restore the original EUS fingerprint configuration
+  ansible.builtin.include_tasks: restore_temporary_fingerprint.yml
+  vars:
+    nrop_fingerprint_restore_pool: worker
+  when: nrop_fingerprint_temporary | bool
+
+- name: Verify EUS worker topology after the upgrade
+  ansible.builtin.include_tasks: verify_canary_topology.yml
+  when:
+    - cluster_ocp_version == '4.20'
+    - target_ocp_version == '4.22'
+    - apply_perf_profile | bool
+
+- name: Run the post-upgrade EUS smoke test
+  ansible.builtin.include_tasks: verify_canary_smoke.yml
+  vars:
+    nrop_canary_smoke_phase: post
+    nrop_canary_smoke_pool: worker
+  when:
+    - cluster_ocp_version == '4.20'
+    - target_ocp_version == '4.22'
+    - apply_perf_profile | bool
+
+- name: Remove an unused EUS install CatalogSource created by the lane
+  ansible.builtin.include_tasks: cleanup_canary_catalog.yml

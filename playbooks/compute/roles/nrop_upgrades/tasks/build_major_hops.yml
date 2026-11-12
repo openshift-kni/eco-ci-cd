@@ -1,0 +1,22 @@
+---
+- name: Find the last accepted minor of this major
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: resolve_last_minor.yml
+  vars:
+    ocp_boundary_major: "{{ ocp_hop_major }}"
+
+- name: Require the source minor to exist in the stable stream
+  ansible.builtin.assert:
+    that:
+      - ocp_boundary_last_minor | int >= _ocp_hop_current_minor | int
+    fail_msg: "No accepted stable {{ ocp_hop_major }}.x release reaches the selected source minor."
+
+- name: Add remaining minor releases and the next major
+  ansible.builtin.set_fact:
+    _ocp_hop_build: >-
+      {{ _ocp_hop_build +
+         (range((_ocp_hop_current_minor | int) + 1, (ocp_boundary_last_minor | int) + 1)
+          | map('string') | map('regex_replace', '^', (ocp_hop_major | string) ~ '.') | list)
+         + [((ocp_hop_major | int + 1) | string) ~ '.0'] }}
+    _ocp_hop_current_minor: 0

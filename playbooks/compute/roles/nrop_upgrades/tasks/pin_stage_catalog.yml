@@ -1,0 +1,82 @@
+---
+- name: Inspect the final NROP catalog digest
+  ansible.builtin.command:
+    argv:
+      - skopeo
+      - inspect
+      - --no-tags
+      - --authfile
+      - "{{ nrop_stage_authfile.path }}"
+      - --format
+      - "{% raw %}{{ .Digest }}{% endraw %}"
+      - "docker://{{ nrop_stage_catalog_repository }}"
+  register: nrop_stage_catalog_final_digest
+  retries: 5
+  delay: 5
+  until: nrop_stage_catalog_final_digest.rc == 0
+  changed_when: false
+
+- name: Require the final catalog to match the staged image
+  ansible.builtin.assert:
+    that:
+      - nrop_stage_catalog_final_digest.stdout | trim == nrop_stage_catalog_staged_digest.stdout | trim
+    fail_msg: The NROP catalog changed while mirroring; refusing to use it.
+
+- name: Read the mirrored NROP CatalogSource
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: numaresources-operator-fbc
+  register: nrop_stage_catalog
+
+- name: Require a compatible NROP CatalogSource
+  ansible.builtin.assert:
+    that:
+      - nrop_stage_catalog.resources | length <= 1
+      - nrop_stage_catalog.resources | length == 0 or nrop_stage_catalog.resources[0].spec.sourceType | default('') == 'grpc'
+    fail_msg: The existing NROP CatalogSource is not compatible; refusing to overwrite it.
+
+- name: Create the pinned NROP CatalogSource
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: CatalogSource
+      metadata:
+        name: numaresources-operator-fbc
+        namespace: openshift-marketplace
+      spec:
+        sourceType: grpc
+        image: "{{ nrop_stage_catalog_repository }}@{{ nrop_stage_catalog_final_digest.stdout | trim }}"
+  when: nrop_stage_catalog.resources | length == 0
+
+- name: Pin the NROP CatalogSource to the mirrored digest
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    namespace: openshift-marketplace
+    name: numaresources-operator-fbc
+    patch:
+      - op: test
+        path: /metadata/uid
+        value: "{{ nrop_stage_catalog.resources[0].metadata.uid }}"
+      - op: test
+        path: /metadata/resourceVersion
+        value: "{{ nrop_stage_catalog.resources[0].metadata.resourceVersion }}"
+      - op: test
+        path: /spec/image
+        value: "{{ nrop_stage_catalog.resources[0].spec.image }}"
+      - op: replace
+        path: /spec/image
+        value: "{{ nrop_stage_catalog_repository }}@{{ nrop_stage_catalog_final_digest.stdout | trim }}"
+  when:
+    - nrop_stage_catalog.resources | length == 1
+    - nrop_stage_catalog.resources[0].spec.image | default('') != nrop_stage_catalog_repository ~ '@' ~ (nrop_stage_catalog_final_digest.stdout | trim)
+
+- name: Use the pinned NROP CatalogSource for the subscription
+  ansible.builtin.set_fact:
+    nrop_operator_spec: "{{ nrop_operator_spec | map('combine', {'catalog': 'numaresources-operator-fbc'}) | list }}"

@@ -1,0 +1,56 @@
+---
+- name: Query the stable release stream
+  ansible.builtin.uri:
+    url: "{{ ocp_stable_stream_base }}/api/v1/releasestream/{{ ocp_stable_minor.split('.')[0] }}-stable/tags"
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: ocp_stable_stream
+  retries: 3
+  delay: 5
+  until: ocp_stable_stream.status | default(0) == 200
+
+- name: Require stable release tags
+  ansible.builtin.assert:
+    that:
+      - ocp_stable_stream.json.tags is defined
+      - ocp_stable_stream.json.tags is sequence
+    fail_msg: "Stable release stream did not provide tags for {{ ocp_stable_minor }}"
+
+- name: Find accepted stable versions for the requested minor
+  ansible.builtin.set_fact:
+    ocp_stable_versions: >-
+      {{ ocp_stable_stream.json.tags
+         | selectattr('name', 'defined') | selectattr('phase', 'defined')
+         | selectattr('phase', 'equalto', 'Accepted')
+         | selectattr('name', 'match', '^' ~ (ocp_stable_minor | regex_escape) ~ '[.][0-9]+$')
+         | map(attribute='name') | list }}
+
+- name: Require an accepted stable version
+  ansible.builtin.assert:
+    that:
+      - ocp_stable_versions | length > 0
+    fail_msg: "No accepted stable OCP release was found for {{ ocp_stable_minor }}"
+
+- name: Select the latest accepted stable version
+  ansible.builtin.set_fact:
+    ocp_latest_stable_version: "{{ ocp_stable_versions | community.general.version_sort | last }}"
+
+- name: Select the latest accepted stable release record
+  ansible.builtin.set_fact:
+    ocp_latest_stable_record: >-
+      {{ ocp_stable_stream.json.tags | selectattr('name', 'defined') | selectattr('phase', 'defined')
+         | selectattr('name', 'equalto', ocp_latest_stable_version)
+         | selectattr('phase', 'equalto', 'Accepted') | first }}
+
+- name: Require a usable stable release pullspec
+  ansible.builtin.assert:
+    that:
+      - ocp_latest_stable_record.pullSpec is defined
+      - ocp_latest_stable_record.pullSpec is match('^[A-Za-z0-9][A-Za-z0-9./:_@+-]*$')
+      - "'/' in ocp_latest_stable_record.pullSpec"
+    fail_msg: "Latest stable OCP {{ ocp_latest_stable_version }} has no valid pullspec"
+
+- name: Remember the latest stable release image
+  ansible.builtin.set_fact:
+    ocp_latest_stable_image: "{{ ocp_latest_stable_record.pullSpec }}"

@@ -1,0 +1,75 @@
+---
+- name: Require a supported topology manager scope
+  ansible.builtin.assert:
+    that:
+      - topology_manager_scope in ['pod', 'container']
+    fail_msg: "topology_manager_scope must be pod or container"
+
+- name: Discover reserved CPUs for the worker KubeletConfig
+  ansible.builtin.include_role:
+    name: nrop_config
+    tasks_from: generate_performance_profile.yml
+  vars:
+    ocp_version_major: "{{ cluster_ocp_version.split('.')[0] }}"
+    ocp_version_minor: "{{ cluster_ocp_version.split('.')[1] }}"
+    nrop_target_pool: "{{ nrop_worker_mcp }}"
+    is_full_schedulable_cluster: false
+    nrop_config_cpu_discovery_only: true
+
+- name: Validate the discovered CPU reservation
+  ansible.builtin.assert:
+    that:
+      - cpu_reserved is match('^[0-9]+([,-][0-9]+)*$')
+    fail_msg: "PPC did not return a valid worker CPU reservation"
+
+- name: Create one KubeletConfig per canary pool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: KubeletConfig
+      metadata:
+        name: "{{ item.name }}"
+        labels:
+          nrop-ci.openshift.io/canary-managed: 'true'
+      spec:
+        machineConfigPoolSelector:
+          matchLabels: "{{ {'pools.operator.machineconfiguration.openshift.io/' ~ item.pool: ''} }}"
+        kubeletConfig:
+          cpuManagerPolicy: static
+          cpuManagerReconcilePeriod: 5s
+          reservedSystemCPUs: "{{ cpu_reserved }}"
+          memoryManagerPolicy: Static
+          evictionHard:
+            memory.available: 100Mi
+          kubeReserved:
+            memory: 512Mi
+          systemReserved:
+            memory: 512Mi
+          reservedMemory:
+            - numaNode: 0
+              limits:
+                memory: 1124Mi
+          topologyManagerPolicy: single-numa-node
+          topologyManagerScope: "{{ topology_manager_scope }}"
+  loop:
+    - name: "{{ nrop_canary_kubelet_config_name }}"
+      pool: "{{ nrop_worker_mcp }}"
+    - name: "{{ nrop_canary_upgrade_kubelet_config_name }}"
+      pool: "{{ nrop_canary_upgrade_pool }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Wait for worker nodes to apply the KubeletConfig
+  ansible.builtin.include_tasks: wait_canary_kubelet.yml
+  vars:
+    nrop_canary_wait_kubelet: "{{ nrop_canary_kubelet_config_name }}"
+    nrop_canary_wait_pool: "{{ nrop_worker_mcp }}"
+    nrop_canary_wait_count: "{{ nrop_canary_worker_names | length }}"
+
+- name: Wait for the empty upgrade pool to apply the KubeletConfig
+  ansible.builtin.include_tasks: wait_canary_kubelet.yml
+  vars:
+    nrop_canary_wait_kubelet: "{{ nrop_canary_upgrade_kubelet_config_name }}"
+    nrop_canary_wait_pool: "{{ nrop_canary_upgrade_pool }}"
+    nrop_canary_wait_count: 0

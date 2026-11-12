@@ -1,0 +1,40 @@
+---
+- name: Require kubeconfig
+  ansible.builtin.assert:
+    that:
+      - kubeconfig | length > 0
+      - upgrade_type | length > 0
+    fail_msg: kubeconfig and upgrade_type are required
+
+- name: Require supported upgrade type
+  ansible.builtin.assert:
+    that:
+      - upgrade_type in ['zstream', 'minor-short', 'minor-long', 'range', 'eus', 'canary']
+    fail_msg: "Unsupported upgrade_type {{ upgrade_type }}"
+
+- name: Validate UPGRADE_ENV shape
+  ansible.builtin.assert:
+    that:
+      - upgrade_env is match('^(prod|stage)-(prod|stage)$')
+    fail_msg: "upgrade_env must look like prod-stage, got {{ upgrade_env }}"
+
+- name: Validate NROP channel and canary count
+  ansible.builtin.assert:
+    that:
+      - nrop_channel in ['stable', 'versioned']
+      - canary_node_count | string is match('^[0-9]+$')
+    fail_msg: NROP channel must be stable or versioned and canary count must be non-negative
+
+- name: Validate OCP references
+  ansible.builtin.assert:
+    that:
+      - item | length == 0 or item is match('^[0-9]+\\.[0-9]+$') or (item is match('^[A-Za-z0-9][A-Za-z0-9./:_@+\\-]*$') and '/' in item)
+    fail_msg: "Invalid OCP version or pullspec: {{ item }}"
+  loop: "{{ [from_ocp_version] if upgrade_type == 'zstream' else [from_ocp_version, to_ocp_version] }}"
+
+- name: Range requires matching catalog sides
+  ansible.builtin.assert:
+    that:
+      - upgrade_env.split('-')[0] == upgrade_env.split('-')[1]
+    fail_msg: "range requires stage-stage or prod-prod, got {{ upgrade_env }}"
+  when: upgrade_type == 'range'

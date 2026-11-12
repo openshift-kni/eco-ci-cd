@@ -1,0 +1,28 @@
+---
+- name: Wait for rendering and updates in pool - {{ nrop_canary_wait_pool }}
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ nrop_canary_wait_pool }}"
+  register: nrop_canary_wait_result
+  until:
+    - nrop_canary_wait_result.resources | length == 1
+    - nrop_canary_wait_result.resources[0].status.machineCount | default(0) | int == nrop_canary_wait_count | int
+    - nrop_canary_wait_result.resources[0].status.readyMachineCount | default(0) | int == nrop_canary_wait_count | int
+    - nrop_canary_wait_result.resources[0].status.updatedMachineCount | default(0) | int == nrop_canary_wait_count | int
+    - nrop_canary_wait_result.resources[0].status.configuration.name | default('') | length > 0
+    - nrop_canary_wait_result.resources[0].status.configuration.name == nrop_canary_wait_result.resources[0].spec.configuration.name | default('')
+    - >-
+      (nrop_canary_wait_source | default('') | length == 0) or
+      (nrop_canary_wait_source in (nrop_canary_wait_result.resources[0].spec.configuration.source | default([]) | map(attribute='name') | list))
+    - >-
+      nrop_canary_wait_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Updated')
+      | selectattr('status', 'equalto', 'True') | list | length > 0
+    - >-
+      nrop_canary_wait_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Updating')
+      | selectattr('status', 'equalto', 'False') | list | length > 0
+    - >-
+      nrop_canary_wait_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Degraded')
+      | selectattr('status', 'equalto', 'False') | list | length > 0
+  retries: 120
+  delay: 30

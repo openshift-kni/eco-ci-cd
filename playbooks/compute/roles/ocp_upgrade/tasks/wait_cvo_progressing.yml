@@ -1,0 +1,73 @@
+---
+- name: Brief pause before polling ClusterVersion
+  ansible.builtin.pause:
+    seconds: 60
+
+- name: Record the selected image digest for CVO comparisons
+  ansible.builtin.set_fact:
+    ocp_upgrade_target_digest: "{{ ocp_upgrade_target_image | regex_search('@sha256:[0-9a-f]{64}$') | default('', true) }}"
+
+- name: Wait for ClusterVersion to accept the requested image
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: ocp_upgrade_cv_progress
+  until:
+    - ocp_upgrade_cv_progress.resources | length > 0
+    - >-
+      (ocp_upgrade_cv_progress.resources[0].spec.desiredUpdate.image | default('') == ocp_upgrade_target_image)
+      or (ocp_upgrade_cv_progress.resources[0].status.desired.image | default('') == ocp_upgrade_target_image)
+      or (ocp_upgrade_target_digest | length > 0 and
+          ((ocp_upgrade_cv_progress.resources[0].spec.desiredUpdate.image | default('')).endswith(ocp_upgrade_target_digest)
+           or (ocp_upgrade_cv_progress.resources[0].status.desired.image | default('')).endswith(ocp_upgrade_target_digest)))
+  retries: 60
+  delay: 10
+
+- name: Poll until upgrade finishes (Progressing=False)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: ocp_upgrade_cv_done
+  until: >-
+    (ocp_upgrade_cv_done.resources | default([]) | length > 0)
+    and (
+      (ocp_upgrade_cv_done.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'ReleaseAccepted')
+       | selectattr('status', 'equalto', 'False')
+       | selectattr('reason', 'defined') | selectattr('reason', 'equalto', 'PreconditionChecks')
+       | selectattr('message', 'defined')
+       | selectattr('message', 'search', (ocp_upgrade_target_digest | default(ocp_upgrade_target_image, true)) | regex_escape)
+       | list | length > 0)
+      or (
+      (ocp_upgrade_cv_done.resources[0].status.history | default([]) | length > 0)
+      and (ocp_upgrade_cv_done.resources[0].spec.desiredUpdate.image | default('') == ocp_upgrade_target_image
+           or ocp_upgrade_cv_done.resources[0].status.history[0].image | default('') == ocp_upgrade_target_image
+           or (ocp_upgrade_target_digest | length > 0 and
+               ((ocp_upgrade_cv_done.resources[0].spec.desiredUpdate.image | default('')).endswith(ocp_upgrade_target_digest)
+                or (ocp_upgrade_cv_done.resources[0].status.history[0].image | default('')).endswith(ocp_upgrade_target_digest))))
+      and (ocp_upgrade_cv_done.resources[0].status.desired.version | default('') is match('^' ~ (ocp_hop_target | regex_escape) ~ '\\.'))
+      and (ocp_upgrade_cv_done.resources[0].status.history[0].version | default('') == ocp_upgrade_cv_done.resources[0].status.desired.version | default(''))
+      and (ocp_upgrade_cv_done.resources[0].status.history[0].state | default('') == 'Completed')
+      and ((ocp_upgrade_cv_done.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Progressing')
+            | map(attribute='status') | first | default('True')) == 'False')
+      )
+    )
+  retries: 360
+  delay: 60
+
+- name: Fail if ClusterVersion rejected the requested release
+  ansible.builtin.fail:
+    msg: "{{ (ocp_upgrade_cv_done.resources[0].status.conditions | selectattr('type', 'equalto', 'ReleaseAccepted') | first).message }}"
+  when:
+    - ocp_upgrade_cv_done.resources | default([]) | length > 0
+    - >-
+      ocp_upgrade_cv_done.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'ReleaseAccepted')
+      | selectattr('status', 'equalto', 'False')
+      | selectattr('reason', 'defined') | selectattr('reason', 'equalto', 'PreconditionChecks')
+      | selectattr('message', 'defined') | selectattr('message', 'search', (ocp_upgrade_target_digest | default(ocp_upgrade_target_image, true)) | regex_escape)
+      | list | length > 0

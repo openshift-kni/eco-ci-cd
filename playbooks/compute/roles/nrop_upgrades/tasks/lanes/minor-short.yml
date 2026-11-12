@@ -1,0 +1,5 @@
+---
+- name: Minor-short NROP upgrade to cluster OCP minor
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ target_ocp_version }}"

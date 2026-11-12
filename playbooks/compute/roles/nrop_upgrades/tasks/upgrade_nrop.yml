@@ -1,0 +1,7 @@
+---
+- name: Upgrade NROP operator and configuration
+  ansible.builtin.include_tasks: install_nrop.yml
+  vars:
+    nrop_catalog_source: "{{ nrop_env_to }}"
+    nrop_operator_version: "{{ nrop_target_version }}"
+    nrop_artifact_phase: upgrade

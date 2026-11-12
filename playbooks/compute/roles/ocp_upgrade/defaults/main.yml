@@ -1,0 +1,10 @@
+---
+artifacts_folder: /artifacts
+kubeconfig: ""
+ocp_cincinnati_resolver_path: /tmp/ocp-resolve-cincinnati-edge.sh
+ocp_hop_use_latest_stable: false
+ocp_hop_allow_not_recommended: false
+ocp_upgrade_force: false
+ocp_upgrade_pull_secret: ""
+ocp_stable_stream_base: https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com
+ocp_hop_then: ""

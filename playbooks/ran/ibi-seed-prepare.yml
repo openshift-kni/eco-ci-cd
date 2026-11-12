@@ -25,6 +25,7 @@
 #   - Create output directories and remove any stale result files on the controller
 #   - Import ibu-prepare-spoke-sno.yml to retrieve kubeconfig and fix CoreOS extensions image
 #   - Read and validate the seed ClusterVersion (desired version matches Completed history entry)
+#   - Require successful extensions-image lookup and copy when the shared preparation enables them
 #   - Write the validated version to ibi_seed_version_file on the controller
 #   - On failure: save sanitised diagnostics to ibi-seed-version-error.json and fail
 #
@@ -151,6 +152,18 @@
               - _ibi_seed_history[0].state | default('') == 'Completed'
               - _ibi_seed_history[0].version | default('') == _ibi_seed_version
             fail_msg: The seed must have a completed release matching its desired version.
+
+        # Match the shared playbook's version gate; its command failures are non-fatal.
+        - name: Require successful CoreOS extensions preparation for IBI
+          ansible.builtin.assert:
+            that:
+              - _ext_sha_result is defined
+              - _ext_sha_result.rc | default(-1) == 0
+              - _ext_sha_result.stdout | default('') is search('sha256:[a-f0-9]{64}')
+              - _ext_copy is defined
+              - _ext_copy.rc | default(-1) == 0
+            fail_msg: CoreOS extensions image lookup and copy must succeed before recording the IBI seed version.
+          when: _ibi_seed_version.split('.')[1] | int >= 20
 
         - name: Write the validated version on the controller
           ansible.builtin.copy:

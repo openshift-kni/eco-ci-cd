@@ -1,0 +1,74 @@
+---
+- name: Confirm the temporary canary pools are absent
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ item }}"
+  loop: "{{ [nrop_canary_profile_worker_pool, nrop_canary_upgrade_pool] }}"
+  register: nrop_canary_deleted_pools
+
+- name: Confirm nodes no longer use the temporary canary roles
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/{{ item }}"
+  loop: "{{ [nrop_canary_profile_worker_pool, nrop_canary_upgrade_pool] }}"
+  register: nrop_canary_deleted_role_nodes
+
+- name: Refuse MachineConfig cleanup if temporary pools or nodes remain
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_deleted_pools.results | map(attribute='resources') | flatten | length == 0
+      - nrop_canary_deleted_role_nodes.results | map(attribute='resources') | flatten | length == 0
+
+- name: Read orphaned MachineConfigs for temporary pool roles
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    label_selectors:
+      - "machineconfiguration.openshift.io/role in ({{ nrop_canary_profile_worker_pool }},{{ nrop_canary_upgrade_pool }})"
+  register: nrop_canary_generated_mcs
+
+- name: Refuse deletion of unknown or still-owned MachineConfigs
+  ansible.builtin.assert:
+    that:
+      - item.labels['machineconfiguration.openshift.io/role'] in [nrop_canary_profile_worker_pool, nrop_canary_upgrade_pool]
+      - item.ownerReferences | default([], true) | length == 0
+      - >-
+        ((item.name in ['97-' ~ nrop_canary_mc_role ~ '-generated-kubelet', '98-' ~ nrop_canary_mc_role ~ '-generated-kubelet'])
+         and ('machineconfiguration.openshift.io/generated-by-controller-version' in (item.annotations | default({}, true)))) or
+        ((item.name == '50-nto-' ~ nrop_canary_mc_role)
+         and ('tuned.openshift.io/generated-by-controller-version' in (item.annotations | default({}, true))))
+    fail_msg: "Refusing to delete unexpected or still-owned MachineConfig {{ item.name }}"
+  vars:
+    nrop_canary_mc_role: "{{ item.labels['machineconfiguration.openshift.io/role'] }}"
+  loop: "{{ nrop_canary_generated_mcs.resources | map(attribute='metadata') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove verified orphaned controller-generated MachineConfigs
+  kubernetes.core.k8s:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    name: "{{ item.name }}"
+    state: absent
+    delete_options:
+      preconditions:
+        uid: "{{ item.uid }}"
+        resourceVersion: "{{ item.resourceVersion }}"
+  loop: "{{ nrop_canary_generated_mcs.resources | map(attribute='metadata') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify no MachineConfigs remain for temporary canary roles
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    label_selectors:
+      - "machineconfiguration.openshift.io/role in ({{ nrop_canary_profile_worker_pool }},{{ nrop_canary_upgrade_pool }})"
+  register: nrop_canary_remaining_role_mcs
+  until: nrop_canary_remaining_role_mcs.resources | length == 0
+  retries: 30
+  delay: 2
+  when: not ansible_check_mode

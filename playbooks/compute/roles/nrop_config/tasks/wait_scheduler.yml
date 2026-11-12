@@ -1,0 +1,34 @@
+---
+- name: Wait for the scheduler deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: openshift-numaresources
+  register: nrop_scheduler_deployments
+  until: >-
+    nrop_scheduler_deployments.resources
+    | selectattr('metadata.name', 'search', 'scheduler')
+    | list | length > 0
+  retries: 60
+  delay: 10
+
+- name: Select scheduler deployment
+  ansible.builtin.set_fact:
+    nrop_scheduler_deployment: "{{ nrop_scheduler_deployments.resources | selectattr('metadata.name', 'search', 'scheduler') | first }}"
+
+- name: Wait for scheduler replicas running the selected image
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: openshift-numaresources
+    label_selectors: "{{ nrop_scheduler_deployment.spec.selector.matchLabels | dict2items | community.general.json_query('[].join(`=`, [key, value])') }}"
+    field_selectors:
+      - status.phase=Running
+  register: nrop_scheduler_pods
+  until:
+    - >-
+      nrop_scheduler_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+      | map(attribute='spec.containers') | flatten
+      | selectattr('image', 'equalto', scheduler_image_uri) | list | length == nrop_scheduler_deployment.spec.replicas | int
+    - nrop_scheduler_deployment.spec.replicas | int > 0
+  retries: 180
+  delay: 10

@@ -1,3 +1,4 @@
+{% set skip_prefix = (skip_filter ~ ' && ') if skip_filter | default('', true) else '' %}
 {% include "cleanup_containers.sh.j2" %}
 
 podman run --rm --name nrop-container-tests \
@@ -35,10 +36,10 @@ podman run --rm --name nrop-container-tests \
   --report-file /nrop/junit/{{ scope }}_junit_schedrst.xml \
   --verbose \
 {% if ginkgo_skip | default("") != "" %}
-  --skip "{{ ginkgo_skip }}" \
+  --skip {{ ginkgo_skip | quote }} \
 {% endif %}
 {% if ginkgo_label | default("") != "" %}
-  --label-filter "( {{ ginkgo_label }} ) && {% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}schedrst && !reboot_required && !hypershift"
+  --label-filter {{ ('( ' ~ ginkgo_label ~ ' ) && ' ~ skip_prefix ~ 'schedrst && !reboot_required && !hypershift') | quote }}
 {% else %}
-  --label-filter "{% if skip_filter | default("", true) %}{{ skip_filter }} && {% endif %}schedrst && !reboot_required && !hypershift"
+  --label-filter {{ (skip_prefix ~ 'schedrst && !reboot_required && !hypershift') | quote }}
 {% endif %}

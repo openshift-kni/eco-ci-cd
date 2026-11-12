@@ -1,34 +1,4 @@
 ---
-- name: Get scheduler configuration
-  kubernetes.core.k8s_info:
-    api_version: config.openshift.io/v1
-    kind: Scheduler
-    name: cluster
-  register: scheduler_info
-
-- name: Set NROP target pool and base image
-  ansible.builtin.set_fact:
-    nrop_target_pool: "{{ 'master' if scheduler_info.resources[0].spec.mastersSchedulable | default(false) else 'worker' }}"
-    base_image: "{% if ocp_version_minor == 12 %}rhel8{% else %}rhel9{% endif %}"
-
-- name: Check if it's full schedulable cluster
-  when: nrop_target_pool == 'master'
-  block:
-    - name: Get Nodes information
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Node
-      register: nodes_info
-
-    - name: Check if it's full schedulable cluster
-      ansible.builtin.set_fact:
-        is_full_schedulable_cluster: true
-      when: nodes_info.resources | length >= 4
-
-- name: Print target pool
-  ansible.builtin.debug:
-    msg: "Target pool: {{ nrop_target_pool }}"
-
 - name: Disable scheduler validation
   when: custom_scheduler is defined
   kubernetes.core.k8s_json_patch:
@@ -48,22 +18,66 @@
   block:
     - name: Set scheduler image uri
       ansible.builtin.set_fact:
-        scheduler_image_version: "{{ image_uri[test_env] }}/{{ scheduler_image_name }}-{{ base_image }}:v{{ ocp_version_major }}.{{ ocp_version_minor }}"
+        scheduler_image_version: "{{ image_uri[test_env] }}/{{ scheduler_image_name }}-{{ base_image }}:v{{ nrop_config_version }}"
 
-    - name: Save pull secret
-      ansible.builtin.copy:
-        content: "{{ pull_secret_string | b64decode }}"
-        dest: /tmp/pull_secret
-        mode: '0660'
+    - name: Resolve the scheduler image when not already prepared
+      when: nrop_config_prepared_scheduler_image | length == 0
+      block:
+        - name: Create a temporary scheduler pull-secret file
+          ansible.builtin.tempfile:
+            state: file
+            suffix: nrop-scheduler-pull-secret
+          register: nrop_config_scheduler_authfile
+          no_log: true
 
-    - name: Get scheduler sha256
-      ansible.builtin.command: >-
-        skopeo --override-os linux --override-arch amd64 inspect
-        --authfile /tmp/pull_secret
-        --format {{ (scheduler_image_version.split(':')[0] ~ '@{{.Digest}}') | quote }}
-        docker://{{ scheduler_image_version }}
-      register: scheduler_image_sha
-      changed_when: false
+        - name: Write scheduler pull secret
+          ansible.builtin.copy:
+            content: "{{ pull_secret_string | b64decode }}"
+            dest: "{{ nrop_config_scheduler_authfile.path }}"
+            mode: '0600'
+          no_log: true
+
+        - name: Get scheduler sha256
+          ansible.builtin.command:
+            argv:
+              - skopeo
+              - --override-os
+              - linux
+              - --override-arch
+              - amd64
+              - inspect
+              - --authfile
+              - "{{ nrop_config_scheduler_authfile.path }}"
+              - --format
+              - "{{ scheduler_image_version.split(':')[0] ~ '@{{.Digest}}' }}"
+              - "docker://{{ scheduler_image_version }}"
+          register: scheduler_image_sha
+          changed_when: false
+          no_log: true
+
+        - name: Set scheduler image from the resolved digest
+          ansible.builtin.set_fact:
+            scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
+      always:
+        - name: Remove temporary scheduler pull-secret file
+          ansible.builtin.file:
+            path: "{{ nrop_config_scheduler_authfile.path }}"
+            state: absent
+          when: nrop_config_scheduler_authfile.path is defined
+          no_log: true
+
+    - name: Validate the prepared scheduler image
+      ansible.builtin.assert:
+        that:
+          - nrop_config_prepared_scheduler_image is match('^[^@\\s]+@sha256:[0-9a-f]{64}$')
+          - nrop_config_prepared_scheduler_image.split('@')[0] == scheduler_image_version | regex_replace(':[^/]+$', '')
+        fail_msg: The prepared scheduler image does not match the requested scheduler repository and digest.
+      when: nrop_config_prepared_scheduler_image | length > 0
+
+    - name: Use the prepared scheduler image
+      ansible.builtin.set_fact:
+        scheduler_image_uri: "{{ nrop_config_prepared_scheduler_image }}"
+      when: nrop_config_prepared_scheduler_image | length > 0
 
     - name: Patch Subscription with image digests
       kubernetes.core.k8s_json_patch:
@@ -76,11 +90,7 @@
             path: /spec/config/env
             value:
               - name: SCHEDULER_IMAGE_DIGESTS
-                value: "{{ scheduler_image_sha.stdout.split('@')[1] }}"
-
-    - name: Set image name
-      ansible.builtin.set_fact:
-        scheduler_image_uri: "{{ scheduler_image_sha.stdout }}"
+                value: "{{ scheduler_image_uri.split('@')[1] }}"
 
 - name: Overwrite scheduler image uri
   ansible.builtin.set_fact:
@@ -95,9 +105,9 @@
   ansible.builtin.include_tasks: deploy_manifest.yml
   vars:
     template_name: "templates/scheduler.yaml.j2"
-    manifest_name: "operator-scheduler.yaml"
-  when: deploy_performance_profile_only | bool is false
+    manifest_name: "{{ 'operator-scheduler-only.yaml' if nrop_config_operator_only | bool else 'operator-scheduler.yaml' }}"
+  when: not (deploy_performance_profile_only | bool) or (nrop_config_operator_only | bool)
 
-- name: Wait for MCP restart
-  ansible.builtin.include_tasks: wait_for_mcp.yml
-  when: (ocp_version_major ~ '.' ~ ocp_version_minor) is version('4.18', '<')
+- name: Wait for the scheduler replicas
+  ansible.builtin.include_tasks: wait_scheduler.yml
+  when: not (deploy_performance_profile_only | bool) or (nrop_config_operator_only | bool)

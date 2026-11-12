@@ -1,0 +1,48 @@
+---
+- name: Validate and resolve lane parameters
+  ansible.builtin.include_tasks: plan_upgrade.yml
+
+- name: Create the lane artifacts directory
+  ansible.builtin.file:
+    path: "{{ artifacts_folder }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  become: true
+
+- name: Record lane run metadata
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/nrop-upgrades-lane-{{ upgrade_type }}.json"
+    mode: "0644"
+    content: "{{ lane_record | to_nice_json }}"
+  become: true
+  vars:
+    lane_record:
+      upgrade_type: "{{ upgrade_type }}"
+      upgrade_env: "{{ upgrade_env }}"
+      from_ocp_version: "{{ from_ocp_version }}"
+      to_ocp_version: "{{ to_ocp_version }}"
+      cluster_ocp_version: "{{ cluster_ocp_version }}"
+      target_ocp_version: "{{ target_ocp_version }}"
+      install_nrop_version: "{{ install_nrop_version }}"
+      nrop_env_from: "{{ nrop_env_from }}"
+      nrop_env_to: "{{ nrop_env_to }}"
+      ocp_upgrade_hops: "{{ ocp_upgrade_hops }}"
+      ocp_control_plane_hops: "{{ ocp_control_plane_hops }}"
+
+- name: Run lane-specific upgrade path
+  ansible.builtin.include_tasks: "lanes/{{ upgrade_type }}/main.yml"
+
+- name: Deploy sample devices after the upgrade for NROP testing
+  ansible.builtin.include_role:
+    name: nrop_config
+    tasks_from: deploy_manifest.yml
+  vars:
+    template_name: "templates/{{ item }}.yaml.j2"
+    manifest_name: "{{ item }}.yaml"
+  loop:
+    - setup-sample-device
+    - sample-device-A
+    - sample-device-B
+    - sample-device-C
+  when: run_e2e_tests | bool

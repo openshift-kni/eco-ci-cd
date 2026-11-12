@@ -1,0 +1,135 @@
+---
+# Use the already mirrored RTE image; its shared-pool container supplies sh/sleep.
+- name: Determine an isolated smoke-test namespace
+  ansible.builtin.set_fact:
+    nrop_canary_smoke_namespace: "nrop-canary-smoke-{{ (artifacts_folder ~ '-' ~ nrop_canary_smoke_phase) | hash('sha1') | truncate(12, true, '') }}"
+
+- name: Check that the smoke-test namespace does not already exist
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ nrop_canary_smoke_namespace }}"
+  register: nrop_canary_smoke_existing_namespace
+
+- name: Refuse to use a pre-existing smoke-test namespace
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_smoke_existing_namespace.resources | length == 0
+    fail_msg: "Smoke namespace {{ nrop_canary_smoke_namespace }} already exists; it will not be modified or deleted."
+
+- name: Read the running worker RTE DaemonSet image
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: openshift-numaresources
+    name: "numaresourcesoperator-{{ nrop_canary_smoke_pool }}"
+  register: nrop_canary_smoke_rte
+
+- name: Require the RTE shared-pool image
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_smoke_rte.resources | length == 1
+      - nrop_canary_smoke_rte.resources[0].spec.template.spec.containers | selectattr('name', 'equalto', 'shared-pool-container') | list | length == 1
+    fail_msg: "The {{ nrop_canary_smoke_pool }} RTE DaemonSet has no shared-pool image for the smoke workload."
+
+- name: Exercise topology-aware guaranteed scheduling
+  block:
+    - name: Create the isolated smoke-test namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ nrop_canary_smoke_namespace }}"
+            labels:
+              nrop-ci.openshift.io/smoke-managed: 'true'
+      register: nrop_canary_smoke_created_namespace
+
+    - name: Create a Guaranteed pod using the topology-aware scheduler
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: nrop-guaranteed-smoke
+            namespace: "{{ nrop_canary_smoke_namespace }}"
+          spec:
+            schedulerName: topo-aware-scheduler
+            terminationGracePeriodSeconds: 0
+            containers:
+              - name: workload
+                image: >-
+                  {{ (nrop_canary_smoke_rte.resources[0].spec.template.spec.containers
+                      | selectattr('name', 'equalto', 'shared-pool-container') | first).image }}
+                imagePullPolicy: IfNotPresent
+                command: [/bin/sh, -c, 'while true; do sleep 30s; done']
+                resources:
+                  requests: {cpu: '2', memory: 256Mi}
+                  limits: {cpu: '2', memory: 256Mi}
+
+    - name: Wait for the Guaranteed smoke pod to be Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ nrop_canary_smoke_namespace }}"
+        name: nrop-guaranteed-smoke
+      register: nrop_canary_smoke_pod
+      until:
+        - nrop_canary_smoke_pod.resources | length == 1
+        - nrop_canary_smoke_pod.resources[0].status.phase | default('') == 'Running'
+        - nrop_canary_smoke_pod.resources[0].status.qosClass | default('') == 'Guaranteed'
+        - >-
+          nrop_canary_smoke_pod.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True') | list | length == 1
+        - nrop_canary_smoke_pod.resources[0].spec.schedulerName == 'topo-aware-scheduler'
+        - nrop_canary_smoke_pod.resources[0].spec.nodeName | default('') in nrop_canary_worker_names
+      retries: 36
+      delay: 10
+
+    - name: Wait for a Scheduled event from the topology-aware scheduler
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - events
+          - -n
+          - "{{ nrop_canary_smoke_namespace }}"
+          - --field-selector
+          - involvedObject.name=nrop-guaranteed-smoke,reason=Scheduled
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: nrop_canary_smoke_events
+      until: >-
+        ((nrop_canary_smoke_events.stdout | from_json)['items']
+         | community.general.json_query("[?reportingComponent == 'topo-aware-scheduler' || source.component == 'topo-aware-scheduler']")
+         | length) > 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Save the successful smoke result
+      ansible.builtin.copy:
+        dest: "{{ artifacts_folder }}/nrop-canary-smoke-{{ nrop_canary_smoke_phase }}.json"
+        mode: '0644'
+        content: >-
+          {{ {'phase': nrop_canary_smoke_phase, 'node': nrop_canary_smoke_pod.resources[0].spec.nodeName,
+              'scheduler': 'topo-aware-scheduler', 'qos': 'Guaranteed', 'result': 'pass'} | to_nice_json }}
+      become: true
+
+  always:
+    - name: Remove only the namespace created by this smoke test
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ nrop_canary_smoke_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 300
+        delete_options:
+          preconditions:
+            uid: "{{ nrop_canary_smoke_created_namespace.result.metadata.uid }}"
+      when: nrop_canary_smoke_created_namespace.result.metadata.uid is defined

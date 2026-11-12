@@ -1,0 +1,20 @@
+---
+- name: Wait for a healthy node-tuning ClusterOperator
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+    name: node-tuning
+  register: nrop_canary_node_tuning
+  until:
+    - nrop_canary_node_tuning.resources | length == 1
+    - >-
+      nrop_canary_node_tuning.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Available')
+      | selectattr('status', 'equalto', 'True') | list | length > 0
+    - >-
+      nrop_canary_node_tuning.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Degraded')
+      | selectattr('status', 'equalto', 'False') | list | length > 0
+    - >-
+      nrop_canary_node_tuning.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Progressing')
+      | selectattr('status', 'equalto', 'False') | list | length > 0
+  retries: 60
+  delay: 10

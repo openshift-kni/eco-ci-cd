@@ -1,0 +1,19 @@
+---
+# NROP_NO_WORKLOAD_PARTITIONING_V1: image gate for supported upgrade clusters.
+- name: Verify the EUS or canary baseline
+  when: >-
+    upgrade_type == 'canary' or
+    (upgrade_type == 'eus' and cluster_ocp_version == '4.20' and target_ocp_version == '4.22' and apply_perf_profile | bool)
+  block:
+    - name: Verify worker topology before EUS or canary setup
+      ansible.builtin.include_tasks: verify_canary_topology.yml
+
+    - name: Run the pre-upgrade EUS or canary smoke test
+      ansible.builtin.include_tasks: verify_canary_smoke.yml
+      vars:
+        nrop_canary_smoke_phase: pre
+        nrop_canary_smoke_pool: "{{ nrop_worker_mcp }}"
+
+- name: Recheck the Cincinnati path after NROP installation
+  ansible.builtin.include_tasks: preflight_eus.yml
+  when: ocp_control_plane_hops | length > 0

@@ -1,0 +1,18 @@
+---
+- name: Create the empty canary upgrade pool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfigPool
+      metadata:
+        name: "{{ nrop_canary_upgrade_pool }}"
+        labels: "{{ {'pools.operator.machineconfiguration.openshift.io/' ~ nrop_canary_upgrade_pool: ''} }}"
+      spec:
+        machineConfigSelector:
+          matchExpressions:
+            - key: machineconfiguration.openshift.io/role
+              operator: In
+              values: [worker, "{{ nrop_canary_upgrade_pool }}"]
+        nodeSelector:
+          matchLabels: "{{ {'node-role.kubernetes.io/' ~ nrop_canary_upgrade_pool: ''} }}"

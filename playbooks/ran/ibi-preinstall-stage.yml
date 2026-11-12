@@ -74,8 +74,6 @@
 - name: Validate and resolve IBI preinstall inputs
   hosts: bastion
   gather_facts: false
-  vars:
-    ibi_http_subdir: ""
   tasks:
     - name: Require a valid preinstall phase
       ansible.builtin.assert:
@@ -88,6 +86,10 @@
       when: ibi_preinstall_phase | default('prepare') == 'prepare'
       tags: setup
       block:
+        - name: Resolve HTTP subdirectory default
+          ansible.builtin.set_fact:
+            ibi_http_subdir: "{{ ibi_http_subdir | default('') }}"
+
         - name: Validate shared preinstall inputs
           ansible.builtin.assert:
             that:
@@ -170,14 +172,16 @@
 - name: Execute IBI preinstall and collect reports
   hosts: bastion
   gather_facts: false
-  vars:
-    ibi_preinstall_async_timeout: 11700
-    ibi_preinstall_poll_interval: 30
   tasks:
     - name: Run preinstall and collect its reports
       when: ibi_preinstall_phase | default('prepare') == 'run'
       tags: run
       block:
+        - name: Resolve execution timeout defaults
+          ansible.builtin.set_fact:
+            ibi_preinstall_async_timeout: "{{ ibi_preinstall_async_timeout | default(11700) }}"
+            ibi_preinstall_poll_interval: "{{ ibi_preinstall_poll_interval | default(30) }}"
+
         - name: Validate preinstall execution inputs
           ansible.builtin.assert:
             that:

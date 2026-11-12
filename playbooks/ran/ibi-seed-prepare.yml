@@ -1,0 +1,188 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Prepare IBI seed
+# Description  : Prepares an installed IBI seed SNO before it is detached from
+#                ACM. Reuses ibu-prepare-spoke-sno.yml to retrieve the spoke
+#                kubeconfig and fix the CoreOS extensions image in the
+#                disconnected registry, then validates and records the seed's
+#                completed OpenShift version on the Ansible controller.
+#                The seed must still be running and managed by ACM on the hub.
+#
+# Prerequisites:
+#   - Seed SNO deployed and managed by ACM on the hub cluster
+#   - Hub kubeconfig accessible on the bastion (see ibu-prepare-spoke-sno.yml)
+#   - kubernetes.core collection installed (ansible-galaxy collection install -r requirements.yml)
+#   - Ansible controller has write access to ibi_seed_version_file and ibi_seed_diagnostics_dir
+#   - Inventory must select exactly one seed bastion (use --limit bastion)
+#
+# Key Tasks:
+#   - Validate all required inputs and enforce a single seed bastion target
+#   - Create output directories and remove any stale result files on the controller
+#   - Import ibu-prepare-spoke-sno.yml to retrieve kubeconfig and fix CoreOS extensions image
+#   - Read and validate the seed ClusterVersion (desired version matches Completed history entry)
+#   - Write the validated version to ibi_seed_version_file on the controller
+#   - On failure: save sanitised diagnostics to ibi-seed-version-error.json and fail
+#
+# Usage:
+#   ansible-playbook ./playbooks/ran/ibi-seed-prepare.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py --limit bastion \
+#     --extra-vars "hub_cluster=kni-qe-127 spoke_cluster=ibi-seed \
+#       ibi_seed_version_file=/tmp/ibi-seed-result/ibi-seed-version \
+#       ibi_seed_diagnostics_dir=/tmp/ibi-seed-result"
+#
+# Required variables:
+#   hub_cluster               # string: Hub cluster name passed to ibu-prepare-spoke-sno.yml (required)
+#   spoke_cluster             # string: Seed spoke name passed to ibu-prepare-spoke-sno.yml (required)
+#   ibi_seed_version_file     # string: Absolute path on the Ansible controller for the version output file (required)
+#   ibi_seed_diagnostics_dir  # string: Absolute path on the Ansible controller for diagnostic artifacts (required)
+#
+# Additional variables required by ibu-prepare-spoke-sno.yml for OCP >= 4.20 seeds:
+#   disconnected_registry_url   # string: Internal registry hostname (from bastion inventory)
+#   disconnected_registry_port  # string/int: Internal registry port (from bastion inventory)
+#   pull_secret_string          # string: Base64-encoded Docker config JSON (from inventory vault)
+#
+# Note: import_playbook cannot be placed inside a block/rescue. Any failure in
+#   ibu-prepare-spoke-sno.yml (missing hub kubeconfig, ACM secret not found, etc.)
+#   propagates as a plain Ansible error without writing a diagnostic artifact.
+#
+# Outputs:
+#   /tmp/<spoke_cluster>-kubeconfig     — kubeconfig left on the seed bastion by ibu-prepare-spoke-sno.yml
+#   ibi_seed_version_file               — validated OCP version string followed by a newline (mode 0600)
+#   ibi_seed_diagnostics_dir/ibi-seed-version-error.json — written on failure only; excludes raw API
+#                                         responses, kubeconfigs, and exception text (mode 0600)
+
+- name: Prepare IBI seed output paths
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Validate seed preparation inputs
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - hub_cluster | default('') | length > 0
+          - spoke_cluster | default('') | length > 0
+          - ibi_seed_version_file | default('') is match('^/.+')
+          - ibi_seed_diagnostics_dir | default('') is match('^/.+')
+          - ibi_seed_version_file != ibi_seed_diagnostics_dir ~ '/ibi-seed-version-error.json'
+        fail_msg: Provide one seed bastion, hub and spoke names, and absolute controller output paths.
+
+    - name: Initialize output files
+      delegate_to: localhost
+      become: false
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      block:
+        - name: Create controller output directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0700'
+          loop: "{{ [ibi_seed_version_file | dirname, ibi_seed_diagnostics_dir] | unique }}"
+          when: not (item is directory)
+
+        - name: Require file destinations before removing stale outputs
+          ansible.builtin.assert:
+            that:
+              - not (ibi_seed_version_file is directory)
+              - not ((ibi_seed_diagnostics_dir ~ '/ibi-seed-version-error.json') is directory)
+            fail_msg: Seed version and diagnostic destinations must be files, not directories.
+
+        - name: Remove stale version and diagnostic files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ ibi_seed_version_file }}"
+            - "{{ ibi_seed_diagnostics_dir }}/ibi-seed-version-error.json"
+
+- name: Prepare the seed kubeconfig and CoreOS extensions image
+  ansible.builtin.import_playbook: ibu-prepare-spoke-sno.yml
+
+- name: Record the completed IBI seed version
+  hosts: bastion
+  gather_facts: false
+  vars:
+    seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+    _ibi_seed_version_pattern: '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?\Z'
+  tasks:
+    - name: Validate and publish seed metadata
+      block:
+        - name: Read the prepared seed ClusterVersion
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ seed_kubeconfig }}"
+            api_version: config.openshift.io/v1
+            kind: ClusterVersion
+            name: version
+          register: _ibi_seed_query
+          no_log: true
+          ignore_unreachable: true
+
+        - name: Require exactly one reachable seed ClusterVersion
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_seed_query.unreachable | default(false) | bool)
+              - not (_ibi_seed_query.failed | default(false) | bool)
+              - _ibi_seed_query.resources | default(none) is sequence
+              - _ibi_seed_query.resources is not string
+              - _ibi_seed_query.resources is not mapping
+              - _ibi_seed_query.resources | length == 1
+            fail_msg: Expected one ClusterVersion from the prepared seed.
+
+        - name: Extract seed version and history from ClusterVersion
+          ansible.builtin.set_fact:
+            _ibi_seed_version: "{{ _ibi_seed_query.resources[0].status.desired.version | default('') }}"
+            _ibi_seed_history: "{{ _ibi_seed_query.resources[0].status.history | default([], true) }}"
+          no_log: true
+
+        - name: Require a completed full OpenShift version
+          ansible.builtin.assert:
+            that:
+              - _ibi_seed_version is string
+              - _ibi_seed_version is match(_ibi_seed_version_pattern)
+              - _ibi_seed_history is sequence
+              - _ibi_seed_history is not string
+              - _ibi_seed_history is not mapping
+              - _ibi_seed_history | length > 0
+              - _ibi_seed_history[0].state | default('') == 'Completed'
+              - _ibi_seed_history[0].version | default('') == _ibi_seed_version
+            fail_msg: The seed must have a completed release matching its desired version.
+
+        - name: Write the validated version on the controller
+          ansible.builtin.copy:
+            content: "{{ _ibi_seed_version }}\n"
+            dest: "{{ ibi_seed_version_file }}"
+            mode: '0600'
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+      rescue:
+        - name: Save seed version failure diagnostics
+          ansible.builtin.copy:
+            content: "{{ _ibi_seed_diagnostic | to_nice_json }}\n"
+            dest: "{{ ibi_seed_diagnostics_dir }}/ibi-seed-version-error.json"
+            mode: '0600'
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+            _ibi_seed_diagnostic:
+              failed_task: "{{ ansible_failed_task.name }}"
+              query_failed: "{{ _ibi_seed_query.failed | default(false) | bool }}"
+              unreachable: "{{ _ibi_seed_query.unreachable | default(false) | bool }}"
+              api_found: "{{ _ibi_seed_query.api_found | default(false) | bool }}"
+              message: >-
+                Seed version was not published. Check the failed task and seed API
+                availability. Raw API responses and exception text are withheld.
+
+        - name: Fail seed preparation after saving diagnostics
+          ansible.builtin.fail:
+            msg: >-
+              Could not record a completed seed version.
+              See ibi-seed-version-error.json in the controller diagnostics directory.

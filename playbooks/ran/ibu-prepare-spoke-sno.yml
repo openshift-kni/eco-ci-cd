@@ -66,6 +66,14 @@
         name: "{{ spoke_cluster }}-admin-kubeconfig"
       register: spoke_kubeconfig_secret
 
+    - name: Require the spoke admin kubeconfig secret to exist
+      ansible.builtin.assert:
+        that:
+          - spoke_kubeconfig_secret.resources | length == 1
+        fail_msg: >-
+          ACM admin-kubeconfig secret not found for spoke {{ spoke_cluster }}.
+          Ensure the spoke is deployed and managed by ACM on the hub.
+
     - name: Extract spoke kubeconfig to specified path
       ansible.builtin.copy:
         content: "{{ spoke_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
@@ -89,6 +97,14 @@
         name: version
       register: _cv
 
+    - name: Require exactly one ClusterVersion from the spoke
+      ansible.builtin.assert:
+        that:
+          - _cv.resources | length == 1
+        fail_msg: >-
+          ClusterVersion not found for spoke {{ spoke_cluster }}.
+          Ensure the spoke kubeconfig is valid and the cluster API is reachable.
+
     - name: Set release image facts
       ansible.builtin.set_fact:
         _release_version: "{{ _cv.resources[0].status.desired.version }}"
@@ -99,7 +115,7 @@
           ocp{{ _cv.resources[0].status.desired.version.split('.')[0] }}/openshift
 
     - name: Fix extensions image in disconnected registry
-      when: _release_version.split('.')[1] | int >= 20
+      when: _release_version.split('.')[1] | default('0') | int >= 20
       block:
         - name: Write pull secret to temp file
           ansible.builtin.copy:
@@ -118,21 +134,26 @@
             }}/release-images@{{ _release_digest }}
           register: _ext_sha_result
           changed_when: false
-          failed_when: false
+
+        - name: Set validated extensions image digest fact
+          ansible.builtin.set_fact:
+            _ext_sha: "{{ _ext_sha_result.stdout | regex_search('sha256:[a-f0-9]{64}') | default('', true) }}"
+
+        - name: Require a valid extensions image sha256 from release info
+          ansible.builtin.assert:
+            that:
+              - _ext_sha is match('sha256:[a-f0-9]{64}')
+            fail_msg: "oc adm release info did not return a valid sha256 digest for rhel-coreos-extensions"
 
         - name: Copy extensions to first IDMS mirror path
-          when: _ext_sha_result.rc == 0
           vars:
             _digest: >-
               {{ _release_digest | regex_replace('^sha256:', '') }}
-            _sha: >-
-              {{ _ext_sha_result.stdout
-              | regex_search('sha256:[a-f0-9]{64}') }}
             _src: >-
               docker://{{ _registry
               }}/{{ _registry_path
               }}/release:{{ _digest }}-rhel-coreos-extensions
-            _dest: "docker://{{ _registry }}/{{ _registry_path }}@{{ _sha }}"
+            _dest: "docker://{{ _registry }}/{{ _registry_path }}@{{ _ext_sha }}"
           ansible.builtin.command: >-
             skopeo copy
             --authfile={{ _pull_secret_path }}
@@ -143,7 +164,6 @@
             {{ _dest }}
           register: _ext_copy
           changed_when: "'Copying' in _ext_copy.stdout"
-          failed_when: false
 
       always:
         - name: Remove pull secret temp file

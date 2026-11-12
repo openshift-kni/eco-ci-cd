@@ -76,6 +76,7 @@
       - pip
       - skopeo
       - zip
+      - java-21-openjdk
     state: present
 
 - name: Download GO archive
@@ -146,9 +147,8 @@
 - name: Download oc-mirror archive
   vars:
     _oc_mirror_url: >-
-      https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/{{
-      ('latest-' ~ oc_mirror_version_minor) if oc_mirror_version_minor is defined else 'latest'
-      }}/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz
+      https://mirror.openshift.com/pub/cgw/oc-mirror/latest/oc-mirror-rhel{{
+      ansible_distribution_major_version }}-linux-amd64.tar.gz
   ansible.builtin.get_url:
     url: "{{ _oc_mirror_url }}"
     dest: "/tmp/oc-mirror.rhel{{ ansible_distribution_major_version }}.tar.gz"

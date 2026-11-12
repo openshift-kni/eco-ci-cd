@@ -1,0 +1,316 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Prepare or run an IBI preinstall stage
+# Description  : One entrypoint for preparing the IBI launcher or executing it
+#                and collecting reports. ibi_preinstall_phase defaults to prepare.
+#                Preparation never starts the test. Explicitly select run only
+#                after the host is ready for provisioning. Replacement validation
+#                and hardware cleanup must finish between prepare and run.
+#                Existing ibi-preinstall.yml remains a setup-only playbook.
+#
+# Prerequisites:
+#   - Correct bastion selected through inventory
+#   - Seed image mirrored and available at ibi_seed_image in the registry
+#   - Matching openshift-install, hub kubeconfig and SSH key on the bastion
+#   - HTTP store serving ibi_http_dir and BMC credentials provided in inventory
+#   - For run: prepared launcher and writable controller ibi_report_dir
+#
+# Key Tasks:
+#   - Prepare: validate inputs and installer version, resolve paths, create an
+#     optional isolated HTTP directory and import the existing launcher setup
+#   - Run: execute once, retain the actual status and always collect reports
+#   - Preserve existing controller output-directory permissions and remote reports
+#
+# Usage:
+#   ansible-playbook ./playbooks/ran/ibi-preinstall-stage.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     -e @preinstall-vars.json -e ibi_preinstall_phase=prepare
+#
+#   # Complete replacement validation and cleanup before selecting run.
+#   ansible-playbook ./playbooks/ran/ibi-preinstall-stage.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     -e ibi_preinstall_phase=run \
+#     -e ibi_work_dir=/tmp/eco_gotests_ibi_preinstall/ibi-preinstall.example \
+#     -e ibi_report_dir=/tmp/ibi-preinstall-reports
+#
+# Required prepare variables:
+#   ibi_seed_version        # string: Full OCP version matching the seed image
+#   ibi_seed_image          # string: Pinned seed image reference with digest
+#   ibi_site_config_url     # string: Git-revision-pinned ClusterInstance directory URL
+#   ibi_preinstall_registry # string: Disconnected registry for preinstall images
+#   ibi_hub_kubeconfig      # string: Absolute hub kubeconfig path on the bastion
+#   ibi_work_dir            # string: Absolute launcher working directory on the bastion
+#
+# Optional prepare variables:
+#   ibi_http_subdir            # string: Isolated ISO subdirectory (default: "")
+#   ibi_openshift_install_path # string: Default /opt/cache/<ibi_seed_version>/openshift-install
+#   ibi_ssh_private_key_path   # string: Spoke SSH key (default: /home/telcov10n/.ssh/id_rsa)
+#   ibi_cluster_instance_url   # string: Default <ibi_site_config_url>/clusterinstance.yaml
+#   ibi_config_template_url    # string: Default <ibi_site_config_url>/preinstall-test/image-based-installation-config.yaml
+#   ibi_http_dir               # string: Default <http_store_path>/<ibi_http_subdir>
+#   ibi_http_base_url          # string: Default URL uses ansible_host and share_http_iso_port
+#   Existing ibi-preinstall.yml options apply, including pull_container_image and
+#   ibi_test_timeout (default: 3h). --tags setup never executes the launcher.
+#
+# Required run variables:
+#   ibi_work_dir   # string: Absolute path to the prepared launcher on the bastion
+#   ibi_report_dir # string: Absolute directory for reports on the controller
+#
+# Optional run variables:
+#   ibi_preinstall_async_timeout # int: Execution allowance in seconds (default: 11700 = 3h15m)
+#   ibi_preinstall_poll_interval # int: Ansible poll interval in seconds (default: 30)
+#
+# Run outputs in ibi_report_dir:
+#   runner.log                  # Full launcher stdout/stderr
+#   report/**                   # Retained JUnit XML and console logs
+#   execution-exit-code         # Original launcher code; 125 if no execution code returned
+#   report-collection-exit-code # 0 on successful collection, 1 otherwise
+
+- name: Validate and resolve IBI preinstall inputs
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Require a valid preinstall phase
+      ansible.builtin.assert:
+        that:
+          - ibi_preinstall_phase | default('prepare') in ['prepare', 'run']
+        fail_msg: ibi_preinstall_phase must be prepare or run.
+      tags: always
+
+    - name: Prepare the preinstall inputs
+      when: ibi_preinstall_phase | default('prepare') == 'prepare'
+      tags: setup
+      block:
+        - name: Resolve HTTP subdirectory default
+          ansible.builtin.set_fact:
+            ibi_http_subdir: "{{ ibi_http_subdir | default('') }}"
+
+        - name: Validate shared preinstall inputs
+          ansible.builtin.assert:
+            that:
+              - ibi_seed_version | default('') is match('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
+              - ibi_seed_image | default('') | length > 0
+              - ibi_site_config_url | default('') is match('^https?://')
+              - ibi_preinstall_registry | default('') | length > 0
+              - ibi_hub_kubeconfig | default('') is match('^/.+')
+              - ibi_work_dir | default('') is match('^/.+')
+              - ibi_http_subdir == '' or ibi_http_subdir is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+              - ibi_http_base_url is defined or share_http_iso_port | default('') | string | length > 0
+            fail_msg: Required IBI preinstall inputs are missing or invalid.
+
+        - name: Validate BMC credentials are provided
+          ansible.builtin.assert:
+            that:
+              - bmc_user | default('') | length > 0
+              - bmc_password | default('') | length > 0
+            fail_msg: BMC credentials (bmc_user, bmc_password) must be provided via inventory.
+          no_log: true
+
+        - name: Resolve installer and launcher paths
+          ansible.builtin.set_fact:
+            # Preserve inventory values across the imported playbook's defaults.
+            ibi_seed_version: "{{ ibi_seed_version }}"
+            ibi_work_dir: "{{ ibi_work_dir }}"
+            ibi_preinstall_registry: "{{ ibi_preinstall_registry }}"
+            ibi_openshift_install_path: "{{ ibi_openshift_install_path | default('/opt/cache/' ~ ibi_seed_version ~ '/openshift-install') }}"
+            ibi_ssh_private_key_path: "{{ ibi_ssh_private_key_path | default('/home/telcov10n/.ssh/id_rsa') }}"
+            ibi_cluster_instance_url: "{{ ibi_cluster_instance_url | default(ibi_site_config_url ~ '/clusterinstance.yaml') }}"
+            ibi_config_template_url: "{{ ibi_config_template_url | default(ibi_site_config_url ~ '/preinstall-test/image-based-installation-config.yaml') }}"
+            ibi_http_dir: >-
+              {{ ibi_http_dir | default((http_store_path | default('/opt/http_store/data')) ~
+                 ('/' ~ ibi_http_subdir if ibi_http_subdir else '')) }}
+            ibi_http_base_url: >-
+              {{ ibi_http_base_url if ibi_http_base_url is defined else 'http://' ~
+                 ('[' ~ (ansible_host | regex_replace('^\[|\]$', '')) ~ ']'
+                  if ':' in ansible_host else ansible_host) ~ ':' ~
+                 (share_http_iso_port | string) ~
+                 ('/' ~ ibi_http_subdir if ibi_http_subdir else '') }}
+
+        - name: Read cached installer version
+          ansible.builtin.command:
+            argv:
+              - "{{ ibi_openshift_install_path }}"
+              - version
+          register: ibi_installer_version
+          changed_when: false
+          failed_when: false
+
+        - name: Require installer binary to be executable
+          ansible.builtin.assert:
+            that:
+              - ibi_installer_version.rc | default(1) == 0
+            fail_msg: >-
+              openshift-install binary not found or not executable at {{ ibi_openshift_install_path }}.
+
+        - name: Require installer version to match the seed
+          ansible.builtin.assert:
+            that:
+              - >-
+                ibi_installer_version.stdout | default('') |
+                regex_findall('(?m)^(?:\S*/)?openshift-install[ \t]+(\S+)[ \t]*$') == [ibi_seed_version]
+            fail_msg: >-
+              Cached openshift-install version does not match ibi_seed_version {{ ibi_seed_version }}.
+              Recache the correct binary or update ibi_openshift_install_path.
+
+        - name: Create isolated HTTP directory for replacement preinstall
+          ansible.builtin.file:
+            path: "{{ ibi_http_dir }}"
+            state: directory
+            mode: '0755'
+          when: ibi_http_subdir | length > 0
+
+- name: Prepare the existing setup-only IBI launcher
+  ansible.builtin.import_playbook: ibi-preinstall.yml
+  when: ibi_preinstall_phase | default('prepare') == 'prepare'
+  tags: setup
+
+- name: Execute IBI preinstall and collect reports
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Run preinstall and collect its reports
+      when: ibi_preinstall_phase | default('prepare') == 'run'
+      tags: run
+      block:
+        - name: Resolve execution timeout defaults
+          ansible.builtin.set_fact:
+            ibi_preinstall_async_timeout: "{{ ibi_preinstall_async_timeout | default(11700) }}"
+            ibi_preinstall_poll_interval: "{{ ibi_preinstall_poll_interval | default(30) }}"
+
+        - name: Validate preinstall execution inputs
+          ansible.builtin.assert:
+            that:
+              - ibi_work_dir | default('') is match('^/.+')
+              - ibi_report_dir | default('') is match('^/.+')
+              - ibi_preinstall_async_timeout | int > 0
+              - ibi_preinstall_poll_interval | int > 0
+            fail_msg: Preinstall requires absolute working and report paths and positive timeouts.
+
+        - name: Inspect controller report directory
+          ansible.builtin.stat:
+            path: "{{ ibi_report_dir }}"
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          register: ibi_controller_report_dir
+
+        - name: Require a directory for controller reports
+          ansible.builtin.assert:
+            that:
+              - not ibi_controller_report_dir.stat.exists or ibi_controller_report_dir.stat.isdir
+
+        - name: Create controller report directory without changing existing permissions
+          ansible.builtin.file:
+            path: "{{ ibi_report_dir }}"
+            state: directory
+            mode: '0700'
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          when: not ibi_controller_report_dir.stat.exists
+
+        - name: Initialize failure status before execution
+          ansible.builtin.copy:
+            dest: "{{ ibi_report_dir }}/{{ item.name }}"
+            content: "{{ item.code }}\n"
+            mode: '0600'
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          loop:
+            - {name: execution-exit-code, code: 125}
+            - {name: report-collection-exit-code, code: 1}
+
+        - name: Run the prepared launcher once
+          block:
+            - name: Execute preinstall with its output retained on the bastion
+              ansible.builtin.shell:
+                cmd: exec ./eco-gotests-ibi-preinstall-run.sh > runner.log 2>&1
+                chdir: "{{ ibi_work_dir }}"
+              async: "{{ ibi_preinstall_async_timeout | int }}"
+              poll: "{{ ibi_preinstall_poll_interval | int }}"
+              register: ibi_preinstall_run
+              changed_when: true
+              failed_when: false
+              ignore_unreachable: true
+          always:
+            - name: Save the original launcher exit status
+              ansible.builtin.copy:
+                dest: "{{ ibi_report_dir }}/execution-exit-code"
+                content: "{{ ibi_preinstall_run.rc | default(125) }}\n"
+                mode: '0600'
+              delegate_to: localhost
+              become: false
+              vars:
+                ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+            - name: Discover retained preinstall reports recursively
+              ansible.builtin.find:
+                paths: "{{ ibi_work_dir }}/report"
+                recurse: true
+                hidden: true
+                file_type: file
+              register: ibi_preinstall_reports
+              failed_when: false
+              ignore_unreachable: true
+
+            - name: Fetch preinstall reports preserving relative paths
+              ansible.builtin.fetch:
+                src: "{{ item.path }}"
+                dest: "{{ ibi_report_dir }}/report/{{ item.path | relpath(ibi_work_dir ~ '/report') }}"
+                flat: true
+              loop: "{{ ibi_preinstall_reports.files | default([]) }}"
+              loop_control:
+                label: "{{ item.path | basename }}"
+              register: ibi_preinstall_fetch
+              ignore_errors: true
+              ignore_unreachable: true
+
+            - name: Fetch launcher output including failures before report creation
+              ansible.builtin.fetch:
+                src: "{{ ibi_work_dir }}/runner.log"
+                dest: "{{ ibi_report_dir }}/runner.log"
+                flat: true
+              register: ibi_preinstall_runner_log
+              ignore_errors: true
+              ignore_unreachable: true
+
+            - name: Record report collection outcome
+              ansible.builtin.set_fact:
+                ibi_preinstall_collection_rc: >-
+                  {{ 0 if (ibi_preinstall_reports.matched | default(0) | int > 0 and
+                           ibi_preinstall_reports.skipped_paths | default({}) | length == 0 and
+                           not (ibi_preinstall_reports.unreachable | default(false)) and
+                           not (ibi_preinstall_fetch.failed | default(false)) and
+                           (ibi_preinstall_fetch.results | default([]) |
+                            selectattr('unreachable', 'defined') | selectattr('unreachable') | list | length == 0) and
+                           not (ibi_preinstall_runner_log.failed | default(false)) and
+                           not (ibi_preinstall_runner_log.unreachable | default(false))) else 1 }}
+
+            - name: Save report collection status
+              ansible.builtin.copy:
+                dest: "{{ ibi_report_dir }}/report-collection-exit-code"
+                content: "{{ ibi_preinstall_collection_rc }}\n"
+                mode: '0600'
+              delegate_to: localhost
+              become: false
+              vars:
+                ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+        - name: Require successful preinstall execution and report collection
+          ansible.builtin.assert:
+            that:
+              - ibi_preinstall_run.rc | default(125) | int == 0
+              - ibi_preinstall_collection_rc | int == 0
+            fail_msg: >-
+              Preinstall exit code {{ ibi_preinstall_run.rc | default(125) }};
+              report collection exit code {{ ibi_preinstall_collection_rc }}.
+              Inspect runner.log and report/console.log in the controller report directory.

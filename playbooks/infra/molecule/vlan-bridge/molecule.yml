@@ -1,0 +1,24 @@
+---
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: default
+platforms:
+  - name: hypervisor
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_HOST_KEY_CHECKING: 'False'
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy
+verifier:
+  name: ansible

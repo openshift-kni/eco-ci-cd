@@ -1,0 +1,782 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Capture and mirror IBI seed images
+# Description  : Runs one explicitly selected phase of the IBI seed image
+#                workflow. Invoke the capture phase while the seed cluster API
+#                is available and before running ibu-run-seedgeneration.yml.
+#                After seed generation completes, invoke the mirror phase to copy
+#                the seed image using the unchanged IBU playbook, transfer its
+#                dependencies, and verify their manifests and linux/amd64 blobs
+#                on the target. This playbook does not generate a seed or
+#                provision hardware.
+#
+# Prerequisites:
+#   - Exactly one seed bastion in inventory; include localhost and bastion (do not --limit)
+#   - oc, skopeo and Python 3 installed on the relevant bastions
+#   - Registry credentials available in the hub pull-secret
+#   - Mirror phase: Git and SSH credentials on the controller for the nested IBU invocation
+#   - Mirror phase: For Prow controllers without a writable home, set ANSIBLE_REMOTE_TEMP=/tmp
+#
+# Key Tasks:
+#   Capture phase:
+#   - Validate all required inputs and prepare the output handoff path
+#   - Run the catalog capture helper on the seed bastion
+#   - Publish the catalog snapshot to ibi_catalogs_output only on confirmed cleanup
+#
+#   Mirror phase:
+#   - Validate all mirror inputs and compute the execution deadline
+#   - Load and merge target inventory files; register the target bastion as a dynamic host
+#   - Resolve and pin the ZTP Git branch revision
+#   - Prepare registry credentials and mirror mappings on seed and target bastions
+#   - Lock seed metadata and dependency inventory (plan phase)
+#   - Copy the seed image using the existing ibu-mirror-seed-image.yml playbook
+#   - Transfer pinned dependencies and verify manifests and blobs on the target
+#   - Collect diagnostics from both bastions and clean up all private files
+#   - Publish ibi-seed-digest and ibi-seed-git-revision only after full verification and cleanup
+#
+# Usage:
+#   Capture (before seed generation):
+#     ansible-playbook ./playbooks/ran/ibi-seed-images.yml \
+#       -i ./inventories/ocp-deployment/build-inventory.py \
+#       -e @ibi-capture-vars.json -e ibi_seed_phase=capture
+#
+#   Mirror (after seed generation):
+#     ansible-playbook ./playbooks/ran/ibi-seed-images.yml \
+#       -i ./inventories/ocp-deployment/build-inventory.py \
+#       -e @ibi-mirror-vars.json -e ibi_seed_phase=mirror
+#
+# Required variables (both phases):
+#   ibi_seed_phase        # string: "capture" or "mirror" — no default
+#   ibi_seed_version      # string: Full prepared seed OCP version (e.g. "4.17.9")
+#   ibi_mirror_registry   # string: Logical registry hostname:port for image references
+#
+# Required variables (capture phase):
+#   ibi_seed_kubeconfig   # string: Absolute path to seed cluster kubeconfig on the bastion
+#   ibi_hub_kubeconfig    # string: Absolute path to hub kubeconfig on the bastion
+#   ibi_catalogs_output   # string: Absolute controller file path for the catalog snapshot; parent must exist
+#
+# Required variables (mirror phase):
+#   version                      # string: OCP major.minor (e.g. "4.17") — also consumed by ibu-mirror-seed-image.yml
+#   target_registry_host         # string: Target registry IP/hostname — also consumed by ibu-mirror-seed-image.yml
+#   ibi_seed_hub_kubeconfig      # string: Absolute path to seed hub kubeconfig on the seed bastion
+#   ibi_target_hub_kubeconfig    # string: Absolute path to target hub kubeconfig on the target bastion
+#   ibi_ztp_git_repo             # string: HTTPS URL of a GitLab ZTP repository (must support /-/raw/ raw-file paths)
+#   ibi_ztp_git_branch           # string: ZTP branch name to resolve and pin
+#   ibi_target_spoke             # string: Target spoke cluster name (Kubernetes DNS-label format)
+#   ibi_shared_dir               # string: Absolute controller directory containing ibi-seed-catalogs.json from capture
+#   ibi_report_dir               # string: Absolute controller directory for mirror diagnostics
+#   ibi_target_inventory_files   # list: Absolute controller paths to target YAML inventory files, least to most specific
+#   ibi_seed_inventory           # string: Inventory path for the ibu-mirror-seed-image.yml invocation
+#
+# Optional variables (mirror phase):
+#   ibi_mirror_budget        # int: Total mirror phase budget in seconds (default: 3300); five minutes reserved for collection/cleanup
+#   ibi_git_validate_certs   # bool: Validate TLS certificates for GitLab requests (default: false)
+#
+# Outputs:
+#   capture: ibi_catalogs_output — catalog snapshot published only after confirmed cleanup
+#   mirror:  ibi_shared_dir/ibi-seed-digest       — sha256 digest of the verified seed image
+#            ibi_shared_dir/ibi-seed-git-revision  — pinned ZTP Git commit hash
+#            ibi_report_dir/{seed,target}/         — remote diagnostic logs from each bastion
+#            ibi_report_dir/seed-copy.log          — IBU seed copy output with bastion IPs redacted
+
+- name: Prepare the selected IBI seed image phase
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require an explicit seed image phase
+      ansible.builtin.assert:
+        that:
+          - ibi_seed_phase is defined
+          - ibi_seed_phase is string
+          - ibi_seed_phase in ['capture', 'mirror']
+        fail_msg: Set ibi_seed_phase to capture before seed generation or mirror afterward.
+
+    - name: Prepare catalog capture outputs and inputs
+      when: ibi_seed_phase == 'capture'
+      block:
+        - name: Require an absolute controller output file
+          ansible.builtin.assert:
+            that:
+              - ibi_catalogs_output is defined
+              - ibi_catalogs_output is string
+              - ibi_catalogs_output is match('^/.*[^/]$')
+            fail_msg: ibi_catalogs_output must be an absolute file path
+
+        - name: Inspect the previous catalog handoff without following symlinks
+          ansible.builtin.stat:
+            path: "{{ ibi_catalogs_output }}"
+            follow: false
+          register: _ibi_catalogs_previous
+
+        - name: Refuse to remove a directory as a catalog handoff
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_catalogs_previous.stat.isdir | default(false))
+            fail_msg: ibi_catalogs_output must name a file, not a directory
+
+        - name: Remove any stale catalog handoff before validating capture inputs
+          ansible.builtin.file:
+            path: "{{ ibi_catalogs_output }}"
+            state: absent
+
+        - name: Require exactly one seed bastion and complete capture inputs
+          ansible.builtin.assert:
+            that:
+              - query('ansible.builtin.inventory_hostnames', 'bastion') | length == 1
+              - ibi_seed_kubeconfig is defined
+              - ibi_seed_kubeconfig | length > 0
+              - ibi_hub_kubeconfig is defined
+              - ibi_hub_kubeconfig | length > 0
+              - ibi_mirror_registry is defined
+              - ibi_mirror_registry is match('^[a-zA-Z0-9.-]+:[0-9]+$')
+              - ibi_seed_version is defined
+              - ibi_seed_version is match('^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$')
+            fail_msg: Provide exactly one bastion, both kubeconfigs, a registry host:port, and a full seed version
+
+        - name: Inspect the existing handoff parent directory
+          ansible.builtin.stat:
+            path: "{{ ibi_catalogs_output | dirname }}"
+          register: _ibi_catalogs_parent
+
+        - name: Require an existing handoff parent directory
+          ansible.builtin.assert:
+            that:
+              - _ibi_catalogs_parent.stat.isdir | default(false)
+            fail_msg: The parent of ibi_catalogs_output must already exist
+
+    - name: Prepare mirror outputs and inputs
+      when: ibi_seed_phase == 'mirror'
+      block:
+        - name: Validate controller output paths
+          ansible.builtin.assert:
+            that:
+              - ibi_shared_dir | default('') is match('^/.+')
+              - ibi_report_dir | default('') is match('^/.+')
+            fail_msg: ibi_shared_dir and ibi_report_dir must be absolute paths.
+
+        - name: Remove stale verified handoffs before validating mirror inputs
+          ansible.builtin.file:
+            path: "{{ ibi_shared_dir }}/{{ item }}"
+            state: absent
+          loop:
+            - ibi-seed-digest
+            - ibi-seed-git-revision
+
+        - name: Require one seed bastion and valid mirror inputs
+          ansible.builtin.assert:
+            that:
+              - query('ansible.builtin.inventory_hostnames', 'bastion') | length == 1
+              - version | default('') is match('^[0-9]+\.[0-9]+$')
+              - ibi_seed_version | default('') is match('^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$')
+              - ibi_seed_version | default('') is match('^' ~ version ~ '\\.')
+              - ibi_mirror_registry | default('') is match('^[a-zA-Z0-9.-]+:[0-9]+$')
+              - target_registry_host | default('') is match('^[a-zA-Z0-9.-]+$')
+              - ibi_seed_hub_kubeconfig | default('') is match('^/.+')
+              - ibi_target_hub_kubeconfig | default('') is match('^/.+')
+              - ibi_ztp_git_repo | default('') is match('^https://.+/.+/.+')
+              - ibi_ztp_git_branch | default('') | length > 0
+              - ibi_target_spoke | default('') is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+              - ibi_target_inventory_files | default([]) | length > 0
+              - ibi_seed_inventory | default('') | length > 0
+              - ibi_mirror_budget | default(3300) | int > 0
+            fail_msg: IBI mirror inputs are missing or invalid.
+
+        - name: Inspect controller directories
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ ibi_shared_dir }}"
+            - "{{ ibi_report_dir }}"
+          register: ibi_controller_dirs
+
+        - name: Require a shared directory and a valid report destination
+          ansible.builtin.assert:
+            that:
+              - ibi_controller_dirs.results[0].stat.isdir | default(false)
+              - not ibi_controller_dirs.results[1].stat.exists or ibi_controller_dirs.results[1].stat.isdir
+            fail_msg: ibi_shared_dir must exist as a directory; ibi_report_dir must not be a file.
+
+        - name: Create report directory without changing existing permissions
+          ansible.builtin.file:
+            path: "{{ ibi_report_dir }}"
+            state: directory
+            mode: '0700'
+          when: not ibi_controller_dirs.results[1].stat.exists
+
+        - name: Set the shared execution deadline
+          ansible.builtin.set_fact:
+            ibi_mirror_deadline: "{{ lookup('pipe', 'date +%s') | int + (ibi_mirror_budget | default(3300) | int) }}"
+
+    - name: Record successful controller preparation
+      ansible.builtin.set_fact:
+        ibi_seed_images_prepared_phase: "{{ ibi_seed_phase }}"
+
+- name: Execute the selected IBI seed image phase
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Require controller preparation for the selected phase
+      ansible.builtin.assert:
+        that:
+          - ibi_seed_phase | default('') in ['capture', 'mirror']
+          - hostvars['localhost'].ibi_seed_images_prepared_phase | default('') == ibi_seed_phase
+        fail_msg: Run this playbook with both localhost and bastion included.
+
+    - name: Capture catalogs and publish only the successful snapshot
+      when: ibi_seed_phase == 'capture'
+      ignore_unreachable: true
+      block:
+        - name: Create a private capture directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: ibi-seed-catalogs.
+          register: _ibi_catalogs_work
+
+        - name: Require a reachable bastion and a private capture path
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_catalogs_work.unreachable | default(false))
+              - _ibi_catalogs_work.path is defined
+              - _ibi_catalogs_work.path is match('^/.*/ibi-seed-catalogs\.[a-zA-Z0-9_]+$')
+            fail_msg: Could not create a private capture directory on the seed bastion
+          delegate_to: localhost
+          become: false
+
+        - name: Stage the focused catalog capture helper
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../scripts/ran/ibi-capture-seed-catalogs.py"
+            dest: "{{ _ibi_catalogs_work.path }}/capture.py"
+            mode: "0600"
+          register: _ibi_catalogs_stage
+
+        - name: Require successful capture helper transfer
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_catalogs_stage.unreachable | default(false))
+            fail_msg: The seed bastion became unreachable while staging catalog capture
+          delegate_to: localhost
+          become: false
+
+        - name: Validate and retain the running catalog manifests
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ _ibi_catalogs_work.path }}/capture.py"
+              - "{{ ibi_seed_kubeconfig }}"
+              - "{{ ibi_hub_kubeconfig }}"
+              - "{{ ibi_mirror_registry }}"
+              - "{{ ibi_seed_version }}"
+              - "{{ _ibi_catalogs_work.path }}/catalogs.json"
+          changed_when: true
+          register: _ibi_catalogs_capture
+          no_log: true
+
+        - name: Require a completed capture operation
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_catalogs_capture.unreachable | default(false))
+            fail_msg: The seed bastion became unreachable during catalog capture
+          delegate_to: localhost
+          become: false
+
+        - name: Fetch the completed catalog handoff
+          ansible.builtin.fetch:
+            src: "{{ _ibi_catalogs_work.path }}/catalogs.json"
+            dest: "{{ ibi_catalogs_output }}"
+            flat: true
+          register: _ibi_catalogs_fetch
+
+        - name: Require successful catalog handoff transfer
+          ansible.builtin.assert:
+            that:
+              - not (_ibi_catalogs_fetch.unreachable | default(false))
+            fail_msg: The seed bastion became unreachable while fetching the catalog handoff
+          delegate_to: localhost
+          become: false
+
+      rescue:
+        - name: Remove any incomplete controller handoff
+          ansible.builtin.file:
+            path: "{{ ibi_catalogs_output }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+
+        - name: Stop before seed generation on catalog capture failure
+          ansible.builtin.fail:
+            msg: Seed catalog capture failed; no catalog handoff was published
+
+      always:
+        - name: Remove the private capture directory
+          ansible.builtin.file:
+            path: "{{ _ibi_catalogs_work.path }}"
+            state: absent
+          when:
+            - _ibi_catalogs_work.path is defined
+            - _ibi_catalogs_work.path is match('^/.*/ibi-seed-catalogs\.[a-zA-Z0-9_]+$')
+          register: _ibi_catalogs_cleanup
+          ignore_errors: true
+
+        - name: Remove the handoff if private directory cleanup was not confirmed
+          ansible.builtin.file:
+            path: "{{ ibi_catalogs_output }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: _ibi_catalogs_cleanup is failed or _ibi_catalogs_cleanup is unreachable
+
+        - name: Require confirmed private directory cleanup
+          ansible.builtin.assert:
+            that:
+              - _ibi_catalogs_cleanup is not failed
+              - _ibi_catalogs_cleanup is not unreachable
+            fail_msg: Could not confirm seed catalog credential cleanup; the handoff was removed
+          delegate_to: localhost
+          become: false
+
+    - name: Mirror and verify the seed dependencies
+      when: ibi_seed_phase == 'mirror'
+      block:
+        - name: Mirror with diagnostics and private-file cleanup
+          # Keep the host active on SSH failures so the always section still runs.
+          ignore_unreachable: true
+          block:
+            - name: Load target inventory without exposing credentials
+              ansible.builtin.include_vars:
+                file: "{{ item }}"
+                name: ibi_target_file_vars
+              loop: "{{ ibi_target_inventory_files }}"
+              register: ibi_target_loaded
+              no_log: true
+
+            - name: Combine target inventory in precedence order
+              ansible.builtin.set_fact:
+                ibi_target_inventory: "{{ ibi_target_loaded.results | map(attribute='ansible_facts.ibi_target_file_vars') | list | combine }}"
+              no_log: true
+
+            - name: Require target connection identity
+              ansible.builtin.assert:
+                that:
+                  - ibi_target_inventory.ansible_host | default('') | length > 0
+                  - ibi_target_inventory.ansible_user | default('') | length > 0
+                fail_msg: Target bastion connection details (ansible_host, ansible_user) are missing from the target inventory files.
+
+            - name: Register the target bastion for delegated operations
+              ansible.builtin.add_host:
+              args: "{{ ibi_target_inventory | combine({'name': 'ibi_mirror_target', 'groups': 'ibi_mirror_targets'}) }}"
+              no_log: true
+
+            - name: Create private controller working directory
+              ansible.builtin.tempfile:
+                state: directory
+                path: /tmp
+                prefix: ibi-seed-mirror.
+              delegate_to: localhost
+              become: false
+              register: ibi_controller_work
+
+            - name: Resolve the ZTP branch once
+              ansible.builtin.command:
+                argv:
+                  - git
+                  - -c
+                  - "http.sslVerify={{ ibi_git_validate_certs | default(false) | bool | ternary('true', 'false') }}"
+                  - ls-remote
+                  - --exit-code
+                  - "{{ ibi_ztp_git_repo }}"
+                  - "refs/heads/{{ ibi_ztp_git_branch }}"
+              environment:
+                GIT_TERMINAL_PROMPT: '0'
+              delegate_to: localhost
+              become: false
+              register: ibi_git_remote
+              changed_when: false
+
+            - name: Require exactly one pinned Git revision
+              ansible.builtin.assert:
+                that:
+                  - ibi_git_remote.stdout_lines | length == 1
+                  - ibi_git_remote.stdout.split() | length == 2
+                  - ibi_git_remote.stdout.split()[0] is match('^[a-f0-9]{40}$')
+                  - ibi_git_remote.stdout.split()[1] == 'refs/heads/' ~ ibi_ztp_git_branch
+                fail_msg: Could not resolve one ZTP branch revision.
+
+            - name: Save pinned revision and registry endpoint
+              ansible.builtin.set_fact:
+                ibi_git_revision: "{{ ibi_git_remote.stdout.split()[0] }}"
+                ibi_target_endpoint: "{{ target_registry_host }}:{{ ibi_mirror_registry.rsplit(':', 1)[1] }}"
+
+            - name: Download the revision-pinned preinstall template
+              # Uses GitLab /-/raw/ path convention. ibi_ztp_git_repo must be a GitLab instance.
+              ansible.builtin.get_url:
+                url: >-
+                  {{ ibi_ztp_git_repo | regex_replace('\.git$', '') }}/-/raw/{{ ibi_git_revision }}/{{ version }}/{{
+                  ibi_target_spoke }}/clusterinstance/preinstall-test/image-based-installation-config.yaml
+                dest: "{{ ibi_controller_work.path }}/template.yaml"
+                validate_certs: "{{ ibi_git_validate_certs | default(false) | bool }}"
+                timeout: 120
+                mode: '0600'
+              delegate_to: localhost
+              become: false
+              register: ibi_template_download
+              until: ibi_template_download is succeeded
+              retries: 3
+              delay: 2
+
+            - name: Create private seed working directory
+              ansible.builtin.tempfile:
+                state: directory
+                path: /tmp
+                prefix: ibi-seed-mirror.
+              register: ibi_seed_work
+
+            - name: Require the private seed directory after connection setup
+              ansible.builtin.assert:
+                that:
+                  - not (ibi_seed_work.unreachable | default(false))
+                  - ibi_seed_work.path | default('') is match('^/tmp/ibi-seed-mirror\.[a-zA-Z0-9_]+$')
+                fail_msg: Could not create the private seed directory.
+
+            - name: Create private target working directory
+              ansible.builtin.tempfile:
+                state: directory
+                path: /tmp
+                prefix: ibi-seed-mirror.
+              delegate_to: ibi_mirror_target
+              register: ibi_target_work
+              no_log: true
+
+            - name: Require the private target directory after connection setup
+              ansible.builtin.assert:
+                that:
+                  - not (ibi_target_work.unreachable | default(false))
+                  - ibi_target_work.path | default('') is match('^/tmp/ibi-seed-mirror\.[a-zA-Z0-9_]+$')
+                fail_msg: Could not create the private target directory.
+
+            - name: Stage the image helper on both bastions
+              ansible.builtin.copy:
+                src: "{{ playbook_dir }}/../../scripts/ran/ibi-seed-images.py"
+                dest: "{{ item.path }}/images.py"
+                mode: '0700'
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path }}"}
+              register: ibi_helper_stage
+
+            - name: Stage configuration on both bastions
+              ansible.builtin.copy:
+                dest: "{{ item.path }}/config.json"
+                content: >-
+                  {{ {'registry': ibi_mirror_registry, 'endpoint': ibi_target_endpoint,
+                      'tag': version, 'version': ibi_seed_version, 'git_revision': ibi_git_revision} | to_nice_json }}
+                mode: '0600'
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path }}"}
+              register: ibi_config_stage
+
+            - name: Stage the pinned template on both bastions
+              ansible.builtin.copy:
+                src: "{{ ibi_controller_work.path }}/template.yaml"
+                dest: "{{ item.path }}/template.yaml"
+                mode: '0600'
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path }}"}
+              register: ibi_template_stage
+
+            - name: Stage the pre-generation catalog snapshot on the seed
+              ansible.builtin.copy:
+                src: "{{ ibi_shared_dir }}/ibi-seed-catalogs.json"
+                dest: "{{ ibi_seed_work.path }}/catalogs.json"
+                mode: '0600'
+              register: ibi_catalog_stage
+
+            - name: Create remote report directories
+              ansible.builtin.file:
+                path: "{{ item.path }}/report"
+                state: directory
+                mode: '0700'
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path }}"}
+              register: ibi_report_create
+
+            - name: Prepare registry credentials and mirror mappings on each bastion
+              ansible.builtin.shell:
+                cmd: >-
+                  umask 077; exec python3 {{ (item.path ~ '/images.py') | quote }} prepare
+                  {{ item.path | quote }} {{ item.kubeconfig | quote }}
+                  {{ (hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int) | quote }}
+                  > {{ (item.path ~ '/report/prepare.log') | quote }} 2>&1
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path }}", kubeconfig: "{{ ibi_seed_hub_kubeconfig }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path }}", kubeconfig: "{{ ibi_target_hub_kubeconfig }}"}
+              changed_when: true
+              no_log: true
+              register: ibi_prepare
+
+            - name: Fetch target registry credential and mappings privately
+              ansible.builtin.fetch:
+                src: "{{ ibi_target_work.path }}/{{ item.source }}"
+                dest: "{{ ibi_controller_work.path }}/{{ item.destination }}"
+                flat: true
+              delegate_to: ibi_mirror_target
+              loop:
+                - {source: endpoint-auth.json, destination: target-auth.json}
+                - {source: idms.json, destination: target-idms.json}
+              no_log: true
+              register: ibi_target_inputs_fetch
+
+            - name: Stage target registry credential and mappings on seed
+              ansible.builtin.copy:
+                src: "{{ ibi_controller_work.path }}/{{ item }}"
+                dest: "{{ ibi_seed_work.path }}/{{ item }}"
+                mode: '0600'
+              loop:
+                - target-auth.json
+                - target-idms.json
+              no_log: true
+              register: ibi_target_inputs_stage
+
+            - name: Lock seed metadata and dependency inventory
+              ansible.builtin.shell:
+                cmd: >-
+                  umask 077; exec python3 {{ (ibi_seed_work.path ~ '/images.py') | quote }} plan
+                  {{ ibi_seed_work.path | quote }} {{ ibi_seed_hub_kubeconfig | quote }}
+                  {{ (hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int) | quote }}
+                  > {{ (ibi_seed_work.path ~ '/report/plan.log') | quote }} 2>&1
+              async: "{{ [15, hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int + 15] | max }}"
+              poll: 10
+              changed_when: true
+              no_log: true
+              register: ibi_plan_run
+
+            - name: Resolve remaining time for the existing seed-copy playbook
+              ansible.builtin.set_fact:
+                ibi_seed_copy_budget: "{{ hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int }}"
+
+            - name: Require remaining time for the existing seed-copy playbook
+              ansible.builtin.assert:
+                that:
+                  - ibi_seed_copy_budget | int > 0
+                fail_msg: IBI mirror budget exhausted before seed copy.
+
+            - name: Copy the seed using the unchanged IBU playbook
+              ansible.builtin.shell:
+                cmd: >-
+                  umask 077; exec timeout --kill-after=10s
+                  {{ ibi_seed_copy_budget | string | quote }}s
+                  {{ ansible_playbook_python | quote }} -m ansible.cli.playbook
+                  {{ (playbook_dir ~ '/ibu-mirror-seed-image.yml') | quote }}
+                  -i {{ ibi_seed_inventory | quote }}
+                  --extra-vars {{ {'version': version, 'target_registry_host': target_registry_host} | to_json | quote }}
+                  > {{ (ibi_controller_work.path ~ '/seed-copy.log') | quote }} 2>&1
+                chdir: "{{ playbook_dir }}/../.."
+              delegate_to: localhost
+              become: false
+              vars:
+                ansible_async_dir: "{{ hostvars[inventory_hostname].ibi_controller_work.path }}/async"
+              async: "{{ ibi_seed_copy_budget | int + 15 }}"
+              poll: 10
+              changed_when: true
+              no_log: true
+
+            - name: Copy the pinned dependencies and retain the seed on target
+              ansible.builtin.shell:
+                cmd: >-
+                  umask 077; exec python3 {{ (ibi_seed_work.path ~ '/images.py') | quote }} transfer
+                  {{ ibi_seed_work.path | quote }} {{ ibi_seed_hub_kubeconfig | quote }}
+                  {{ (hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int) | quote }}
+                  > {{ (ibi_seed_work.path ~ '/report/transfer.log') | quote }} 2>&1
+              async: "{{ [15, hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int + 15] | max }}"
+              poll: 10
+              changed_when: true
+              no_log: true
+              register: ibi_transfer_run
+
+            - name: Retrieve the locked plan
+              ansible.builtin.fetch:
+                src: "{{ ibi_seed_work.path }}/plan.json"
+                dest: "{{ ibi_controller_work.path }}/plan.json"
+                flat: true
+              register: ibi_plan_fetch
+
+            - name: Stage the locked plan on target
+              ansible.builtin.copy:
+                src: "{{ ibi_controller_work.path }}/plan.json"
+                dest: "{{ ibi_target_work.path }}/plan.json"
+                mode: '0600'
+              delegate_to: ibi_mirror_target
+              register: ibi_plan_stage
+
+            - name: Verify dependency manifests and linux amd64 blobs on target
+              ansible.builtin.shell:
+                cmd: >-
+                  umask 077; exec python3 {{ (ibi_target_work.path ~ '/images.py') | quote }} verify
+                  {{ ibi_target_work.path | quote }} {{ ibi_target_hub_kubeconfig | quote }}
+                  {{ (hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int) | quote }}
+                  > {{ (ibi_target_work.path ~ '/report/verify.log') | quote }} 2>&1
+              delegate_to: ibi_mirror_target
+              async: "{{ [15, hostvars['localhost'].ibi_mirror_deadline | int - lookup('pipe', 'date +%s') | int + 15] | max }}"
+              poll: 10
+              changed_when: true
+              no_log: true
+              register: ibi_verify_run
+
+            - name: Read the verified result
+              ansible.builtin.slurp:
+                src: "{{ ibi_target_work.path }}/verified.json"
+              delegate_to: ibi_mirror_target
+              register: ibi_verified_file
+
+            - name: Reject any skipped transport before accepting verification
+              ansible.builtin.assert:
+                that:
+                  - not (item.unreachable | default(false))
+                  - item.results | default([]) | selectattr('unreachable', 'defined') | selectattr('unreachable') | list | length == 0
+                fail_msg: A required image transfer or validation operation was unreachable.
+              loop: >-
+                {{ [ibi_helper_stage, ibi_config_stage, ibi_template_stage, ibi_catalog_stage,
+                    ibi_report_create, ibi_prepare, ibi_target_inputs_fetch, ibi_target_inputs_stage,
+                    ibi_plan_run, ibi_transfer_run, ibi_plan_fetch, ibi_plan_stage, ibi_verify_run,
+                    ibi_verified_file] }}
+              no_log: true
+
+            - name: Decode the verified result
+              ansible.builtin.set_fact:
+                ibi_verified: "{{ ibi_verified_file.content | b64decode | from_json }}"
+
+            - name: Validate the handoff contents
+              ansible.builtin.assert:
+                that:
+                  - ibi_verified.version == ibi_seed_version
+                  - ibi_verified.git_revision == ibi_git_revision
+                  - ibi_verified.images | int > 0
+                  - ibi_verified.seed_digest is match('^sha256:[a-f0-9]{64}$')
+                fail_msg: Verified handoff values do not match expected seed version, revision, or digest.
+          always:
+            - name: Discover remote diagnostics even after a failed mirror phase
+              ansible.builtin.find:
+                paths: "{{ item.path }}/report"
+                recurse: true
+                file_type: file
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {side: seed, host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path | default('') }}"}
+                - {side: target, host: ibi_mirror_target, path: "{{ ibi_target_work.path | default('') }}"}
+              when: item.path | length > 0
+              register: ibi_report_files
+              ignore_errors: true
+              ignore_unreachable: true
+
+            - name: Collect remote diagnostics preserving their relative paths
+              ansible.builtin.fetch:
+                src: "{{ item.1.path }}"
+                dest: "{{ ibi_report_dir }}/{{ item.0.item.side }}/{{ item.1.path | relpath(item.0.item.path ~ '/report') }}"
+                flat: true
+              delegate_to: "{{ item.0.item.host }}"
+              loop: "{{ ibi_report_files.results | default([]) | subelements('files', skip_missing=True) }}"
+              register: ibi_report_fetch
+              ignore_errors: true
+              ignore_unreachable: true
+
+            - name: Collect seed-copy log with bastion identities redacted
+              ansible.builtin.copy:
+                dest: "{{ ibi_report_dir }}/seed-copy.log"
+                content: >-
+                  {{ lookup('file', ibi_controller_work.path ~ '/seed-copy.log') |
+                     replace(ansible_host | string, '<seed-bastion>') |
+                     replace(ibi_target_inventory.ansible_host | string, '<target-bastion>') }}
+                mode: '0600'
+              when:
+                - ibi_controller_work.path is defined
+                - query('fileglob', ibi_controller_work.path ~ '/seed-copy.log') | length > 0
+              delegate_to: localhost
+              become: false
+              register: ibi_seed_copy_log
+              ignore_errors: true
+              no_log: true
+
+            - name: Remove private directories from both bastions
+              ansible.builtin.file:
+                path: "{{ item.path }}"
+                state: absent
+              delegate_to: "{{ item.host }}"
+              loop:
+                - {host: "{{ inventory_hostname }}", path: "{{ ibi_seed_work.path | default('') }}"}
+                - {host: ibi_mirror_target, path: "{{ ibi_target_work.path | default('') }}"}
+              when: item.path | length > 0
+              register: ibi_remote_cleanup
+              ignore_errors: true
+              ignore_unreachable: true
+
+            - name: Remove private controller directory
+              ansible.builtin.file:
+                path: "{{ ibi_controller_work.path }}"
+                state: absent
+              when: ibi_controller_work.path is defined
+              delegate_to: localhost
+              become: false
+              register: ibi_controller_cleanup
+              ignore_errors: true
+
+            - name: Require successful report collection and private-file cleanup
+              ansible.builtin.assert:
+                that:
+                  - not (ibi_report_files.failed | default(false))
+                  - ibi_report_files.results | default([]) | selectattr('unreachable', 'defined') | selectattr('unreachable') | list | length == 0
+                  - >-
+                    ibi_report_files.results | default([]) | selectattr('skipped_paths', 'defined') |
+                    map(attribute='skipped_paths') | select | list | length == 0
+                  - not (ibi_report_fetch.failed | default(false))
+                  - ibi_report_fetch.results | default([]) | selectattr('unreachable', 'defined') | selectattr('unreachable') | list | length == 0
+                  - not (ibi_seed_copy_log.failed | default(false))
+                  - not (ibi_remote_cleanup.failed | default(false))
+                  - ibi_remote_cleanup.results | default([]) | selectattr('unreachable', 'defined') | selectattr('unreachable') | list | length == 0
+                  - not (ibi_controller_cleanup.failed | default(false))
+                fail_msg: IBI report collection or private-file cleanup failed; verified handoffs were not published.
+
+        - name: Publish the verified handoffs only after cleanup
+          block:
+            - name: Write verified seed digest and Git revision
+              ansible.builtin.copy:
+                dest: "{{ ibi_shared_dir }}/{{ item.name }}"
+                content: "{{ item.value }}\n"
+                mode: '0600'
+              delegate_to: localhost
+              become: false
+              loop:
+                - {name: ibi-seed-digest, value: "{{ ibi_verified.seed_digest }}"}
+                - {name: ibi-seed-git-revision, value: "{{ ibi_verified.git_revision }}"}
+          rescue:
+            - name: Remove incomplete verified handoffs
+              ansible.builtin.file:
+                path: "{{ ibi_shared_dir }}/{{ item }}"
+                state: absent
+              delegate_to: localhost
+              become: false
+              loop:
+                - ibi-seed-digest
+                - ibi-seed-git-revision
+
+            - name: Fail incomplete publication
+              ansible.builtin.fail:
+                msg: Failed to publish both verified handoffs.
+
+        - name: Report verified dependency count
+          ansible.builtin.debug:
+            msg: "Seed and all {{ ibi_verified.images }} dependencies verified on target; {{ ibi_verified.catalogs }} catalogs checked."

@@ -103,30 +103,14 @@
       certified-operators: "registry.redhat.io/redhat/certified-operator-index:v{{ certified_catalog_version | default(catalog_version) }}"
       community-operators: "registry.redhat.io/redhat/community-operator-index:v{{ community_catalog_version | default(catalog_version) }}"
 
-- name: Remove production catalog JSON file
-  ansible.builtin.file:
-    path: "{{ ocp_operator_mirror_prod_catalog_json_path }}"
-    state: absent
-
-- name: Ensure production catalog image is removed
-  containers.podman.podman_image:
-    name: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
-    state: absent
-
-- name: Render production catalog index straight to file
-  changed_when: true
-  ansible.builtin.shell: >-
-    podman run --authfile=/tmp/auth.json --rm
-    "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
-    render /configs > "{{ ocp_operator_mirror_prod_catalog_json_path }}"
-
-- name: Set default channel for production operators
-  ansible.builtin.include_tasks: set_default_channel.yaml
-  loop: "{{ ocp_operator_mirror_operators_prod }}"
-  loop_control:
-    loop_var: operator
-  vars:
-    mirror_catalog_json_path: "{{ ocp_operator_mirror_prod_catalog_json_path }}"
+- name: Map production catalogs to target repositories
+  ansible.builtin.set_fact:
+    target_catalog_index_map: >-
+      {{ target_catalog_index_map | default({}) | combine({
+        item.key: ocp_operator_mirror_folder ~ '/' ~
+          (item.value | regex_replace('^[^/]+/', '') | regex_replace('(@.*|:[^/:]+)$', ''))
+      }) }}
+  loop: "{{ catalog_index_map | dict2items }}"
 
 - name: Build Red Hat packages
   changed_when: false
@@ -135,12 +119,7 @@
     loop_var: operator_item
   vars:
     channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_redhat_catalog_name]) }}"
-    channels_list: >-
-      {{
-        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
-        [{'name': channel_name}]
-      }}
-    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
+    make_pkg: "{{ {'name': operator_item.name, 'defaultChannel': channel_name, 'channels': [{'name': channel_name}]} }}"
   ansible.builtin.set_fact:
     pkgs_redhat: "{{ (pkgs_redhat | default([])) + [make_pkg] }}"
 
@@ -151,12 +130,7 @@
     loop_var: operator_item
   vars:
     channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_certified_catalog_name]) }}"
-    channels_list: >-
-      {{
-        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
-        [{'name': channel_name}]
-      }}
-    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
+    make_pkg: "{{ {'name': operator_item.name, 'defaultChannel': channel_name, 'channels': [{'name': channel_name}]} }}"
   ansible.builtin.set_fact:
     pkgs_cert: "{{ (pkgs_cert | default([])) + [make_pkg] }}"
 
@@ -167,12 +141,7 @@
     loop_var: operator_item
   vars:
     channel_name: "{{ operator_item.channel | default(ocp_operator_mirror_prod_default_channel_map[ocp_operator_mirror_prod_community_catalog_name]) }}"
-    channels_list: >-
-      {{
-        ([{'name': operator_item.default_channel}] if operator_item.default_channel is defined else []) +
-        [{'name': channel_name}]
-      }}
-    make_pkg: "{{ {'name': operator_item.name, 'channels': channels_list} }}"
+    make_pkg: "{{ {'name': operator_item.name, 'defaultChannel': channel_name, 'channels': [{'name': channel_name}]} }}"
   ansible.builtin.set_fact:
     pkgs_comm: "{{ (pkgs_comm | default([])) + [make_pkg] }}"
 
@@ -182,13 +151,16 @@
     mirror_ops: >-
       {{
         ([] if (pkgs_redhat | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_redhat_catalog_name], 'packages': pkgs_redhat} ])
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_redhat_catalog_name],
+              'targetCatalog': target_catalog_index_map[ocp_operator_mirror_prod_redhat_catalog_name], 'packages': pkgs_redhat} ])
         +
         ([] if (pkgs_cert | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_certified_catalog_name], 'packages': pkgs_cert} ])
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_certified_catalog_name],
+              'targetCatalog': target_catalog_index_map[ocp_operator_mirror_prod_certified_catalog_name], 'packages': pkgs_cert} ])
         +
         ([] if (pkgs_comm | default([])) | length == 0 else
-          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_community_catalog_name], 'packages': pkgs_comm} ])
+          [ {'catalog': catalog_index_map[ocp_operator_mirror_prod_community_catalog_name],
+              'targetCatalog': target_catalog_index_map[ocp_operator_mirror_prod_community_catalog_name], 'packages': pkgs_comm} ])
       }}
 
 - name: Build ImageSetConfiguration
@@ -196,7 +168,7 @@
   when: (mirror_ops | default([])) | length > 0
   ansible.builtin.set_fact:
     image_set_config:
-      apiVersion: mirror.openshift.io/v1alpha2
+      apiVersion: mirror.openshift.io/v2alpha1
       kind: ImageSetConfiguration
       mirror:
         operators: "{{ mirror_ops }}"
@@ -231,9 +203,13 @@
   ansible.builtin.set_fact:
     oc_mirror_version: "{{ oc_mirror_version_output.stdout | regex_search('([0-9]+\\.[0-9]+)', '\\1') | first }}"
 
+# We should always optimistically mirror the sigstore attachments for operators.
+# In some versions of oc-mirror, the --remove-signatures defaults to true, so
+# explicitly set it to false. This is gated to 4.20+, where the flag was
+# introduced.
 - name: Set signature flag based on oc-mirror version
   ansible.builtin.set_fact:
-    oc_mirror_signature_flag: "{{ '--remove-signatures' if (oc_mirror_version is version('4.20', '>')) else '' }}"
+    oc_mirror_signature_flag: "{{ '--remove-signatures=false' if (oc_mirror_version is version('4.20', '>=')) else '' }}"
 
 - name: Workaround oc-mirror v2 authfile issue
   no_log: true
@@ -256,7 +232,8 @@
     --authfile "{{ ocp_operator_mirror_pull_secret_path }}"
     -c "{{ ocp_operator_mirror_image_set_configuration_path }}"
     --workspace file:///{{ ocp_operator_mirror_workspace_path }}
-    docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
+    {{ ' --dry-run ' if ocp_operator_mirror_oc_mirror_dry_run | default(false) | bool else '' }}
+    docker://{{ ocp_operator_mirror_registry_url }}
     --ignore-release-signature {{ oc_mirror_signature_flag }} --v2
 
 - name: Remove authfile workaround oc-mirror v2 authfile issue
@@ -269,27 +246,50 @@
   ansible.builtin.debug:
     var: oc_mirror.stdout
 
-- name: Find CatalogSource (cs*) and ImageDigestMirrorSet (idms*) manifests
+- name: Find CatalogSource, ImageDigestMirrorSet, and ImageTagMirrorSet manifests
   register: mirror_manifests
   ansible.builtin.find:
     paths: "{{ ocp_operator_mirror_workspace_path }}/{{ ocp_operator_mirror_working_dir_path }}"
     patterns:
       - "cs*.yaml"
       - "idms*.yaml"
+      - "itms*.yaml"
     file_type: file
 
 - name: Extract manifest paths
   ansible.builtin.set_fact:
     manifest_paths: "{{ mirror_manifests.files | map(attribute='path') | list }}"
 
-- name: Apply CatalogSources manifests
-  loop: "{{ manifest_paths }}"
+- name: Read generated production cluster resources
+  ansible.builtin.slurp:
+    src: "{{ manifest.path }}"
+  loop: "{{ mirror_manifests.files }}"
   loop_control:
-    loop_var: manifest_item
+    loop_var: manifest
+  register: prod_cluster_resources
+
+# oc-mirror reuses names such as idms-operator-0 across separate runs. Keep the
+# target-derived CatalogSource name, but make mirror-set names content-addressed
+# so different production runs coexist and identical reruns remain idempotent.
+- name: Apply generated production cluster resources
+  when: not (ocp_operator_mirror_skip_manifest_apply | bool)
+  vars:
+    resource: "{{ manifest.content | b64decode | from_yaml }}"
+    mirror_set_hash: >-
+      {{ (resource.spec | default({}) | to_nice_json(sort_keys=True)
+          | hash('sha256'))[:7] }}
+    resource_name: >-
+      {{ resource.metadata.name ~ '-prod-' ~ mirror_set_hash
+         if resource.kind in ['ImageDigestMirrorSet', 'ImageTagMirrorSet']
+         else resource.metadata.name }}
+  loop: "{{ prod_cluster_resources.results }}"
+  loop_control:
+    loop_var: manifest
+    label: "{{ resource_name }}"
   kubernetes.core.k8s:
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
     state: present
-    src: "{{ manifest_item }}"
+    definition: "{{ resource | combine({'metadata': {'name': resource_name}}, recursive=True) }}"
   notify:
     - Cleanup ocp_operator_mirror artifacts
 

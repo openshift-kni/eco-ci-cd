@@ -183,7 +183,8 @@
     - name: Parse catalog file into documents
       changed_when: false
       ansible.builtin.set_fact:
-        docs: "{{ (cat.content | b64decode) | from_yaml_all | list }}"
+        # Normalize YAML timestamps to strings so older Ansible does not turn the entire list into unsafe text.
+        docs: "{{ (cat.content | b64decode | from_yaml_all | list) | to_json | from_json }}"
 
     - name: Detect package name from catalog
       changed_when: false

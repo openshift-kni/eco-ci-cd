@@ -1,0 +1,114 @@
+---
+- name: Read existing PerformanceProfiles
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+  register: nrop_canary_existing_profiles
+
+- name: Read existing KubeletConfigs
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: KubeletConfig
+  register: nrop_canary_existing_kubelet_configs
+
+- name: Read existing TuneD recommendations
+  kubernetes.core.k8s_info:
+    api_version: tuned.openshift.io/v1
+    kind: Tuned
+    namespace: openshift-cluster-node-tuning-operator
+  register: nrop_canary_existing_tuned
+
+- name: Read the regular and canary pool names
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ item }}"
+  loop: "{{ [nrop_canary_profile_worker_pool, nrop_canary_upgrade_pool] }}"
+  register: nrop_canary_existing_pools
+
+- name: Read all machine configuration pools
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+  register: nrop_canary_all_pools
+
+- name: Read MachineConfigs using the temporary pool roles
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    label_selectors:
+      - "machineconfiguration.openshift.io/role in ({{ nrop_canary_profile_worker_pool }},{{ nrop_canary_upgrade_pool }})"
+  register: nrop_canary_existing_role_mcs
+
+- name: Require temporary pool roles to have no pre-existing MachineConfigs
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_existing_role_mcs.resources | length == 0
+    fail_msg: Existing MachineConfigs use the temporary canary roles; they will not be overwritten or removed.
+
+- name: Reject other pools before creating a worker PerformanceProfile
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_all_pools.resources | map(attribute='metadata.name') | difference(['master', 'worker']) | length == 0
+    fail_msg: >-
+      Profile-based canary cleanup requires no other custom MCPs; existing pools
+      are not deleted because a worker TuneD recommendation may match them.
+  when: apply_perf_profile | bool
+
+- name: Read scheduler configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Scheduler
+    name: cluster
+  register: nrop_canary_scheduler
+
+- name: Read the worker nodes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: nrop_canary_nodes
+
+- name: Require a clean and supported canary tuning state
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_existing_profiles.resources | length == 0
+      - nrop_canary_existing_kubelet_configs.resources | length == 0
+      - nrop_canary_existing_pools.results | map(attribute='resources') | flatten | length == 0
+      - nrop_canary_scheduler.resources | length == 1
+      - not (nrop_canary_scheduler.resources[0].spec.mastersSchedulable | default(false) | bool)
+      - nrop_canary_nodes.resources | length > 0
+    fail_msg: >-
+      Canary tuning requires a fresh MNO without existing PerformanceProfiles,
+      KubeletConfigs, or the temporary worker-perf/worker-upgrade pools.
+      Existing resources are not removed or overwritten.
+
+- name: Require ready workers without other node roles
+  ansible.builtin.assert:
+    that:
+      - item.status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+      - >-
+        item.metadata.labels | dict2items | map(attribute='key')
+        | select('match', '^node-role[.]kubernetes[.]io/')
+        | reject('equalto', 'node-role.kubernetes.io/worker') | list | length == 0
+    fail_msg: "Worker {{ item.metadata.name }} is not Ready or has another node role; canary setup did not change it."
+  loop: "{{ nrop_canary_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Reject worker TuneD recommendations that would match both pools
+  ansible.builtin.assert:
+    that:
+      - item.1.machineConfigLabels['machineconfiguration.openshift.io/role'] | default('') != 'worker'
+    fail_msg: "TuneD {{ item.0.metadata.name }} targets worker MachineConfigs and would match multiple canary pools."
+  when:
+    - item.1.machineConfigLabels is defined
+    - item.1.machineConfigLabels is mapping
+  loop: "{{ nrop_canary_existing_tuned.resources | subelements('spec.recommend', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.metadata.name }}"
+
+- name: Remember the original worker nodes
+  ansible.builtin.set_fact:
+    nrop_canary_worker_names: "{{ nrop_canary_nodes.resources | map(attribute='metadata.name') | list }}"

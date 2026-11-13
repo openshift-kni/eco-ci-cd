@@ -1,0 +1,46 @@
+---
+- name: Get installed NROP CSV metadata
+  ansible.builtin.shell: |
+    set -euo pipefail
+    NS="openshift-numaresources"
+    CSV="$(oc get subscription numaresources-operator -n "$NS" -o jsonpath='{.status.installedCSV}')"
+    test -n "$CSV"
+    VERSION="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.version}')"
+    OPERATOR="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.relatedImages[?(@.name=="manager")].image}')"
+    if [ -z "$OPERATOR" ]; then
+      OPERATOR="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.relatedImages[0].image}')"
+    fi
+    BUNDLE="$(oc get installplan -n "$NS" -o json | jq -r --arg csv "$CSV" '
+      [.items[] | select(.spec.clusterServiceVersionNames[]? == $csv) | .status.bundleLookups[0].path // empty]
+      | map(select(length > 0))
+      | last // empty
+    ')"
+    if [ -z "$BUNDLE" ]; then
+      BUNDLE="$(oc get clusterextension numaresources-operator -o json 2>/dev/null | jq -r '
+        .status.install.bundle // .status.content.reference // empty
+      ' || true)"
+    fi
+    printf '%s\n' "$CSV"
+    printf '%s\n' "$VERSION"
+    printf '%s\n' "$BUNDLE"
+    printf '%s\n' "$OPERATOR"
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  register: nrop_bundle_operator_lookup
+  retries: 5
+  delay: 5
+  until:
+    - nrop_bundle_operator_lookup.rc == 0
+    - (nrop_bundle_operator_lookup.stdout_lines | length) >= 4
+    - (nrop_bundle_operator_lookup.stdout_lines[2] | length) > 0
+    - (nrop_bundle_operator_lookup.stdout_lines[3] | length) > 0
+  changed_when: false
+
+- name: Set bundle and operator image facts
+  ansible.builtin.set_fact:
+    nrop_bundle_name: "{{ nrop_bundle_operator_lookup.stdout_lines[0] }}"
+    nrop_bundle_version: "{{ nrop_bundle_operator_lookup.stdout_lines[1] }}"
+    nrop_bundle_image: "{{ nrop_bundle_operator_lookup.stdout_lines[2] }}"
+    nrop_operator_image: "{{ nrop_bundle_operator_lookup.stdout_lines[3] }}"
+    nrop_bundle_digest: "{{ nrop_bundle_operator_lookup.stdout_lines[2] | regex_search('sha256:[a-zA-Z0-9]+') }}"
+    nrop_operator_digest: "{{ nrop_bundle_operator_lookup.stdout_lines[3] | regex_search('sha256:[a-zA-Z0-9]+') }}"

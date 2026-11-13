@@ -1,0 +1,51 @@
+---
+- name: Create the topology-aware verification namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: test-deployment
+
+- name: Deploy a topology-aware verification workload
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: test-deployment
+        namespace: test-deployment
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: test-deployment
+        template:
+          metadata:
+            labels:
+              app: test-deployment
+          spec:
+            schedulerName: topo-aware-scheduler
+            containers:
+              - name: pause
+                image: quay.io/openshift-kni/pause:test-ci
+                command: [sh, -c, sleep infinity]
+                resources:
+                  requests: {cpu: 10m, memory: 64Mi}
+                  limits: {cpu: 50m, memory: 128Mi}
+
+- name: Wait for the topology-aware verification pod
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: test-deployment
+    label_selectors: [app=test-deployment]
+    field_selectors: [status.phase=Running]
+  register: nrop_verification_pods
+  until:
+    - nrop_verification_pods.resources | length > 0
+    - nrop_verification_pods.resources[0].spec.schedulerName == 'topo-aware-scheduler'
+    - nrop_verification_pods.resources[0].spec.nodeName | default('') | length > 0
+  retries: 20
+  delay: 5

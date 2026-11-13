@@ -1,0 +1,63 @@
+---
+- name: Copy Cincinnati resolver to the bastion
+  ansible.builtin.copy:
+    src: "{{ role_path }}/scripts/resolve-cincinnati-edge.sh"
+    dest: "{{ ocp_cincinnati_resolver_path }}"
+    mode: '0755'
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length == 0
+
+- name: Resolve Cincinnati edge pullspec for hop
+  ansible.builtin.command:
+    argv:
+      - "{{ ocp_cincinnati_resolver_path }}"
+      - edge
+      - --channel
+      - "{{ ocp_upgrade_channel }}"
+      - --target
+      - "{{ ocp_hop_target }}"
+      - --then
+      - "{{ ocp_hop_then | default('') }}"
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  register: ocp_upgrade_hop_pullspec
+  changed_when: false
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length == 0
+
+- name: Show Cincinnati edge diagnostics
+  ansible.builtin.debug:
+    var: ocp_upgrade_hop_pullspec.stderr_lines
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length == 0
+
+- name: Require no custom image when selecting latest stable
+  ansible.builtin.assert:
+    that:
+      - ocp_hop_image | default('') | length == 0
+    fail_msg: Latest-stable OCP hops cannot use an explicit image
+  when: ocp_hop_use_latest_stable | bool
+
+- name: Resolve the latest stable OCP hop target
+  ansible.builtin.include_tasks: resolve_stable.yml
+  vars:
+    ocp_stable_minor: "{{ ocp_hop_target }}"
+  when: ocp_hop_use_latest_stable | bool
+
+- name: Validate the explicit release image
+  ansible.builtin.include_tasks: validate_image.yml
+  when: ocp_hop_image | default('') | length > 0
+
+- name: Select OCP hop image
+  ansible.builtin.set_fact:
+    ocp_upgrade_target_image: >-
+      {{ ocp_latest_stable_image if ocp_hop_use_latest_stable | bool
+         else (ocp_validated_image if ocp_hop_image | default('') | length > 0 else (ocp_upgrade_hop_pullspec.stdout | trim)) }}
+
+- name: Warn that the OCP hop uses force
+  ansible.builtin.debug:
+    msg: "The OCP hop will use --force to upgrade to {{ ocp_upgrade_target_image }}, even if the edge is not recommended."
+  when: ocp_upgrade_force | bool

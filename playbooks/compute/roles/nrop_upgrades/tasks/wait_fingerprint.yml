@@ -1,0 +1,32 @@
+---
+- name: Wait for the expected fingerprint method on each worker
+  kubernetes.core.k8s_info:
+    api_version: topology.node.k8s.io/v1alpha2
+    kind: NodeResourceTopology
+    name: "{{ item }}"
+  register: nrop_fingerprint_wait_nrt
+  until:
+    - nrop_fingerprint_wait_nrt.resources | length == 1
+    - >-
+      (nrop_fingerprint_wait_nrt.resources[0].attributes | default([])
+       | selectattr('name', 'equalto', 'nodeTopologyPodsFingerprintMethod')
+       | map(attribute='value') | first | default('')) == nrop_fingerprint_expected_methods[item]
+  retries: 60
+  delay: 10
+  loop: "{{ nrop_canary_worker_names }}"
+
+- name: Wait for the worker RTE DaemonSet to settle after the fingerprint change
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: openshift-numaresources
+    name: "numaresourcesoperator-{{ nrop_fingerprint_wait_pool }}"
+  register: nrop_fingerprint_wait_rte
+  until:
+    - nrop_fingerprint_wait_rte.resources | length == 1
+    - nrop_fingerprint_wait_rte.resources[0].status.desiredNumberScheduled | default(0) | int == nrop_canary_worker_names | length
+    - nrop_fingerprint_wait_rte.resources[0].status.updatedNumberScheduled | default(0) | int == nrop_canary_worker_names | length
+    - nrop_fingerprint_wait_rte.resources[0].status.numberReady | default(0) | int == nrop_canary_worker_names | length
+    - nrop_fingerprint_wait_rte.resources[0].status.observedGeneration | default(0) | int == nrop_fingerprint_wait_rte.resources[0].metadata.generation | int
+  retries: 90
+  delay: 10

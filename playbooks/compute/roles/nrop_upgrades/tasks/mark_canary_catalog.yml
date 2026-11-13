@@ -1,0 +1,12 @@
+---
+- name: Label the lane-created CatalogSource
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: CatalogSource
+      metadata:
+        name: "{{ nrop_canary_install_catalog_name }}"
+        namespace: openshift-marketplace
+        labels:
+          nrop-ci.openshift.io/canary-catalog: 'true'

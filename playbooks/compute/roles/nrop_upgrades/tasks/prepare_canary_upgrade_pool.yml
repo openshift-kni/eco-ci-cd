@@ -1,0 +1,82 @@
+---
+- name: Read the regular worker PerformanceProfile
+  kubernetes.core.k8s_info:
+    api_version: performance.openshift.io/v2
+    kind: PerformanceProfile
+    name: "{{ nrop_worker_mcp }}-performance-nrop"
+  register: nrop_canary_regular_profile
+
+- name: Require the regular profile to target only the regular pool
+  ansible.builtin.assert:
+    that:
+      - nrop_canary_regular_profile.resources | length == 1
+      - nrop_canary_regular_profile.resources[0].spec.nodeSelector | length == 1
+      - nrop_canary_regular_profile.resources[0].spec.nodeSelector['node-role.kubernetes.io/' ~ nrop_worker_mcp] | default('missing') == ''
+      - nrop_canary_regular_profile.resources[0].spec.machineConfigPoolSelector | length == 1
+      - >-
+        nrop_canary_regular_profile.resources[0].spec.machineConfigPoolSelector['pools.operator.machineconfiguration.openshift.io/' ~ nrop_worker_mcp]
+        | default('missing') == ''
+      - >-
+        (nrop_canary_regular_profile.resources[0].spec.machineConfigLabel
+         | default({'machineconfiguration.openshift.io/role': nrop_worker_mcp}, true))
+        == {'machineconfiguration.openshift.io/role': nrop_worker_mcp}
+      - nrop_canary_regular_profile.resources[0].spec.cpu.reserved | default('') | length > 0
+      - nrop_canary_regular_profile.resources[0].spec.cpu.isolated | default('') | length > 0
+    fail_msg: The regular PerformanceProfile is missing or does not target the regular canary worker pool
+
+- name: Create the empty canary upgrade pool
+  ansible.builtin.include_tasks: prepare_canary_upgrade_pool_base.yml
+
+- name: Create an equivalent PerformanceProfile for the canary pool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: performance.openshift.io/v2
+      kind: PerformanceProfile
+      metadata:
+        name: "{{ nrop_canary_upgrade_profile_name }}"
+        labels:
+          nrop-ci.openshift.io/canary-managed: 'true'
+        annotations: >-
+          {{ nrop_canary_regular_profile.resources[0].metadata.annotations | default({})
+             | dict2items | selectattr('key', 'equalto', 'kubeletconfig.experimental') | items2dict }}
+      spec: >-
+        {{ nrop_canary_regular_profile.resources[0].spec | combine({
+          'nodeSelector': {'node-role.kubernetes.io/' ~ nrop_canary_upgrade_pool: ''},
+          'machineConfigPoolSelector': {'pools.operator.machineconfiguration.openshift.io/' ~ nrop_canary_upgrade_pool: ''},
+          'machineConfigLabel': {'machineconfiguration.openshift.io/role': nrop_canary_upgrade_pool}
+        }) }}
+
+- name: Wait for distinct regular and canary TuneD recommendations
+  kubernetes.core.k8s_info:
+    api_version: tuned.openshift.io/v1
+    kind: Tuned
+    namespace: openshift-cluster-node-tuning-operator
+    name: "openshift-node-performance-{{ item }}-performance-nrop"
+  register: nrop_canary_tuned
+  until:
+    - nrop_canary_tuned.resources | length == 1
+    - >-
+      (nrop_canary_tuned.resources[0].spec.recommend | default([])
+       | selectattr('machineConfigLabels', 'defined') | map(attribute='machineConfigLabels') | list)
+      == [{'machineconfiguration.openshift.io/role': item}]
+  retries: 60
+  delay: 10
+  loop: "{{ [nrop_worker_mcp, nrop_canary_upgrade_pool] }}"
+
+- name: Wait for the canary PerformanceProfile KubeletConfig to render
+  ansible.builtin.include_tasks: wait_canary_kubelet.yml
+  vars:
+    nrop_canary_wait_kubelet: "performance-{{ nrop_canary_upgrade_profile_name }}"
+    nrop_canary_wait_pool: "{{ nrop_canary_upgrade_pool }}"
+    nrop_canary_wait_count: 0
+
+- name: Wait for the canary PerformanceProfile MachineConfig to render
+  ansible.builtin.include_tasks: wait_canary_pool.yml
+  vars:
+    nrop_canary_wait_pool: "{{ nrop_canary_upgrade_pool }}"
+    nrop_canary_wait_count: 0
+    nrop_canary_wait_source: "50-performance-{{ nrop_canary_upgrade_profile_name }}"
+
+- name: Verify node-tuning before canary setup
+  ansible.builtin.include_tasks: wait_canary_node_tuning.yml

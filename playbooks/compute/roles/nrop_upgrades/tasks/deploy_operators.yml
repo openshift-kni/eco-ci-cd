@@ -1,0 +1,118 @@
+---
+- name: Build operator spec for prod
+  ansible.builtin.set_fact:
+    nrop_operator_spec: >-
+      {{
+        [{
+          'name': 'numaresources-operator',
+          'catalog': 'redhat-operators',
+          'nsname': 'openshift-numaresources',
+          'deploy_default_config': false,
+          'channel': ('stable' if nrop_channel == 'stable' else nrop_operator_version)
+        }]
+      }}
+  when: nrop_catalog_source == 'prod'
+
+- name: Set the NROP stage catalog references
+  ansible.builtin.set_fact:
+    nrop_stage_catalog_name: "numaresources-operator-fbc-v{{ nrop_operator_version | replace('.', '-') }}"
+    nrop_stage_catalog_source: "quay.io/redhat-user-workloads/telco-5g-tenant/numaresources-operator-fbc-{{ nrop_operator_version | replace('.', '-') }}"
+    nrop_stage_temp_catalog: "nrop-fbc-mirror-{{ nrop_operator_version | replace('.', '-') }}-{{ artifacts_folder | hash('sha1') | truncate(10, true, '') }}"
+  when: nrop_catalog_source == 'stage'
+
+- name: Set the NROP stage mirror repository and staging tag
+  ansible.builtin.set_fact:
+    nrop_stage_catalog_repository: >-
+      {{ disconnected_registry_url ~ ':' ~ disconnected_registry_port ~ '/' ~
+         (ocp_operator_mirror_folder | default('operators')) ~ '/' ~ nrop_stage_catalog_name }}
+    nrop_stage_catalog_tag: "ocp__{{ nrop_operator_version }}__{{ nrop_stage_catalog_name }}"
+  when: nrop_catalog_source == 'stage'
+
+- name: Build operator spec for stage
+  ansible.builtin.set_fact:
+    nrop_operator_spec: >-
+      {{
+        [{
+          'name': 'numaresources-operator',
+          'catalog': nrop_stage_temp_catalog,
+          'og_name': 'numaresources-operator',
+          'nsname': 'openshift-numaresources',
+          'deploy_default_config': false,
+          'fbc_iib_repo': nrop_stage_catalog_name,
+          'channel': ('stable' if nrop_channel == 'stable' else nrop_operator_version)
+        }]
+      }}
+  when: nrop_catalog_source == 'stage'
+
+- name: Reset mirror state for the current NROP version
+  ansible.builtin.set_fact:
+    production_catalog_version: "{{ nrop_operator_version }}"
+    pkgs_redhat: []
+    pkgs_cert: []
+    pkgs_comm: []
+    image_pairs: []
+    _image_pairs: []
+    ocp_operators_mirror_disconnected_config: []
+
+- name: Mirror the version-specific NROP catalog
+  block:
+    - name: Prepare the NROP stage catalog
+      ansible.builtin.include_tasks: prepare_stage_catalog.yml
+      when: nrop_catalog_source == 'stage'
+
+    - name: Mirror NROP operator images
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_version: "{{ nrop_operator_version }}"
+        ocp_operator_mirror_operators: "{{ nrop_operator_spec }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_fbc_image_base: >-
+          {{ nrop_stage_catalog_repository if nrop_catalog_source == 'stage'
+             else 'quay.io/redhat-user-workloads/telco-5g-tenant/numaresources-operator-fbc-' ~ (nrop_operator_version | replace('.', '-')) }}
+        ocp_operator_mirror_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        ocp_operator_mirror_registry_user: "{{ ansible_user }}"
+        ocp_operator_mirror_registry_password: "{{ ansible_password }}"
+        ocp_operator_mirror_pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+        ocp_operator_mirror_art_images_share: "{{ art_share_image }}"
+        ocp_operator_mirror_skip_internal_registry_cleanup: true
+        ocp_operator_mirror_disable_default_sources: true
+
+    - name: Pin the NROP stage CatalogSource
+      ansible.builtin.include_tasks: pin_stage_catalog.yml
+      when: nrop_catalog_source == 'stage'
+  always:
+    - name: Clean up temporary NROP catalog resources
+      block:
+        - name: Remove the temporary NROP CatalogSource
+          ansible.builtin.include_tasks: cleanup_stage_catalog.yml
+          when:
+            - nrop_catalog_source == 'stage'
+            - nrop_stage_temp_created.result.metadata.uid is defined
+      always:
+        - name: Remove temporary NROP catalog authentication
+          ansible.builtin.file:
+            path: "{{ nrop_stage_authfile.path }}"
+            state: absent
+          when:
+            - nrop_catalog_source == 'stage'
+            - nrop_stage_authfile.path is defined
+          no_log: true
+
+- name: Use the mirrored production CatalogSource for NROP
+  ansible.builtin.set_fact:
+    nrop_operator_spec: "{{ ocp_operator_mirror_operators_prod }}"
+  when: nrop_catalog_source == 'prod'
+
+- name: Wait for registry configuration on masters and workers
+  ansible.builtin.include_tasks: wait_mcp.yml
+  loop: "{{ ['master'] if nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'] else ['master', nrop_worker_mcp | default('worker')] }}"
+  loop_control:
+    loop_var: nrop_wait_pool
+
+- name: Install NROP operator
+  ansible.builtin.include_role:
+    name: ocp_operator_deployment
+  vars:
+    ocp_operator_deployment_version: "{{ nrop_operator_version }}"
+    ocp_operator_deployment_operators: "{{ nrop_operator_spec }}"

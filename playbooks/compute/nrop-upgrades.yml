@@ -1,0 +1,10 @@
+---
+# Full NROP upgrade lane. Jenkins deploys OCP first, then runs this playbook.
+- name: NROP upgrades
+  hosts: bastion
+  gather_facts: true
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  roles:
+    - role: nrop_upgrades

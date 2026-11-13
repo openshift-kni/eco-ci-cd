@@ -1,0 +1,35 @@
+---
+- name: Create the regular canary worker pool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfigPool
+      metadata:
+        name: "{{ nrop_worker_mcp }}"
+        labels: "{{ {'pools.operator.machineconfiguration.openshift.io/' ~ nrop_worker_mcp: ''} }}"
+      spec:
+        machineConfigSelector:
+          matchExpressions:
+            - key: machineconfiguration.openshift.io/role
+              operator: In
+              values: [worker, "{{ nrop_worker_mcp }}"]
+        nodeSelector:
+          matchLabels: "{{ {'node-role.kubernetes.io/' ~ nrop_worker_mcp: ''} }}"
+
+- name: Move workers into the regular PerformanceProfile pool
+  kubernetes.core.k8s_json_patch:
+    api_version: v1
+    kind: Node
+    name: "{{ item }}"
+    patch:
+      - op: add
+        path: "/metadata/labels/node-role.kubernetes.io~1{{ nrop_worker_mcp }}"
+        value: ''
+  loop: "{{ nrop_canary_worker_names }}"
+
+- name: Wait for the regular PerformanceProfile pool to settle
+  ansible.builtin.include_tasks: wait_canary_pool.yml
+  vars:
+    nrop_canary_wait_pool: "{{ nrop_worker_mcp }}"
+    nrop_canary_wait_count: "{{ nrop_canary_worker_names | length }}"

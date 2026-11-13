@@ -1,0 +1,134 @@
+---
+- name: Prepare the canary pool's PerformanceProfile
+  ansible.builtin.include_tasks: prepare_canary_upgrade_pool.yml
+  when: apply_perf_profile | bool
+
+- name: Copy canary script to the bastion
+  ansible.builtin.copy:
+    src: "{{ role_path }}/scripts/nrop-canary-skip-upgrade.sh"
+    dest: /tmp/nrop-canary-skip-upgrade.sh
+    mode: '0755'
+
+- name: Canary setup
+  ansible.builtin.command:
+    cmd: /tmp/nrop-canary-skip-upgrade.sh setup
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MINOR: "{{ ocp_from_minor }}"
+    CANARY_NODE_COUNT: "{{ canary_node_count }}"
+    NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
+    UPGRADE_MCP_NAME: "{{ nrop_canary_upgrade_pool }}"
+    MANAGED_CANARY_PROFILE: "{{ nrop_canary_upgrade_profile_name if apply_perf_profile | bool else '' }}"
+    MANAGED_WORKER_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_kubelet_config_name }}"
+    NROP_TEMP_NODEGROUP_CONFIG_JSON: "{{ (nrop_fingerprint_temporary_config | to_json) if nrop_fingerprint_temporary | bool else '' }}"
+    TOPOLOGY_MANAGER_SCOPE: "{{ topology_manager_scope }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  changed_when: true
+
+- name: Verify node-tuning after canary setup
+  ansible.builtin.include_tasks: wait_canary_node_tuning.yml
+
+- name: Upgrade NROP before control-plane OCP hops
+  ansible.builtin.include_tasks: upgrade_nrop.yml
+  vars:
+    nrop_target_version: "{{ target_ocp_version }}"
+
+- name: Upgrade the canary control plane
+  block:
+    - name: Control-plane OCP hops
+      ansible.builtin.include_tasks: ocp_hop.yml
+      loop: "{{ ocp_control_plane_hops }}"
+      loop_control:
+        loop_var: nrop_hop_version
+  rescue:
+    - name: Report the paused canary state
+      ansible.builtin.fail:
+        msg: >-
+          A canary OCP hop failed. The worker MCP and NROP reconciliation may remain paused,
+          and the worker-upgrade pool may exist. No automatic cleanup was attempted.
+          {{ ansible_failed_result.stderr | default(ansible_failed_result.msg | default('See the earlier failure'), true) }}
+
+- name: Canary migrate workers
+  ansible.builtin.command:
+    cmd: /tmp/nrop-canary-skip-upgrade.sh migrate
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MINOR: "{{ ocp_from_minor }}"
+    CANARY_NODE_COUNT: "{{ canary_node_count }}"
+    NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
+    UPGRADE_MCP_NAME: "{{ nrop_canary_upgrade_pool }}"
+    MANAGED_CANARY_PROFILE: "{{ nrop_canary_upgrade_profile_name if apply_perf_profile | bool else '' }}"
+    MANAGED_CANARY_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_upgrade_kubelet_config_name }}"
+    MANAGED_WORKER_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_kubelet_config_name }}"
+    NROP_TEMP_NODEGROUP_CONFIG_JSON: "{{ (nrop_fingerprint_temporary_config | to_json) if nrop_fingerprint_temporary | bool else '' }}"
+    TOPOLOGY_MANAGER_SCOPE: "{{ topology_manager_scope }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  changed_when: true
+
+- name: Canary cleanup
+  ansible.builtin.command:
+    cmd: /tmp/nrop-canary-skip-upgrade.sh cleanup
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MINOR: "{{ ocp_from_minor }}"
+    CANARY_NODE_COUNT: "{{ canary_node_count }}"
+    NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
+    UPGRADE_MCP_NAME: "{{ nrop_canary_upgrade_pool }}"
+    MANAGED_CANARY_PROFILE: "{{ nrop_canary_upgrade_profile_name if apply_perf_profile | bool else '' }}"
+    MANAGED_CANARY_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_upgrade_kubelet_config_name }}"
+    MANAGED_WORKER_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_kubelet_config_name }}"
+    NROP_TEMP_NODEGROUP_CONFIG_JSON: "{{ (nrop_fingerprint_temporary_config | to_json) if nrop_fingerprint_temporary | bool else '' }}"
+    TOPOLOGY_MANAGER_SCOPE: "{{ topology_manager_scope }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  when:
+    - canary_cleanup | bool
+  changed_when: true
+
+- name: Normalize all workers and their tuning to the standard pool
+  ansible.builtin.command:
+    cmd: /tmp/nrop-canary-skip-upgrade.sh normalize
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+    NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
+    UPGRADE_MCP_NAME: "{{ nrop_canary_upgrade_pool }}"
+    MANAGED_CANARY_PROFILE: "{{ nrop_canary_upgrade_profile_name if apply_perf_profile | bool else '' }}"
+    MANAGED_WORKER_KUBELET: "{{ '' if apply_perf_profile | bool else nrop_canary_kubelet_config_name }}"
+    NROP_TEMP_NODEGROUP_CONFIG_JSON: "{{ (nrop_fingerprint_temporary_config | to_json) if nrop_fingerprint_temporary | bool else '' }}"
+    NROP_ORIGINAL_NODEGROUP_CONFIG_JSON: >-
+      {{ (nrop_fingerprint_original_config | to_json)
+         if nrop_fingerprint_temporary | bool and nrop_fingerprint_original_config_present | bool else '' }}
+    NROP_FINGERPRINT_CR_UID: "{{ nrop_fingerprint_cr_uid if nrop_fingerprint_temporary | bool else '' }}"
+    TOPOLOGY_MANAGER_SCOPE: "{{ topology_manager_scope }}"
+    ARTIFACTS_DIR: "{{ artifacts_folder }}"
+  when: canary_cleanup | bool
+  changed_when: true
+
+- name: Restore the original canary fingerprint configuration
+  ansible.builtin.include_tasks: restore_temporary_fingerprint.yml
+  vars:
+    nrop_fingerprint_restore_pool: worker
+  when:
+    - canary_cleanup | bool
+    - nrop_fingerprint_temporary | bool
+
+- name: Remove a lane-created, unused install CatalogSource
+  ansible.builtin.include_tasks: cleanup_canary_catalog.yml
+  when: canary_cleanup | bool
+
+- name: Remove orphaned controller-generated canary MachineConfigs
+  ansible.builtin.include_tasks: cleanup_canary_generated_mcs.yml
+  when: canary_cleanup | bool
+
+- name: Verify all worker topology after canary cleanup
+  ansible.builtin.include_tasks: verify_canary_topology.yml
+  when: canary_cleanup | bool
+
+- name: Run the post-upgrade canary smoke test
+  ansible.builtin.include_tasks: verify_canary_smoke.yml
+  vars:
+    nrop_canary_smoke_phase: post
+    nrop_canary_smoke_pool: worker
+  when: canary_cleanup | bool

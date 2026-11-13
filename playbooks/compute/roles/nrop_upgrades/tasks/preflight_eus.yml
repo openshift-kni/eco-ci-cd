@@ -1,0 +1,45 @@
+---
+- name: Read the ClusterVersion before EUS preflight
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: nrop_eus_preflight_cv
+
+- name: Require a readable ClusterVersion for EUS preflight
+  ansible.builtin.assert:
+    that:
+      - nrop_eus_preflight_cv.resources | length == 1
+    fail_msg: Unable to read ClusterVersion for EUS preflight
+
+- name: Require the expected completed starting release
+  ansible.builtin.assert:
+    that:
+      - nrop_eus_preflight_cv.resources[0].status.desired.version | default('') is match('^' ~ (cluster_ocp_version | regex_escape) ~ '[.][0-9]+$')
+      - nrop_eus_preflight_cv.resources[0].status.history | default([]) | length > 0
+      - nrop_eus_preflight_cv.resources[0].status.history[0].state | default('') == 'Completed'
+      - nrop_eus_preflight_cv.resources[0].status.history[0].version | default('') == nrop_eus_preflight_cv.resources[0].status.desired.version | default('')
+      - >-
+        (nrop_eus_preflight_cv.resources[0].spec.desiredUpdate.image | default('') == '') or
+        (nrop_eus_preflight_cv.resources[0].spec.desiredUpdate.image | default('') == nrop_eus_preflight_cv.resources[0].status.desired.image | default(''))
+    fail_msg: "EUS/canary requires a completed {{ cluster_ocp_version }} starting release and no other pending upgrade"
+
+- name: Resolve the first Cincinnati hop without changing the cluster
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: resolve_hop.yml
+  vars:
+    ocp_upgrade_channel: "eus-{{ target_ocp_version }}"
+    ocp_hop_target: "{{ ocp_control_plane_hops[0] }}"
+    ocp_hop_image: "{{ ocp_hop_images[ocp_control_plane_hops[0]] | default('') }}"
+    ocp_hop_use_latest_stable: false
+    ocp_upgrade_force: true
+    ocp_upgrade_pull_secret: "{{ pull_secret_string | default('') | b64decode }}"
+    ocp_hop_then: >-
+      {{ target_ocp_version if ocp_control_plane_hops | length > 1
+         and (ocp_hop_images[target_ocp_version] | default('') | length == 0) else '' }}
+
+- name: Show the forced first EUS hop
+  ansible.builtin.debug:
+    msg: "EUS/canary OCP hops use --force and can bypass cluster recommendations and release verification. First image: {{ ocp_upgrade_target_image }}"

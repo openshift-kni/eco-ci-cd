@@ -1,0 +1,137 @@
+---
+# NROP 4.20 can disagree with RTE over workload-partitioned platform pods.
+# Keep fingerprint checking enabled, but temporarily fingerprint all pods.
+# NROP_TEMPORARY_FINGERPRINT_V1: image gate for the 4.20 compatibility path.
+- name: Read worker nodes for the 4.20 scheduling check
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: nrop_fingerprint_nodes
+
+- name: Require workers for the scheduling check
+  ansible.builtin.assert:
+    that:
+      - nrop_fingerprint_nodes.resources | length > 0
+
+- name: Record worker names and initialize workload-partition detection
+  ansible.builtin.set_fact:
+    nrop_canary_worker_names: "{{ nrop_fingerprint_nodes.resources | map(attribute='metadata.name') | list }}"
+    nrop_fingerprint_workload_partitioned: false
+
+- name: Detect workload-partitioned workers
+  ansible.builtin.set_fact:
+    nrop_fingerprint_workload_partitioned: true
+  when: item.status.capacity['management.workload.openshift.io/cores'] | default('0') not in ['0', '']
+  loop: "{{ nrop_fingerprint_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Prepare the temporary all-pod fingerprint setting
+  when: nrop_fingerprint_workload_partitioned | bool
+  block:
+    - name: Read the original worker topology fingerprints
+      kubernetes.core.k8s_info:
+        api_version: topology.node.k8s.io/v1alpha2
+        kind: NodeResourceTopology
+        name: "{{ item }}"
+      register: nrop_fingerprint_initial_nrts
+      until: nrop_fingerprint_initial_nrts.resources | length == 1
+      retries: 30
+      delay: 10
+      loop: "{{ nrop_canary_worker_names }}"
+
+    - name: Require a topology resource for each worker
+      ansible.builtin.assert:
+        that:
+          - item.resources | length == 1
+      loop: "{{ nrop_fingerprint_initial_nrts.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Initialize the saved fingerprint methods
+      ansible.builtin.set_fact:
+        nrop_fingerprint_original_methods: {}
+
+    - name: Save each worker's original fingerprint method
+      ansible.builtin.set_fact:
+        nrop_fingerprint_original_methods: >-
+          {{ nrop_fingerprint_original_methods | combine({item.item:
+             (item.resources[0].attributes | default([])
+              | selectattr('name', 'equalto', 'nodeTopologyPodsFingerprintMethod')
+              | map(attribute='value') | first | default(''))}) }}
+      loop: "{{ nrop_fingerprint_initial_nrts.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the NROP worker node group before the temporary change
+      kubernetes.core.k8s_info:
+        api_version: nodetopology.openshift.io/v1
+        kind: NUMAResourcesOperator
+        name: numaresourcesoperator
+      register: nrop_fingerprint_initial_cr
+
+    - name: Require one expected NROP worker group
+      ansible.builtin.assert:
+        that:
+          - nrop_fingerprint_initial_cr.resources | length == 1
+          - nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups | length == 1
+          - >-
+            (nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0].poolName | default('') == nrop_worker_mcp) or
+            (nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0].machineConfigPoolSelector.matchLabels[
+             'pools.operator.machineconfiguration.openshift.io/' ~ nrop_worker_mcp] | default('missing') == '')
+        fail_msg: The existing NROP node groups differ from the expected worker group; no fingerprint change was made.
+
+    - name: Save the original NROP group and temporary configuration
+      ansible.builtin.set_fact:
+        nrop_fingerprint_cr_uid: "{{ nrop_fingerprint_initial_cr.resources[0].metadata.uid }}"
+        nrop_fingerprint_original_group: "{{ nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0] }}"
+        nrop_fingerprint_original_config_present: "{{ 'config' in nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0] }}"
+        nrop_fingerprint_original_config: "{{ nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0].config | default({}) }}"
+        nrop_fingerprint_temporary_config: >-
+          {{ nrop_fingerprint_initial_cr.resources[0].spec.nodeGroups[0].config | default({})
+             | combine({'podsFingerprinting': 'Enabled'}) }}
+
+    - name: Save the original and temporary fingerprint settings
+      ansible.builtin.copy:
+        dest: "{{ artifacts_folder }}/nrop-temporary-fingerprint.json"
+        mode: '0644'
+        content: >-
+          {{ {'reason': '4.20 workload partitioning', 'original_group': nrop_fingerprint_original_group,
+              'original_methods': nrop_fingerprint_original_methods, 'temporary_config': nrop_fingerprint_temporary_config,
+              'nrop_uid': nrop_fingerprint_cr_uid} | to_nice_json }}
+      become: true
+
+    - name: Record that the fingerprint compatibility setting needs restoration
+      ansible.builtin.set_fact:
+        nrop_fingerprint_temporary: true
+
+    - name: Enable all-pod fingerprinting without changing scheduler safety settings
+      kubernetes.core.k8s_json_patch:
+        api_version: nodetopology.openshift.io/v1
+        kind: NUMAResourcesOperator
+        name: numaresourcesoperator
+        patch:
+          - op: test
+            path: /metadata/uid
+            value: "{{ nrop_fingerprint_cr_uid }}"
+          - op: test
+            path: /spec/nodeGroups/0
+            value: "{{ nrop_fingerprint_original_group }}"
+          - op: replace
+            path: /spec/nodeGroups/0
+            value: "{{ nrop_fingerprint_original_group | combine({'config': nrop_fingerprint_temporary_config}) }}"
+      when: nrop_fingerprint_original_group.config | default({}) != nrop_fingerprint_temporary_config
+
+    - name: Wait for all-pod fingerprints and healthy RTEs
+      ansible.builtin.include_tasks: wait_fingerprint.yml
+      vars:
+        nrop_fingerprint_expected_methods: "{{ dict(nrop_canary_worker_names | zip(['all'] * (nrop_canary_worker_names | length))) }}"
+        nrop_fingerprint_wait_pool: "{{ nrop_worker_mcp }}"
+
+- name: Explain the 4.20 fingerprint test mode
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Workload partitioning detected: using temporary all-pod fingerprinting for this 4.20 → 4.22 run; scheduler fingerprint checks remain enabled.'
+         if nrop_fingerprint_temporary | bool else 'No workload-partitioned workers detected; keeping the original fingerprint mode.' }}

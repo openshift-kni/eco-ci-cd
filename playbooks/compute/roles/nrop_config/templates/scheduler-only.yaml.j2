@@ -1,0 +1,6 @@
+apiVersion: nodetopology.openshift.io/v1
+kind: NUMAResourcesScheduler
+metadata:
+  name: numaresourcesscheduler
+spec:
+  imageSpec: {{ scheduler_image_uri }}

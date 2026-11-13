@@ -1,0 +1,42 @@
+---
+- name: Wait for the KubeletConfig to be observed - {{ nrop_canary_wait_kubelet }}
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: KubeletConfig
+    name: "{{ nrop_canary_wait_kubelet }}"
+  register: nrop_canary_kubelet
+  until:
+    - nrop_canary_kubelet.resources | length == 1
+    - nrop_canary_kubelet.resources[0].status.observedGeneration | default(0) | int >= nrop_canary_kubelet.resources[0].metadata.generation | int
+    - nrop_canary_kubelet.resources[0].status.conditions | default([]) | length > 0
+    - (nrop_canary_kubelet.resources[0].status.conditions | last).type | default('') == 'Success'
+    - (nrop_canary_kubelet.resources[0].status.conditions | last).status | default('') == 'True'
+  retries: 120
+  delay: 10
+
+- name: Wait for the KubeletConfig-owned MachineConfig
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+  register: nrop_canary_kubelet_mcs
+  vars:
+    nrop_kubelet_owner_query: >-
+      [?metadata.ownerReferences[?uid=='{{ nrop_canary_kubelet.resources[0].metadata.uid }}'] &&
+      metadata.labels."machineconfiguration.openshift.io/role"=='{{ nrop_canary_wait_pool }}'].metadata.name
+  until:
+    - nrop_canary_kubelet_mcs.resources | community.general.json_query(nrop_kubelet_owner_query) | length == 1
+  retries: 120
+  delay: 10
+
+- name: Remember the generated KubeletConfig MachineConfig
+  ansible.builtin.set_fact:
+    nrop_canary_kubelet_mc_name: "{{ nrop_canary_kubelet_mcs.resources | community.general.json_query(nrop_kubelet_owner_query) | first }}"
+  vars:
+    nrop_kubelet_owner_query: >-
+      [?metadata.ownerReferences[?uid=='{{ nrop_canary_kubelet.resources[0].metadata.uid }}'] &&
+      metadata.labels."machineconfiguration.openshift.io/role"=='{{ nrop_canary_wait_pool }}'].metadata.name
+
+- name: Wait for the KubeletConfig to apply to pool - {{ nrop_canary_wait_pool }}
+  ansible.builtin.include_tasks: wait_canary_pool.yml
+  vars:
+    nrop_canary_wait_source: "{{ nrop_canary_kubelet_mc_name }}"

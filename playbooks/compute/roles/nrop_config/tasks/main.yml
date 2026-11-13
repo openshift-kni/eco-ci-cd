@@ -22,9 +22,13 @@
     ocp_version_major: "{{ api_version.resources[0].status.desired.version.split('.')[0] }}"
     ocp_version_minor: "{{ api_version.resources[0].status.desired.version.split('.')[1] }}"
 
+- name: Set NROP target version
+  ansible.builtin.set_fact:
+    nrop_config_version: "{{ nrop_config_target_version if nrop_config_target_version | length > 0 else (ocp_version_major ~ '.' ~ ocp_version_minor) }}"
+
 - name: Set NROP registry namespace from OCP version
   ansible.builtin.set_fact:
-    nrop_registry_ns: "{{ 'openshift5' if (ocp_version_major | int) >= 5 else 'openshift4' }}"
+    nrop_registry_ns: "{{ 'openshift5' if nrop_config_version is version('5.0', '>=') else 'openshift4' }}"
 
 - name: Set scheduler image registry from OCP version
   ansible.builtin.set_fact:
@@ -54,9 +58,14 @@
 
 - name: Deploy performance profile
   ansible.builtin.include_tasks: preformance_profile.yml
+  when:
+    - nrop_config_apply_perf_profile | bool
+    - not (nrop_config_operator_only | bool)
 
 - name: Deploy Sample Device
-  when: deploy_performance_profile_only | bool is false
+  when:
+    - deploy_performance_profile_only | bool is false
+    - not (nrop_config_operator_only | bool)
   ansible.builtin.include_tasks: deploy_manifest.yml
   vars:
     template_name: "templates/{{ item }}.yaml.j2"

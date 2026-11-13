@@ -1,0 +1,141 @@
+---
+- name: Validate and resolve lane parameters
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Resolve lane facts
+  ansible.builtin.include_tasks: resolve.yml
+
+- name: Validate custom OCP images before changing the cluster
+  ansible.builtin.include_tasks: preflight_custom_image.yml
+  loop: "{{ ocp_hop_images | dict2items }}"
+  loop_control:
+    loop_var: ocp_custom_image
+
+- name: Check the stable starting OCP release
+  ansible.builtin.include_tasks: preflight_stable_upgrade.yml
+  when: upgrade_type in ['minor-long', 'range']
+
+- name: Check the first Cincinnati hop before installing NROP or pausing workers
+  ansible.builtin.include_tasks: preflight_eus.yml
+  when:
+    - upgrade_type in ['eus', 'canary']
+    - ocp_control_plane_hops | length > 0
+
+- name: Create the lane artifacts directory
+  ansible.builtin.file:
+    path: "{{ artifacts_folder }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  become: true
+
+- name: Record lane run metadata
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/nrop-upgrades-lane-{{ upgrade_type }}.json"
+    mode: "0644"
+    content: "{{ lane_record | to_nice_json }}"
+  become: true
+  vars:
+    lane_record:
+      upgrade_type: "{{ upgrade_type }}"
+      upgrade_env: "{{ upgrade_env }}"
+      from_ocp_version: "{{ from_ocp_version }}"
+      to_ocp_version: "{{ to_ocp_version }}"
+      cluster_ocp_version: "{{ cluster_ocp_version }}"
+      target_ocp_version: "{{ target_ocp_version }}"
+      install_nrop_version: "{{ install_nrop_version }}"
+      nrop_env_from: "{{ nrop_env_from }}"
+      nrop_env_to: "{{ nrop_env_to }}"
+      ocp_upgrade_hops: "{{ ocp_upgrade_hops }}"
+      ocp_control_plane_hops: "{{ ocp_control_plane_hops }}"
+
+- name: Check the canary tuning starting state
+  ansible.builtin.include_tasks: preflight_canary_tuning.yml
+  when: upgrade_type == 'canary'
+
+- name: Prepare the regular worker pool for canary
+  ansible.builtin.include_tasks: prepare_canary_worker_pool.yml
+  when: upgrade_type == 'canary'
+
+- name: Prepare the empty upgrade pool for standalone KubeletConfig
+  ansible.builtin.include_tasks: prepare_canary_upgrade_pool_base.yml
+  when:
+    - upgrade_type == 'canary'
+    - not (apply_perf_profile | bool)
+
+- name: Prepare the standalone worker KubeletConfig for canary
+  ansible.builtin.include_tasks: prepare_canary_kubelet.yml
+  when:
+    - upgrade_type == 'canary'
+    - not (apply_perf_profile | bool)
+
+- name: Record the install CatalogSource before EUS or canary installation
+  ansible.builtin.include_tasks: record_canary_catalog.yml
+  when: upgrade_type in ['eus', 'canary']
+
+- name: Install NROP at lane start version
+  ansible.builtin.include_tasks: install_nrop.yml
+  vars:
+    nrop_catalog_source: "{{ nrop_env_from }}"
+    nrop_operator_version: "{{ install_nrop_version }}"
+    nrop_artifact_phase: install
+
+- name: Mark the CatalogSource created for EUS or canary installation
+  ansible.builtin.include_tasks: mark_canary_catalog.yml
+  when:
+    - upgrade_type in ['eus', 'canary']
+    - nrop_canary_initial_catalog.resources | length == 0
+
+- name: Verify deployment before OCP hop
+  ansible.builtin.include_tasks: verify_nrop.yml
+  when:
+    - upgrade_type == 'minor-long'
+    - verify_deployment | bool
+
+- name: Prepare and verify the EUS or canary baseline
+  block:
+    - name: Prepare the temporary 4.20 fingerprint compatibility setting
+      ansible.builtin.include_tasks: prepare_temporary_fingerprint.yml
+      when:
+        - upgrade_type in ['eus', 'canary']
+        - cluster_ocp_version == '4.20'
+        - target_ocp_version == '4.22'
+        - upgrade_type == 'canary' or (apply_perf_profile | bool)
+
+    - name: Verify worker topology before EUS or canary setup
+      ansible.builtin.include_tasks: verify_canary_topology.yml
+      when: >-
+        upgrade_type == 'canary' or
+        (upgrade_type == 'eus' and cluster_ocp_version == '4.20' and target_ocp_version == '4.22' and apply_perf_profile | bool)
+
+    - name: Run the pre-upgrade EUS or canary smoke test
+      ansible.builtin.include_tasks: verify_canary_smoke.yml
+      vars:
+        nrop_canary_smoke_phase: pre
+        nrop_canary_smoke_pool: "{{ nrop_worker_mcp }}"
+      when: >-
+        upgrade_type == 'canary' or
+        (upgrade_type == 'eus' and cluster_ocp_version == '4.20' and target_ocp_version == '4.22' and apply_perf_profile | bool)
+
+    - name: Recheck the Cincinnati path after NROP installation
+      ansible.builtin.include_tasks: preflight_eus.yml
+      when:
+        - upgrade_type in ['eus', 'canary']
+        - ocp_control_plane_hops | length > 0
+  rescue:
+    - name: Remember the baseline failure before restoring temporary settings
+      ansible.builtin.set_fact:
+        nrop_baseline_failure: "{{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('See the earlier failure'), true) }}"
+
+    - name: Restore the original fingerprint after a baseline failure
+      ansible.builtin.include_tasks: restore_temporary_fingerprint.yml
+      vars:
+        nrop_fingerprint_restore_pool: "{{ nrop_worker_mcp }}"
+      when: nrop_fingerprint_temporary | bool
+
+    - name: Report the EUS or canary baseline failure
+      ansible.builtin.fail:
+        msg: "EUS/canary baseline failed: {{ nrop_baseline_failure }}"
+
+- name: Run lane-specific upgrade path
+  ansible.builtin.include_tasks: "lanes/{{ upgrade_type }}.yml"

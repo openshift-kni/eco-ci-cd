@@ -1,0 +1,65 @@
+---
+- name: Read the NROP group before restoring its fingerprint configuration
+  kubernetes.core.k8s_info:
+    api_version: nodetopology.openshift.io/v1
+    kind: NUMAResourcesOperator
+    name: numaresourcesoperator
+  register: nrop_fingerprint_final_cr
+
+- name: Require the original NROP object and one final worker group
+  ansible.builtin.assert:
+    that:
+      - nrop_fingerprint_final_cr.resources | length == 1
+      - nrop_fingerprint_final_cr.resources[0].metadata.uid == nrop_fingerprint_cr_uid
+      - nrop_fingerprint_final_cr.resources[0].spec.nodeGroups | length == 1
+      - >-
+        (nrop_fingerprint_final_cr.resources[0].spec.nodeGroups[0].poolName | default('') == nrop_fingerprint_restore_pool) or
+        (nrop_fingerprint_final_cr.resources[0].spec.nodeGroups[0].machineConfigPoolSelector.matchLabels[
+         'pools.operator.machineconfiguration.openshift.io/' ~ nrop_fingerprint_restore_pool] | default('missing') == '')
+    fail_msg: The NROP object or final worker group changed unexpectedly; refusing to overwrite it.
+
+- name: Record the final worker group
+  ansible.builtin.set_fact:
+    nrop_fingerprint_final_group: "{{ nrop_fingerprint_final_cr.resources[0].spec.nodeGroups[0] }}"
+
+- name: Require the temporary or original fingerprint configuration
+  ansible.builtin.assert:
+    that:
+      - >-
+        (nrop_fingerprint_final_group.config | default({})) == nrop_fingerprint_temporary_config or
+        (nrop_fingerprint_final_group.config | default({})) == nrop_fingerprint_original_config
+    fail_msg: NROP node-group configuration changed concurrently; refusing to overwrite it.
+
+- name: Build the restored final worker group
+  ansible.builtin.set_fact:
+    nrop_fingerprint_restored_group: >-
+      {{ (nrop_fingerprint_final_group | combine({'config': nrop_fingerprint_original_config}))
+         if nrop_fingerprint_original_config_present | bool
+         else (nrop_fingerprint_final_group | dict2items | rejectattr('key', 'equalto', 'config') | items2dict) }}
+
+- name: Restore the original fingerprint configuration
+  kubernetes.core.k8s_json_patch:
+    api_version: nodetopology.openshift.io/v1
+    kind: NUMAResourcesOperator
+    name: numaresourcesoperator
+    patch:
+      - op: test
+        path: /metadata/uid
+        value: "{{ nrop_fingerprint_cr_uid }}"
+      - op: test
+        path: /spec/nodeGroups/0
+        value: "{{ nrop_fingerprint_final_group }}"
+      - op: replace
+        path: /spec/nodeGroups/0
+        value: "{{ nrop_fingerprint_restored_group }}"
+  when: nrop_fingerprint_final_group != nrop_fingerprint_restored_group
+
+- name: Wait for the original fingerprint methods and healthy worker RTEs
+  ansible.builtin.include_tasks: wait_fingerprint.yml
+  vars:
+    nrop_fingerprint_expected_methods: "{{ nrop_fingerprint_original_methods }}"
+    nrop_fingerprint_wait_pool: "{{ nrop_fingerprint_restore_pool }}"
+
+- name: Report the restored fingerprint settings
+  ansible.builtin.debug:
+    msg: Original NROP fingerprint settings restored; scheduler fingerprint checks were never disabled.

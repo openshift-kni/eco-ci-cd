@@ -1,0 +1,20 @@
+---
+- name: Upgrade OCP one hop (Cincinnati edge + oc adm upgrade)
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+  vars:
+    ocp_hop_target: "{{ nrop_hop_version }}"
+    ocp_hop_image: "{{ ocp_hop_images[nrop_hop_version] | default('') }}"
+    ocp_hop_use_latest_stable: "{{ upgrade_type in ['minor-long', 'range'] }}"
+    ocp_hop_allow_not_recommended: "{{ upgrade_type in ['eus', 'canary'] }}"
+    ocp_upgrade_force: true
+    ocp_upgrade_pull_secret: "{{ pull_secret_string | default('') | b64decode }}"
+    ocp_hop_then: >-
+      {{ target_ocp_version if upgrade_type in ['eus', 'canary'] and nrop_hop_version != target_ocp_version
+         and (ocp_hop_images[target_ocp_version] | default('') | length == 0) else '' }}
+    ocp_upgrade_channel: >-
+      {{
+        ('eus-' ~ target_ocp_version)
+        if upgrade_type in ['eus', 'canary']
+        else ('stable-' ~ nrop_hop_version)
+      }}

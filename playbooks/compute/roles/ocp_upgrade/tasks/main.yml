@@ -1,0 +1,59 @@
+---
+- name: Require OCP hop target
+  ansible.builtin.assert:
+    that:
+      - kubeconfig | default('') | length > 0
+      - ocp_hop_target is defined
+      - ocp_hop_target is match('^[0-9]+\\.[0-9]+$')
+      - ocp_upgrade_channel is defined
+      - ocp_upgrade_channel | length > 0
+    fail_msg: kubeconfig, a major.minor ocp_hop_target and ocp_upgrade_channel are required for an OCP hop
+
+- name: Get cluster version before hop
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: ocp_upgrade_cv
+
+- name: Resolve the OCP hop image
+  ansible.builtin.include_tasks: resolve_hop.yml
+
+- name: Upgrade OCP to the selected release
+  ansible.builtin.command:
+    cmd: >-
+      oc adm upgrade --to-image {{ ocp_upgrade_target_image }}
+      --allow-explicit-upgrade
+      {{ '--allow-upgrade-with-warnings --force' if ocp_upgrade_force | bool else '' }}
+      {{ '--allow-not-recommended' if ocp_hop_allow_not_recommended | bool else '' }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  register: ocp_upgrade_command
+  changed_when: ocp_upgrade_command.rc == 0
+
+- name: Wait for OCP hop to finish
+  ansible.builtin.include_tasks: wait_cvo_progressing.yml
+
+- name: Get cluster version after hop
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: ocp_upgrade_cv_after
+
+- name: Write OCP hop summary artifact
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/ocp-upgrade-hop-{{ ocp_hop_target | replace('.', '-') }}.json"
+    mode: "0644"
+    content: "{{ hop_summary | to_nice_json }}"
+  become: true
+  vars:
+    hop_summary:
+      channel: "{{ ocp_upgrade_channel }}"
+      hop_target: "{{ ocp_hop_target }}"
+      desired_version_before: "{{ ocp_upgrade_cv.resources[0].status.desired.version }}"
+      release_image: "{{ ocp_upgrade_target_image }}"
+      desired_version_after: "{{ ocp_upgrade_cv_after.resources[0].status.desired.version | default('') }}"
+      desired_image_after: "{{ ocp_upgrade_cv_after.resources[0].status.desired.image | default('') }}"

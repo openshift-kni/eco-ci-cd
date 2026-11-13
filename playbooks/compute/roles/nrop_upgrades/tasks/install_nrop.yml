@@ -1,0 +1,43 @@
+---
+- name: Authorize the target scheduler digest before upgrading NROP
+  ansible.builtin.include_tasks: prepare_scheduler_digest.yml
+  when: nrop_artifact_phase == 'upgrade'
+
+- name: Deploy NROP operator subscription
+  ansible.builtin.include_tasks: deploy_operators.yml
+
+- name: Configure NROP on worker MCP (MNO)
+  ansible.builtin.include_role:
+    name: nrop_config
+  vars:
+    test_env: "{{ nrop_catalog_source }}"
+    scheduable_master: false
+    is_full_schedulable_cluster: false
+    deploy_performance_profile_only: false
+    nrop_config_apply_perf_profile: false
+    nrop_config_profile_if_missing: true
+    nrop_config_target_version: "{{ nrop_operator_version }}"
+    nrop_config_operator_only: "{{ nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'] }}"
+    nrop_config_worker_pool: "{{ nrop_worker_mcp | default('worker') }}"
+
+- name: Wait for the NROP operator and scheduler
+  ansible.builtin.include_tasks: wait_nrop.yml
+
+- name: Apply a missing performance profile after NROP is ready
+  ansible.builtin.include_role:
+    name: nrop_config
+    tasks_from: preformance_profile.yml
+  vars:
+    nrop_config_profile_if_missing: true
+  when:
+    - apply_perf_profile | bool
+    - not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+
+- name: Verify NROP after the performance profile rollout
+  ansible.builtin.include_tasks: wait_nrop.yml
+  when:
+    - apply_perf_profile | bool
+    - not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+
+- name: Write NROP lane artifacts (digests and manifests)
+  ansible.builtin.include_tasks: artifacts.yml

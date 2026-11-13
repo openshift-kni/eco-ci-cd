@@ -1,0 +1,19 @@
+---
+upgrade_type: ""
+from_ocp_version: ""
+to_ocp_version: ""
+upgrade_env: prod-stage
+nrop_channel: stable
+apply_perf_profile: true
+topology_manager_scope: pod
+verify_deployment: false
+canary_node_count: "1"
+canary_cleanup: true
+custom_ocp_images: ""
+artifacts_folder: /artifacts
+kubeconfig: ""
+nrop_canary_profile_worker_pool: worker-perf
+nrop_canary_upgrade_pool: worker-upgrade
+nrop_canary_upgrade_profile_name: "{{ nrop_canary_upgrade_pool }}-performance-nrop"
+nrop_canary_kubelet_config_name: nrop-canary-worker-tuning
+nrop_canary_upgrade_kubelet_config_name: nrop-canary-upgrade-tuning

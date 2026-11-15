@@ -23,10 +23,17 @@
   when: item.catalog  == stage
 
 - name: Deploy stage ImageDigestMirrorSet if needed
-  when: item.catalog  == stage
+  when: item.catalog == stage and ocp_operator_deployment_version is version('4.14', '>=')
   loop: "{{ ocp_operator_deployment_operators }}"
   kubernetes.core.k8s:
     template: "{{ role_path }}/templates/imagedigestmirrorset.j2"
+    state: present
+
+- name: Deploy stage ImageContentSourcePolicy if needed
+  when: item.catalog == stage and ocp_operator_deployment_version is version('4.14', '<')
+  loop: "{{ ocp_operator_deployment_operators }}"
+  kubernetes.core.k8s:
+    template: "{{ role_path }}/templates/imagecontentsourcepolicy.j2"
     state: present
 
 - name: Deploy pre-ga CatalogSource

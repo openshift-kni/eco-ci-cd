@@ -1,0 +1,55 @@
+---
+- name: Prepare and mirror the target using temporary credentials
+  block:
+    - name: Create the temporary auth file
+      ansible.builtin.tempfile:
+        state: file
+        prefix: arm-ibx-auth-
+      register: arm_ibx_auth
+
+    - name: Write source and disconnected registry credentials
+      ansible.builtin.copy:
+        content: >-
+          {{ source_auth | combine({'auths': {registry: registry_auth}}, recursive=True) | to_json }}
+        dest: "{{ arm_ibx_auth.path }}"
+        mode: '0600'
+      vars:
+        source_auth: "{{ pull_secret_string | b64decode | from_json }}"
+        registry: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        registry_auth:
+          auth: "{{ (ansible_user ~ ':' ~ ansible_password) | b64encode }}"
+      no_log: true
+
+    # Pin and verify the target before mirroring it.
+    - name: Pin and verify the target release
+      ansible.builtin.include_tasks: arm-ibx-pin-release.yml
+      vars:
+        arm_ibx_release:
+          key: target
+          value: "{{ arm_ibx_releases.target }}"
+
+    - name: Mirror the pinned target and its boot images
+      ansible.builtin.include_role:
+        name: redhatci.ocp.mirror_ocp_release
+      vars:
+        mor_oc: "{{ ansible_user_dir }}/.local/bin/oc"
+        mor_version: "{{ arm_ibx_releases.target.version }}"
+        mor_pull_url: "{{ arm_ibx_releases.target.image }}"
+        mor_cache_dir: "/opt/cache/arm-ibx/{{ arm_ibx_releases.target.version }}"
+        mor_webserver_url: "http://{{ ansible_host }}:{{ share_http_iso_port }}/"
+        mor_registry_url: "{{ disconnected_registry_url }}:{{ disconnected_registry_port }}"
+        mor_registry_path: "{{ 'ocp' ~ arm_ibx_releases.target.version.split('.')[0] }}"
+        mor_auths_file: "{{ arm_ibx_auth.path }}"
+        mor_force: true
+        mor_install_type: acm
+        mor_is_type: idms
+        mor_mirror_disk_images: true
+        mor_mirror_container_images: true
+        mor_write_custom_config: true
+
+  always:
+    - name: Remove temporary credentials
+      ansible.builtin.file:
+        path: "{{ arm_ibx_auth.path }}"
+        state: absent
+      when: arm_ibx_auth.path is defined

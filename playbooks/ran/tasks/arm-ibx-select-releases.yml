@@ -1,0 +1,46 @@
+---
+- name: Initialize target candidates
+  ansible.builtin.set_fact:
+    arm_ibx_target_candidates: []
+
+- name: Collect accepted GA targets in the starting minor
+  ansible.builtin.set_fact:
+    arm_ibx_target_candidates: >-
+      {{ arm_ibx_target_candidates + [{
+           'version': item.name,
+           'source': item.pullSpec,
+           'patch': item.name.split('.')[2] | int
+         }] }}
+  loop: >-
+    {{ ga_stream.json.tags | selectattr('phase', 'equalto', 'Accepted')
+       | selectattr('name', 'match',
+           '^' ~ (arm_ibx_target_minors[arm_ibx_version] | regex_escape) ~ '[.][0-9]+$') | list }}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require the exact preceding patch for the 4.20 lane
+  ansible.builtin.set_fact:
+    arm_ibx_target_candidates: >-
+      {{ arm_ibx_target_candidates | selectattr('patch', 'equalto',
+           (arm_ibx_installed_seed_version.split('.')[2] | int) - 1) | list }}
+  when: arm_ibx_version == '4.20'
+
+- name: Require an accepted GA target
+  ansible.builtin.assert:
+    that:
+      - arm_ibx_target_candidates | length > 0
+    fail_msg: >-
+      No accepted GA target in {{ arm_ibx_target_minors[arm_ibx_version] }}
+      matches seed {{ arm_ibx_installed_seed_version }}.
+      For 4.20 the exact preceding patch must exist.
+
+- name: Record the existing seed and resolved target
+  ansible.builtin.set_fact:
+    arm_ibx_releases:
+      seed:
+        version: "{{ arm_ibx_installed_seed_version }}"
+      target:
+        version: "{{ target.version }}"
+        source: "{{ target.source }}"
+  vars:
+    target: "{{ arm_ibx_target_candidates | sort(attribute='patch') | last }}"

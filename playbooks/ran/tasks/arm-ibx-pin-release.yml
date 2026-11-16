@@ -1,0 +1,70 @@
+---
+- name: Resolve the source index digest
+  ansible.builtin.command:
+    argv:
+      - skopeo
+      - inspect
+      - --no-tags
+      - --authfile
+      - "{{ arm_ibx_auth.path }}"
+      - --format
+      - "{% raw %}{{ .Digest }}{% endraw %}"
+      - "docker://{{ arm_ibx_release.value.source }}"
+  register: release_digest
+  changed_when: false
+
+- name: Require a valid SHA256 digest
+  ansible.builtin.assert:
+    that:
+      - release_digest.stdout | trim is match('^sha256:[a-f0-9]{64}$')
+
+- name: Build the immutable image reference
+  ansible.builtin.set_fact:
+    arm_ibx_pinned_image: >-
+      {{ arm_ibx_release.value.source | regex_replace('(@.*|:[^/:]+)$', '')
+         ~ '@' ~ (release_digest.stdout | trim) }}
+
+- name: Read the pinned index architectures
+  ansible.builtin.command:
+    argv:
+      - skopeo
+      - inspect
+      - --raw
+      - --authfile
+      - "{{ arm_ibx_auth.path }}"
+      - "docker://{{ arm_ibx_pinned_image }}"
+  register: release_index
+  changed_when: false
+
+- name: Read the pinned payload version
+  ansible.builtin.command:
+    argv:
+      - oc
+      - adm
+      - release
+      - info
+      - "{{ arm_ibx_pinned_image }}"
+      - "--registry-config={{ arm_ibx_auth.path }}"
+      - --output=json
+  register: release_metadata
+  changed_when: false
+
+- name: Verify the version and required architectures
+  ansible.builtin.assert:
+    that:
+      - "'amd64' in architectures"
+      - "'arm64' in architectures"
+      - payload_version == arm_ibx_release.value.version
+  vars:
+    architectures: >-
+      {{ (release_index.stdout | from_json).get('manifests', [])
+         | selectattr('platform', 'defined') | map(attribute='platform.architecture') | list }}
+    payload_version: >-
+      {{ (release_metadata.stdout | from_json).metadata.version
+         | regex_replace('-(multi|arm64|aarch64)-', '-') }}
+
+- name: Save the verified immutable image
+  ansible.builtin.set_fact:
+    arm_ibx_releases: >-
+      {{ arm_ibx_releases | combine({arm_ibx_release.key:
+           arm_ibx_release.value | combine({'image': arm_ibx_pinned_image})}) }}

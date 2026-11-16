@@ -1,0 +1,41 @@
+---
+- name: Read the seed's installed ClusterVersion
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+    kubeconfig: "{{ arm_ibx_seed_kubeconfig }}"
+  register: arm_ibx_seed_cluster_version
+
+- name: Require an installed seed version
+  ansible.builtin.assert:
+    that:
+      - arm_ibx_seed_cluster_version.resources | length == 1
+      - arm_ibx_seed_cluster_version.resources[0].status.desired.version | length > 0
+
+- name: Record the installed seed version
+  ansible.builtin.set_fact:
+    arm_ibx_installed_seed_version: >-
+      {{ arm_ibx_seed_cluster_version.resources[0].status.desired.version
+         | regex_replace('-(multi|arm64|aarch64)-', '-') }}
+
+- name: Validate the installed seed for this lane
+  ansible.builtin.assert:
+    that:
+      - arm_ibx_installed_seed_version.startswith(arm_ibx_version ~ '.')
+      - >-
+        arm_ibx_version != '4.20' or
+        arm_ibx_installed_seed_version is match('^4[.]20[.][0-9]+$')
+    fail_msg: Seed must belong to the selected lane; 4.20 requires a GA seed.
+
+- name: Read stable multi-architecture releases for the target
+  ansible.builtin.uri:
+    url: >-
+      https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/{{ target_major }}-stable-multi/tags
+    return_content: true
+  vars:
+    target_major: "{{ arm_ibx_target_minors[arm_ibx_version].split('.')[0] }}"
+  register: ga_stream
+
+- name: Select the target release
+  ansible.builtin.include_tasks: arm-ibx-select-releases.yml

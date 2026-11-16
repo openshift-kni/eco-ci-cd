@@ -1,0 +1,51 @@
+---
+# Once seed image generation completes in the ARM IBX lane, the seed image is
+# available at arm-ibx/seed in the disconnected registry.
+# This playbook reads the installed seed version, resolves the target release,
+# and mirrors only the target payload to ocp4/openshift/release-images.
+#
+# Usage:
+#   ansible-playbook playbooks/ran/arm-ibx-prepare-releases.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     -e arm_ibx_version=4.20 \
+#     -e spoke_cluster=helix95 \
+#     -e "arm_ibx_releases_file=${PWD}/arm-ibx-releases.json"
+
+# note - the arm_ibx_releases_file var is where a json file is saved that contains the target release data.
+
+- name: Prepare the ARM IBX target release
+  hosts: bastion
+  gather_facts: true
+  vars:
+    arm_ibx_seed_kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+    arm_ibx_target_minors:
+      '4.20': '4.20'
+      '4.22': '4.20'
+      '5.0': '4.22'
+  tasks:
+    - name: Validate the lane and controller output path
+      ansible.builtin.assert:
+        that:
+          - arm_ibx_version in arm_ibx_target_minors
+          - arm_ibx_releases_file | length > 0
+          - arm_ibx_seed_kubeconfig | length > 0
+        fail_msg: Supported ARM IBX lanes are 4.20, 4.22, and 5.0.
+
+    - name: Read the installed seed and resolve the target
+      ansible.builtin.include_tasks: tasks/arm-ibx-resolve-releases.yml
+
+    - name: Show the installed seed and resolved target versions
+      ansible.builtin.debug:
+        msg:
+          - "Installed seed version: {{ arm_ibx_releases.seed.version }}"
+          - "Resolved target version: {{ arm_ibx_releases.target.version }}"
+
+    - name: Verify and mirror the target payload
+      ansible.builtin.include_tasks: tasks/arm-ibx-mirror-releases.yml
+
+    - name: Save the release pair on the controller
+      ansible.builtin.copy:
+        content: "{{ arm_ibx_releases | to_nice_json }}\n"
+        dest: "{{ arm_ibx_releases_file }}"
+        mode: '0644'
+      delegate_to: localhost

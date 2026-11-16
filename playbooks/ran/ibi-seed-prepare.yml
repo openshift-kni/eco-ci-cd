@@ -24,7 +24,9 @@
 #   - Validate all required inputs and enforce a single seed bastion target
 #   - Create output directories and remove any stale result files on the controller
 #   - Import ibu-prepare-spoke-sno.yml to retrieve kubeconfig and fix CoreOS extensions image
-#   - Read and validate the seed ClusterVersion (desired version matches Completed history entry)
+#   - Retry failed ClusterVersion reads, then validate the completed seed version
+#     (five retries, 10-second delay, 120-second action timeout including SSH overhead;
+#     action timeouts and unreachable hosts stop immediately)
 #   - Require successful extensions-image lookup and copy when the shared preparation enables them
 #   - Write the validated version to ibi_seed_version_file on the controller
 #   - On failure: save sanitised diagnostics to ibi-seed-version-error.json and fail
@@ -120,6 +122,11 @@
             kind: ClusterVersion
             name: version
           register: _ibi_seed_query
+          # Retry returned module failures; the timeout bounds a hung task action.
+          until: _ibi_seed_query is succeeded
+          retries: 5
+          delay: 10
+          timeout: 120
           no_log: true
           ignore_unreachable: true
 
@@ -178,21 +185,59 @@
       rescue:
         - name: Save seed version failure diagnostics
           ansible.builtin.copy:
-            content: "{{ _ibi_seed_diagnostic | to_nice_json }}\n"
+            content: "{{ _ibi_seed_diagnostic | combine(_ibi_seed_query_metadata) | to_nice_json }}\n"
             dest: "{{ ibi_seed_diagnostics_dir }}/ibi-seed-version-error.json"
             mode: '0600'
+          no_log: true
           delegate_to: localhost
           become: false
           vars:
             ansible_python_interpreter: "{{ ansible_playbook_python }}"
+            # Action timeouts may bypass registration of the query result.
+            _ibi_seed_query_result: >-
+              {{ ansible_failed_result if ansible_failed_task.name == 'Read the prepared seed ClusterVersion'
+                 else (_ibi_seed_query | default({})) }}
+            # Inspect error text privately; publish only fixed category names.
+            _ibi_seed_error_text: >-
+              {{ [ansible_failed_result.msg | default(''),
+                  ansible_failed_result.exception | default(''),
+                  ansible_failed_result.module_stderr | default('')]
+                 | map('string') | join(' ') | lower }}
+            _ibi_seed_error_category: >-
+              {% if _ibi_seed_query_result.unreachable | default(false) | bool %}
+              transport
+              {% elif ansible_failed_result.timedout is defined %}
+              timeout
+              {% elif ansible_failed_task.action in ['assert', 'ansible.builtin.assert'] %}
+              validation
+              {% elif _ibi_seed_error_text is search('readtimeout|connecttimeout|timeouterror|timed out') %}
+              timeout
+              {% elif _ibi_seed_error_text is search('sslerror|certificate_verify_failed|certificate verify failed') %}
+              tls
+              {% elif _ibi_seed_error_text is search('unauthorized|invalid bearer token') %}
+              authentication
+              {% elif _ibi_seed_error_text is search('forbidden') %}
+              authorization
+              {% elif _ibi_seed_error_text is search('nameresolutionerror|gaierror|temporary failure in name resolution|name or service not known') %}
+              dns
+              {% elif _ibi_seed_error_text is search('connection refused|connection reset|network is unreachable|no route to host') %}
+              connection
+              {% else %}
+              unknown
+              {% endif %}
+            # Keep absent fields as JSON null, not empty strings in older Ansible.
+            # The attempts counter is Ansible-reported, not a reconstructed total.
+            _ibi_seed_query_metadata: >-
+              {{ {'api_found': _ibi_seed_query_result.api_found | default(none),
+                  'attempts': _ibi_seed_query_result.attempts | default(none)} }}
             _ibi_seed_diagnostic:
               failed_task: "{{ ansible_failed_task.name }}"
-              query_failed: "{{ _ibi_seed_query.failed | default(false) | bool }}"
-              unreachable: "{{ _ibi_seed_query.unreachable | default(false) | bool }}"
-              api_found: "{{ _ibi_seed_query.api_found | default(false) | bool }}"
+              query_failed: "{{ _ibi_seed_query_result.failed | default(false) | bool }}"
+              unreachable: "{{ _ibi_seed_query_result.unreachable | default(false) | bool }}"
+              error_category: "{{ _ibi_seed_error_category | trim }}"
               message: >-
-                Seed version was not published. Check the failed task and seed API
-                availability. Raw API responses and exception text are withheld.
+                Seed version was not published. Check the failed task and error category.
+                Raw API responses and exception text are withheld.
 
         - name: Fail seed preparation after saving diagnostics
           ansible.builtin.fail:

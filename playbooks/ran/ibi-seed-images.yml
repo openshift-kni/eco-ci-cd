@@ -349,17 +349,13 @@
           # Keep the host active on SSH failures so the always section still runs.
           ignore_unreachable: true
           block:
-            - name: Load target inventory without exposing credentials
-              ansible.builtin.include_vars:
-                file: "{{ item }}"
-                name: ibi_target_file_vars
-              loop: "{{ ibi_target_inventory_files }}"
-              register: ibi_target_loaded
-              no_log: true
-
-            - name: Combine target inventory in precedence order
+            - name: Load target connection settings in precedence order
               ansible.builtin.set_fact:
-                ibi_target_inventory: "{{ ibi_target_loaded.results | map(attribute='ansible_facts.ibi_target_file_vars') | list | combine }}"
+                ibi_target_inventory: >-
+                  {{ query('ansible.builtin.file', *ibi_target_inventory_files)
+                     | map('from_yaml') | list | combine
+                     | dict2items | selectattr('key', 'match', '^ansible_')
+                     | items2dict }}
               no_log: true
 
             - name: Require target connection identity
@@ -588,10 +584,6 @@
                 chdir: "{{ playbook_dir }}/../.."
               delegate_to: localhost
               become: false
-              vars:
-                ansible_async_dir: "{{ hostvars[inventory_hostname].ibi_controller_work.path }}/async"
-              async: "{{ ibi_seed_copy_budget | int + 15 }}"
-              poll: 10
               changed_when: true
               no_log: true
 

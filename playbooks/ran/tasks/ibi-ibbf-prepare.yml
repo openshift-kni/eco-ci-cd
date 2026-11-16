@@ -1,0 +1,639 @@
+---
+# Prepare the target bastion and retain the original IBBF baseline.
+# Included by ibi-ibbf.yml; uses its shared execution state.
+- name: Create the private bastion directory
+  ansible.builtin.file:
+    path: "{{ ibi_ibbf_private_dir }}"
+    state: directory
+    mode: '0700'
+  register: ibi_ibbf_private_create
+
+- name: Require the bastion to be reachable
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_private_create is not unreachable
+    fail_msg: Cannot prepare private IBBF files on the bastion.
+
+- name: Read the target kubeconfig secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ ibi_ibbf_config.spoke }}"
+    name: "{{ ibi_ibbf_config.spoke }}-admin-kubeconfig"
+  register: ibi_ibbf_kubeconfig_secret
+  timeout: 120
+  no_log: true
+
+- name: Require one target kubeconfig secret
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_kubeconfig_secret.resources | default([]) | length == 1
+      - ibi_ibbf_kubeconfig_secret.resources[0].data.kubeconfig | default('') | length > 0
+    fail_msg: Could not retrieve the target spoke kubeconfig.
+
+- name: Write the target kubeconfig privately on the bastion
+  ansible.builtin.copy:
+    dest: "{{ ibi_ibbf_config.spoke_kubeconfig }}"
+    content: "{{ ibi_ibbf_kubeconfig_secret.resources[0].data.kubeconfig | b64decode }}"
+    mode: '0600'
+  register: ibi_ibbf_kubeconfig_fetch
+  no_log: true
+
+- name: Require successful target kubeconfig transfer
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_kubeconfig_fetch is not unreachable
+    fail_msg: Could not save the target spoke kubeconfig.
+
+- name: Verify pinned replacement policy fixtures
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    ibi_ibbf_fixture_url: "{{ ibi_ibbf_config.policy_repo | regex_replace('\\.git$', '') }}/-/raw/{{ ibi_ibbf_config.policy_revision
+      }}"
+  block:
+    - name: Initialize replacement fixture snapshots
+      ansible.builtin.set_fact:
+        ibi_ibbf_fixture_documents: []
+        ibi_ibbf_fixture_policies: {original: {}, replacement: {}}
+        ibi_ibbf_fixture_files: []
+
+    - name: Validate the configured policy handover
+      when: ibi_ibbf_config.policy_path | length > 0
+      block:
+        - name: Download the original and replacement Kustomizations
+          timeout: 75
+          ansible.builtin.uri:
+            url: "{{ ibi_ibbf_fixture_url }}/{{ item.path }}/kustomization.yaml"
+            return_content: true
+            validate_certs: false
+            timeout: 60
+            status_code: 200
+          loop:
+            - kind: original
+              path: "{{ ibi_ibbf_config.policy_path | regex_replace('/ztp-test/ibbf-test$', '') }}"
+            - kind: replacement
+              path: "{{ ibi_ibbf_config.policy_path }}"
+          register: ibi_ibbf_fixture_kustomizations
+          no_log: true
+
+        - name: Require both pinned Kustomization downloads to complete
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_fixture_kustomizations is not unreachable
+              - ibi_ibbf_fixture_kustomizations.results | default([]) | length == 2
+            fail_msg: Original and replacement Kustomization downloads must complete.
+
+        - name: Require standalone policy generator Kustomizations
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_kustomization is mapping
+              - ibi_ibbf_kustomization.generators | default([]) | length > 0
+              - not ibi_ibbf_kustomization.patches | default([])
+              - not ibi_ibbf_kustomization.components | default([])
+              - >-
+                ibi_ibbf_kustomization.generators | select('string') |
+                select('match', '^[^/]+\.yaml$') | list | length == ibi_ibbf_kustomization.generators | length
+            fail_msg: Pinned policy Kustomizations must contain standalone YAML generators.
+          vars:
+            ibi_ibbf_kustomization: "{{ item.content | from_yaml }}"
+          loop: "{{ ibi_ibbf_fixture_kustomizations.results | default([]) }}"
+          no_log: true
+
+        - name: List the pinned policy generator files
+          ansible.builtin.set_fact:
+            ibi_ibbf_fixture_files: >-
+              {{ ibi_ibbf_fixture_files + [{'kind': item.item.kind, 'path': item.item.path,
+                                           'generators': (item.content | from_yaml).generators}] }}
+          loop: "{{ ibi_ibbf_fixture_kustomizations.results | default([]) }}"
+          no_log: true
+
+        - name: Download the pinned policy generator documents
+          timeout: 75
+          ansible.builtin.uri:
+            url: "{{ ibi_ibbf_fixture_url }}/{{ item.0.path }}/{{ item.1 }}"
+            return_content: true
+            validate_certs: false
+            timeout: 60
+            status_code: 200
+          loop: "{{ ibi_ibbf_fixture_files | subelements('generators') }}"
+          register: ibi_ibbf_fixture_downloads
+          no_log: true
+
+        - name: Require all pinned generator downloads to complete
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_fixture_downloads is not unreachable
+              - >-
+                ibi_ibbf_fixture_downloads.results | default([]) | length ==
+                ibi_ibbf_fixture_files | map(attribute='generators') | flatten | length
+            fail_msg: Pinned policy generator downloads did not complete.
+
+        - name: Retain the parsed original and replacement policy documents
+          ansible.builtin.set_fact:
+            ibi_ibbf_fixture_documents: >-
+              {{ ibi_ibbf_fixture_documents +
+                 [{'kind': item.item.0.kind, 'document': item.content | from_yaml}] }}
+          loop: "{{ ibi_ibbf_fixture_downloads.results | default([]) }}"
+          no_log: true
+
+        - name: Require PolicyGenTemplates with named source files
+          ansible.builtin.assert:
+            that:
+              - item.document is mapping
+              - item.document.kind | default('') == 'PolicyGenTemplate'
+              - item.document.metadata.namespace is string
+              - item.document.metadata.name is string
+              - item.document.spec.sourceFiles | type_debug == 'list'
+              - item.document.spec.sourceFiles | length > 0
+            fail_msg: Pinned fixtures must contain PolicyGenTemplates with source files.
+          loop: "{{ ibi_ibbf_fixture_documents }}"
+          no_log: true
+
+        - name: Require named policy sources in each fixture
+          ansible.builtin.assert:
+            that:
+              - item.1 is mapping
+              - item.1.policyName is string
+            fail_msg: Every fixture source must name its generated policy.
+          loop: "{{ ibi_ibbf_fixture_documents | subelements('document.spec.sourceFiles') }}"
+          no_log: true
+
+        - name: Group fixture sources by generated policy identity
+          ansible.builtin.set_fact:
+            ibi_ibbf_fixture_policies: >-
+              {{ ibi_ibbf_fixture_policies | combine({item.0.kind:
+                 ibi_ibbf_fixture_policies[item.0.kind] | combine({ibi_ibbf_fixture_policy_name:
+                   ibi_ibbf_fixture_policies[item.0.kind][ibi_ibbf_fixture_policy_name] | default([]) + [item.1]})}) }}
+          vars:
+            ibi_ibbf_fixture_policy_name: >-
+              {{ item.0.document.metadata.namespace ~ '.' ~ item.0.document.metadata.name ~ '-' ~ item.1.policyName }}
+          loop: "{{ ibi_ibbf_fixture_documents | subelements('document.spec.sourceFiles') }}"
+          no_log: true
+
+        - name: Require identical original and replacement policy identities
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_fixture_policies.original | length > 0
+              - ibi_ibbf_fixture_policies.original.keys() | sort == ibi_ibbf_fixture_policies.replacement.keys() | sort
+            fail_msg: Replacement policy fixtures must preserve all original policy identities.
+
+        - name: Require changed group and site hardware policy sources
+          ansible.builtin.assert:
+            that:
+              - item in ibi_ibbf_fixture_policies.original
+              - item in ibi_ibbf_fixture_policies.replacement
+              - ibi_ibbf_fixture_policies.original[item] != ibi_ibbf_fixture_policies.replacement[item]
+            fail_msg: Replacement fixtures must change both group and site hardware policy sources.
+          loop:
+            - ztp-group.group-du-sno-config-policy
+            - "{{ 'ztp-site.' ~ ibi_ibbf_config.spoke ~ '-config-policy' }}"
+          no_log: true
+
+    - name: Retain a safe fixture validation summary
+      ansible.builtin.copy:
+        content: >-
+          {{ 'Pinned policy identities and changed group/site hardware settings verified.'
+             if ibi_ibbf_config.policy_path else 'Replacement policy handover is disabled.' }}
+        dest: "{{ ibi_ibbf_controller_dir }}/policy-fixture.log"
+        mode: '0600'
+      register: ibi_ibbf_fixture_log
+
+    - name: Require fixture diagnostics to be retained
+      ansible.builtin.assert:
+        that:
+          - ibi_ibbf_fixture_log is not unreachable
+        fail_msg: Fixture validation diagnostics could not be retained.
+- name: Discover the SiteConfig configuration namespace
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: v1
+    kind: ConfigMap
+    field_selectors:
+      - metadata.name=siteconfig-operator-configuration
+  register: ibi_ibbf_siteconfigs
+  no_log: true
+
+- name: Require one active SiteConfig configuration
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_siteconfigs is not unreachable
+      - ibi_ibbf_siteconfigs.resources | default([]) | length == 1
+      - not ibi_ibbf_siteconfigs.resources[0].metadata.deletionTimestamp | default('')
+    fail_msg: Expected one active SiteConfig configuration on the target hub.
+
+- name: Read the SiteConfig controller
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ ibi_ibbf_siteconfigs.resources[0].metadata.namespace }}"
+    name: siteconfig-controller-manager
+  register: ibi_ibbf_siteconfig_controller
+  no_log: true
+
+- name: Require the SiteConfig controller to be ready
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_siteconfig_controller is not unreachable
+      - ibi_ibbf_siteconfig_controller.resources | default([]) | length == 1
+      - not ibi_ibbf_controller.metadata.deletionTimestamp | default('')
+      - ibi_ibbf_controller.spec.replicas | default(1) | int > 0
+      - ibi_ibbf_controller.status.observedGeneration | default(0) | int >= ibi_ibbf_controller.metadata.generation | int
+      - ibi_ibbf_controller.status.updatedReplicas | default(0) | int == ibi_ibbf_controller.spec.replicas | default(1) | int
+      - ibi_ibbf_controller.status.availableReplicas | default(0) | int == ibi_ibbf_controller.spec.replicas | default(1) | int
+    fail_msg: SiteConfig controller is not ready in its configuration namespace.
+  vars:
+    ibi_ibbf_controller: "{{ ibi_ibbf_siteconfig_controller.resources[0] }}"
+
+- name: Read the target installation and policy resources
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ item.kubeconfig | default(ibi_ibbf_config.hub_kubeconfig) }}"
+    api_version: "{{ item.api_version }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ item.namespace | default(omit) }}"
+    name: "{{ item.name | default(omit) }}"
+  loop:
+    - {key: import, api_version: v1, kind: ConfigMap, namespace: multicluster-engine, name: import-controller-config}
+    - {key: policies, api_version: policy.open-cluster-management.io/v1, kind: Policy, namespace: "{{ ibi_ibbf_config.spoke }}"}
+    - key: leaves
+      api_version: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      kubeconfig: "{{ ibi_ibbf_config.spoke_kubeconfig }}"
+    - key: cgu
+      api_version: ran.openshift.io/v1alpha1
+      kind: ClusterGroupUpgrade
+      namespace: ztp-install
+      name: "{{ ibi_ibbf_config.spoke }}"
+    - {key: nodes, api_version: v1, kind: Node, kubeconfig: "{{ ibi_ibbf_config.spoke_kubeconfig }}"}
+    - {key: clusters, api_version: argoproj.io/v1alpha1, kind: Application, namespace: openshift-gitops, name: clusters}
+    - {key: policy_app, api_version: argoproj.io/v1alpha1, kind: Application, namespace: openshift-gitops, name: policies}
+    - key: ci
+      api_version: siteconfig.open-cluster-management.io/v1alpha1
+      kind: ClusterInstance
+      namespace: "{{ ibi_ibbf_config.spoke }}"
+      name: "{{ ibi_ibbf_config.spoke }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: ibi_ibbf_initial_reads
+  no_log: true
+
+- name: Require all initial target queries to complete
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_initial_reads is not unreachable
+      - ibi_ibbf_initial_reads.results | default([]) | length == 8
+    fail_msg: Initial target resource discovery did not complete.
+
+- name: Require accessible target resources
+  ansible.builtin.assert:
+    that:
+      - item is not unreachable
+      - item.resources | default([]) | length > 0
+      - item.item.key in ['policies', 'leaves'] or item.resources | length == 1
+    fail_msg: Required target installation or policy resources are missing or inaccessible.
+  loop: "{{ ibi_ibbf_initial_reads.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+  no_log: true
+
+- name: Name the target resource snapshots
+  ansible.builtin.set_fact:
+    ibi_ibbf_resources: >-
+      {{ dict(ibi_ibbf_initial_reads.results | map(attribute='item.key') |
+              zip(ibi_ibbf_initial_reads.results | map(attribute='resources'))) }}
+  no_log: true
+
+- name: Verify initial import and remediation readiness
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_resources.import[0].data.autoImportStrategy | default('') == 'ImportAndSync'
+      - >-
+        ibi_ibbf_resources.cgu[0].status.conditions | default([]) |
+        selectattr('type', 'equalto', 'Succeeded') | selectattr('status', 'equalto', 'True') | list | length > 0
+      - ibi_ibbf_resources.nodes[0].metadata.uid | default('') | length > 0
+      - not ibi_ibbf_resources.ci[0].spec.reinstall | default({})
+      - ibi_ibbf_resources.ci[0].spec.nodes | length == 1
+    fail_msg: The original target must be fully remediated, use ImportAndSync, and have no reinstall request.
+
+- name: Check original Argo paths and synchronization
+  ansible.builtin.assert:
+    that:
+      - item.app.spec.source.path | default('') == ibi_ibbf_config.version ~ '/' ~ ibi_ibbf_config.spoke ~ '/' ~ item.suffix
+      - not item.app.operation | default({})
+      - item.app.status.operationState.phase | default('') not in ['Running', 'Terminating']
+      - item.app.status.sync.status | default('') == 'Synced'
+      - not ibi_ibbf_config.policy_path or item.app.spec.source.repoURL | default('') == ibi_ibbf_config.policy_repo
+      - not ibi_ibbf_config.policy_path or item.app.status.sync.revision | default('') == ibi_ibbf_config.policy_revision
+    fail_msg: Target Applications must be idle, synced and on the original paths and recorded seed revision.
+  loop:
+    - {app: "{{ ibi_ibbf_resources.clusters[0] }}", suffix: clusterinstance}
+    - {app: "{{ ibi_ibbf_resources.policy_app[0] }}", suffix: policygentemplate}
+  loop_control:
+    label: "{{ item.suffix }}"
+  no_log: true
+
+- name: Require automated policy synchronization for replacement handover
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_resources.policy_app[0].spec.syncPolicy.automated | default(none) is mapping
+      - ibi_ibbf_resources.policy_app[0].spec.syncPolicy.automated.enabled | default(true) != false
+    fail_msg: Replacement policy handover requires automated Argo synchronization.
+  when: ibi_ibbf_config.policy_path | length > 0
+
+- name: Require an IP address and NMState interface list
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_config.target_ip is string
+      - ibi_ibbf_config.target_ip is match('^[0-9a-fA-F:.]+$')
+      - ibi_ibbf_config.target_ip | ansible.utils.ipaddr('address') != false
+      - "':' in ibi_ibbf_config.target_ip or ibi_ibbf_config.target_ip == ibi_ibbf_config.target_ip | ansible.utils.ipaddr('address')"
+      - ibi_ibbf_resources.ci[0].spec.nodes[0].nodeNetwork.config.interfaces | type_debug == 'list'
+    fail_msg: Target networking must contain a valid reserved address and NMState interfaces.
+  no_log: true
+
+- name: Initialize the canonical static address comparison
+  ansible.builtin.set_fact:
+    ibi_ibbf_target_address: "{{ ibi_ibbf_config.target_ip | ansible.utils.ipaddr('address') }}"
+    ibi_ibbf_address_family: "{{ 'ipv' ~ (ibi_ibbf_config.target_ip | ansible.utils.ipaddr('version')) }}"
+    ibi_ibbf_static_addresses: []
+  no_log: true
+
+- name: Collect addresses from enabled static interfaces
+  ansible.builtin.set_fact:
+    ibi_ibbf_static_addresses: "{{ ibi_ibbf_static_addresses + (ibi_ibbf_interface.address | default([])) }}"
+  vars:
+    ibi_ibbf_interface: "{{ item[ibi_ibbf_address_family] | default({}) }}"
+  loop: "{{ ibi_ibbf_resources.ci[0].spec.nodes[0].nodeNetwork.config.interfaces }}"
+  when:
+    - ibi_ibbf_interface.enabled | default(true) | bool
+    - ibi_ibbf_interface.dhcp | default(none) is sameas false
+    - ibi_ibbf_address_family != 'ipv6' or ibi_ibbf_interface.autoconf | default(none) is sameas false
+  no_log: true
+
+- name: Require valid static interface addresses
+  ansible.builtin.assert:
+    that:
+      - item.ip is string
+      - item.ip is match('^[0-9a-fA-F:.]+$')
+      - item.ip | ansible.utils.ipaddr('address') != false
+      - "':' in item.ip or item.ip == item.ip | ansible.utils.ipaddr('address')"
+    fail_msg: Static interface addresses must be valid IPv4 or IPv6 addresses.
+  loop: "{{ ibi_ibbf_static_addresses }}"
+  no_log: true
+
+- name: Require the reserved address on an enabled static interface
+  ansible.builtin.assert:
+    that:
+      - >-
+        ibi_ibbf_target_address in
+        (ibi_ibbf_static_addresses | map(attribute='ip') | map('ansible.utils.ipaddr', 'address') | list)
+    fail_msg: Target must already use the reserved static IP address with DHCP and IPv6 autoconfiguration disabled.
+  no_log: true
+
+- name: Read the original target BareMetalHost
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: metal3.io/v1alpha1
+    kind: BareMetalHost
+    namespace: "{{ ibi_ibbf_config.spoke }}"
+    name: "{{ ibi_ibbf_resources.ci[0].spec.nodes[0].hostName }}"
+  register: ibi_ibbf_bmh_read
+  no_log: true
+
+- name: Require matching original BMC and credential references
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_bmh_read is not unreachable
+      - ibi_ibbf_bmh_read.resources | default([]) | length == 1
+      - ibi_ibbf_bmh_read.resources[0].spec.bmc.address | urlsplit('hostname') == ibi_ibbf_config.original_bmc
+      - ibi_ibbf_resources.ci[0].spec.nodes[0].bmcAddress | urlsplit('hostname') == ibi_ibbf_config.original_bmc
+      - ibi_ibbf_bmh_read.resources[0].spec.bmc.credentialsName == ibi_ibbf_resources.ci[0].spec.nodes[0].bmcCredentialsName.name
+    fail_msg: Original target BMC or credential references do not match the ClusterInstance and BareMetalHost.
+
+- name: Require a nonempty and unique target policy set
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_resources.policies | type_debug == 'list'
+      - ibi_ibbf_resources.policies | length > 0
+      - ibi_ibbf_resources.leaves | type_debug == 'list'
+      - >-
+        ibi_ibbf_resources.policies | map(attribute='metadata.name') | unique | length ==
+        ibi_ibbf_resources.policies | length
+    fail_msg: Initial target policies must have unique identities and ConfigurationPolicy resources.
+  no_log: true
+
+- name: Require compliant policies with unique ConfigurationPolicy templates
+  ansible.builtin.assert:
+    that:
+      - item.status.compliant | default('') == 'Compliant'
+      - item.metadata.name is string
+      - item.spec['policy-templates'] | type_debug == 'list'
+      - item.spec['policy-templates'] | length > 0
+      - >-
+        item.spec['policy-templates'] | map(attribute='objectDefinition.metadata.name') | unique | length ==
+        item.spec['policy-templates'] | length
+    fail_msg: Target policies must be Compliant with nonempty, unique ConfigurationPolicy templates before IBBF.
+  loop: "{{ ibi_ibbf_resources.policies }}"
+  no_log: true
+
+- name: Require each policy template to identify one spoke ConfigurationPolicy
+  ansible.builtin.assert:
+    that:
+      - item.1.objectDefinition.kind | default('') == 'ConfigurationPolicy'
+      - ibi_ibbf_matching_leaves | length == 1
+      - ibi_ibbf_matching_leaves[0].metadata.name is string
+      - ibi_ibbf_matching_leaves[0].metadata.namespace is string
+    fail_msg: A target ConfigurationPolicy is missing, ambiguous, or has an invalid identity.
+  vars:
+    ibi_ibbf_matching_leaves: >-
+      {{ ibi_ibbf_resources.leaves |
+         selectattr('metadata.name', 'equalto', item.1.objectDefinition.metadata.name) | list }}
+  loop: "{{ ibi_ibbf_resources.policies | subelements('spec.policy-templates') }}"
+  no_log: true
+
+- name: Initialize the complete target policy baseline
+  ansible.builtin.set_fact:
+    ibi_ibbf_policy_baseline: {}
+- name: Capture complete target policy identities
+  ansible.builtin.set_fact:
+    ibi_ibbf_policy_baseline: >-
+      {{ ibi_ibbf_policy_baseline | combine({item.0.metadata.name:
+         ibi_ibbf_policy_baseline[item.0.metadata.name] | default([]) +
+         [{'name': ibi_ibbf_matching_leaf.metadata.name, 'namespace': ibi_ibbf_matching_leaf.metadata.namespace}]}) }}
+  vars:
+    ibi_ibbf_matching_leaf: >-
+      {{ ibi_ibbf_resources.leaves |
+         selectattr('metadata.name', 'equalto', item.1.objectDefinition.metadata.name) | first }}
+  loop: "{{ ibi_ibbf_resources.policies | subelements('spec.policy-templates') }}"
+  no_log: true
+
+- name: Select the target remediation roots
+  ansible.builtin.set_fact:
+    ibi_ibbf_roots: >-
+      {{ [['ztp-common', 'common-config-policy'], ['ztp-common', 'common-subscriptions-policy']] +
+         ([['ztp-group', 'group-du-sno-config-policy'], ['ztp-site', ibi_ibbf_config.spoke ~ '-config-policy']]
+          if ibi_ibbf_config.policy_path else []) }}
+    ibi_ibbf_root_templates: {}
+- name: Verify each remediation root is assigned to the target
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_replica | length == 1
+      - ibi_ibbf_replica[0].metadata.labels['policy.open-cluster-management.io/root-policy'] | default('') == item | join('.')
+    fail_msg: Expected remediation policy is not assigned to the target.
+  vars:
+    ibi_ibbf_replica: "{{ ibi_ibbf_resources.policies | selectattr('metadata.name', 'equalto', item | join('.')) | list }}"
+  loop: "{{ ibi_ibbf_roots }}"
+
+- name: Read the original root policy specifications
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: policy.open-cluster-management.io/v1
+    kind: Policy
+    namespace: "{{ item[0] }}"
+    name: "{{ item[1] }}"
+  loop: "{{ ibi_ibbf_roots }}"
+  register: ibi_ibbf_root_reads
+  no_log: true
+
+- name: Require every remediation root query to complete
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_root_reads is not unreachable
+      - ibi_ibbf_root_reads.results | default([]) | length == ibi_ibbf_roots | length
+    fail_msg: Root policy discovery did not complete.
+
+- name: Require accessible root policies
+  ansible.builtin.assert:
+    that:
+      - item is not unreachable
+      - item.resources | default([]) | length == 1
+    fail_msg: Could not retain all target remediation root policies.
+  loop: "{{ ibi_ibbf_root_reads.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | join('.') }}"
+  no_log: true
+
+- name: Retain root specifications before hardware replacement
+  ansible.builtin.set_fact:
+    ibi_ibbf_root_templates: "{{ ibi_ibbf_root_templates | combine({item.item | join('.'): item.resources[0].spec['policy-templates']})
+      }}"
+  loop: "{{ ibi_ibbf_root_reads.results }}"
+  no_log: true
+
+- name: Build the private preflight baseline
+  ansible.builtin.set_fact:
+    ibi_ibbf_baseline:
+      node_uid: "{{ ibi_ibbf_resources.nodes[0].metadata.uid }}"
+      policies: "{{ ibi_ibbf_policy_baseline }}"
+      roots: "{{ ibi_ibbf_roots }}"
+      root_templates: "{{ ibi_ibbf_root_templates }}"
+      policy_app:
+        uid: "{{ ibi_ibbf_resources.policy_app[0].metadata.uid }}"
+        source: "{{ ibi_ibbf_resources.policy_app[0].spec.source }}"
+      policy_path: "{{ ibi_ibbf_config.policy_path | default('none', true) }}"
+      policy_revision: "{{ ibi_ibbf_config.policy_revision | default('none', true) }}"
+      original_bmc: "{{ ibi_ibbf_config.original_bmc }}"
+      replacement_bmc: "{{ ibi_ibbf_config.replacement_bmc }}"
+      bmc_secret: "{{ ibi_ibbf_bmh_read.resources[0].spec.bmc.credentialsName }}"
+  no_log: true
+
+- name: Retain the private baseline outside the launcher directory
+  ansible.builtin.copy:
+    content: "{{ ibi_ibbf_baseline | to_nice_json }}"
+    dest: "{{ ibi_ibbf_config.baseline_file }}"
+    mode: '0600'
+  register: ibi_ibbf_baseline_copy
+  no_log: true
+
+- name: Read the BMC credential secret
+  timeout: 120
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ ibi_ibbf_config.spoke }}"
+    name: "{{ ibi_ibbf_baseline.bmc_secret }}"
+  register: ibi_ibbf_bmc_secret
+  no_log: true
+
+- name: Require private baseline and BMC credentials
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_baseline_copy is not unreachable
+      - ibi_ibbf_bmc_secret is not unreachable
+      - ibi_ibbf_bmc_secret.resources | default([]) | length == 1
+      - ibi_ibbf_bmc_secret.resources[0].data.username | b64decode | length > 0
+      - ibi_ibbf_bmc_secret.resources[0].data.password | b64decode | length > 0
+      - not (ibi_ibbf_bmc_secret.resources[0].data.username | b64decode is search('[\r\n\x00]'))
+      - not (ibi_ibbf_bmc_secret.resources[0].data.password | b64decode is search('[\r\n\x00]'))
+    fail_msg: BMC credentials are absent or cannot be represented in the private environment file.
+  no_log: true
+
+- name: Verify credentials against both BMC systems
+  timeout: 120
+  ansible.builtin.uri:
+    url: "https://{{ item }}/redfish/v1/Systems/System.Embedded.1"
+    url_username: "{{ ibi_ibbf_bmc_secret.resources[0].data.username | b64decode }}"
+    url_password: "{{ ibi_ibbf_bmc_secret.resources[0].data.password | b64decode }}"
+    force_basic_auth: true
+    use_proxy: false
+    validate_certs: false
+    timeout: 30
+    return_content: true
+    status_code: 200
+  loop: ["{{ ibi_ibbf_config.original_bmc }}", "{{ ibi_ibbf_config.replacement_bmc }}"]
+  register: ibi_ibbf_bmc_checks
+  no_log: true
+
+- name: Require both BMC authentication checks to complete
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_bmc_checks is not unreachable
+      - ibi_ibbf_bmc_checks.results | default([]) | length == 2
+    fail_msg: Both BMC authentication checks must complete before hardware replacement.
+
+- name: Require authenticated power state responses from both BMCs
+  ansible.builtin.assert:
+    that:
+      - item is not unreachable
+      - item.json.PowerState is defined
+    fail_msg: Could not authenticate both BMC systems before hardware replacement.
+  loop: "{{ ibi_ibbf_bmc_checks.results | default([]) }}"
+  no_log: true
+
+- name: Retain the private BMC environment and preflight summary
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}"
+    mode: '0600'
+  loop:
+    - path: "{{ ibi_ibbf_config.env_file }}"
+      content: |
+        ECO_CNF_RAN_BMC_HOSTS={{ ibi_ibbf_config.original_bmc }}
+        ECO_CNF_RAN_BMC_USERNAME={{ ibi_ibbf_bmc_secret.resources[0].data.username | b64decode }}
+        ECO_CNF_RAN_BMC_PASSWORD={{ ibi_ibbf_bmc_secret.resources[0].data.password | b64decode }}
+        ECO_CNF_RAN_SKIP_TLS_VERIFY=true
+        ECO_CNF_RAN_ACM_OPERATOR_NAMESPACE={{ ibi_ibbf_siteconfigs.resources[0].metadata.namespace }}
+        ECO_TEST_TRACE=true
+        ECO_VERBOSE_SCRIPT=true
+    - path: "{{ ibi_ibbf_private_dir }}/preflight.log"
+      content: "Target scope, static IP, initial policy baseline and both BMC credentials verified.\n"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: ibi_ibbf_preflight_files
+  no_log: true
+
+- name: Require the private BMC environment and preflight summary
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_preflight_files is not unreachable
+      - ibi_ibbf_preflight_files.results | default([]) | length == 2
+    fail_msg: Could not retain the private BMC environment and preflight summary.

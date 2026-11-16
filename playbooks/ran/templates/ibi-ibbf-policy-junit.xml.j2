@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="IBBF policy recovery" tests="1"
+           failures="{{ 1 if ibi_ibbf_policy_rc | int == 10 else 0 }}"
+           errors="{{ 1 if ibi_ibbf_policy_rc | int not in [0, 10] else 0 }}"
+           time="{{ now(utc=true).timestamp() | int - ibi_ibbf_policy_started | int }}">
+  <testcase name="target policies compliant after TALM remediation" classname="ibi.ibbf.policy-gate">
+{% if ibi_ibbf_policy_rc | int != 0 %}
+    <{{ 'failure' if ibi_ibbf_policy_rc | int == 10 else 'error' }} message="{{ ibi_ibbf_policy_message | e }}"/>
+{% endif %}
+  </testcase>
+</testsuite>

@@ -1,0 +1,19 @@
+---
+- name: Allow registry configuration to reach the machine config operator
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Wait for machine configuration in pool - {{ nrop_wait_pool }}
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ nrop_wait_pool }}"
+  register: nrop_wait_mcp
+  until:
+    - nrop_wait_mcp.resources | length == 1
+    - nrop_wait_mcp.resources[0].status.configuration.name | default('') | length > 0
+    - nrop_wait_mcp.resources[0].status.configuration.name == nrop_wait_mcp.resources[0].spec.configuration.name | default('')
+    - nrop_wait_mcp.resources[0].status.conditions | selectattr('type', 'equalto', 'Updated') | selectattr('status', 'equalto', 'True') | list | length > 0
+    - nrop_wait_mcp.resources[0].status.conditions | selectattr('type', 'equalto', 'Updating') | selectattr('status', 'equalto', 'False') | list | length > 0
+  retries: 120
+  delay: 30

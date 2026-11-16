@@ -1,0 +1,32 @@
+---
+- name: Read the NROP pool machine counts
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ item }}"
+  register: nrop_target_pools
+  until:
+    - nrop_target_pools.resources | length == 1
+    - nrop_target_pools.resources[0].status.machineCount | default(0) | int > 0
+  retries: 30
+  delay: 10
+  loop: "{{ ['master', 'worker'] if nrop_target_pool == 'master' and is_full_schedulable_cluster | bool else [nrop_target_pool] }}"
+
+- name: Wait for the RTE pods in each NROP pool
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: openshift-numaresources
+    field_selectors:
+      - status.phase=Running
+  register: nrop_rte
+  until: >-
+    nrop_rte.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+    | selectattr('metadata.ownerReferences', 'defined') | map(attribute='metadata.ownerReferences') | flatten
+    | selectattr('kind', 'equalto', 'DaemonSet') | selectattr('name', 'equalto', 'numaresourcesoperator-' ~ item.item)
+    | list | length == item.resources[0].status.machineCount | int
+  retries: 60
+  delay: 20
+  loop: "{{ nrop_target_pools.results }}"
+  loop_control:
+    label: "{{ item.item }}"

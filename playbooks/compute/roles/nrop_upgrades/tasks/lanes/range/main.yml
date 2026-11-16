@@ -1,0 +1,16 @@
+---
+- name: Check the stable starting OCP release
+  ansible.builtin.include_tasks: preflight_stable_upgrade.yml
+
+- name: Install NROP at lane start version
+  ansible.builtin.include_tasks: install_nrop.yml
+  vars:
+    nrop_catalog_source: "{{ nrop_env_from }}"
+    nrop_operator_version: "{{ install_nrop_version }}"
+    nrop_artifact_phase: install
+
+- name: Range OCP and NROP per hop
+  ansible.builtin.include_tasks: lanes/range/upgrade_versions.yml
+  loop: "{{ ocp_upgrade_hops }}"
+  loop_control:
+    loop_var: nrop_hop_version

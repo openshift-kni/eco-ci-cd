@@ -9,3 +9,4 @@
   kubernetes.core.k8s:
     state: present
     src: "{{ manifest_dir }}/{{ manifest_name }}"
+  register: nrop_config_manifest_result

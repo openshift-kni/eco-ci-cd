@@ -1,0 +1,60 @@
+---
+- name: Wait for the NROP subscription to install its current CSV
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: numaresources-operator
+    namespace: openshift-numaresources
+  register: nrop_subscription
+  until:
+    - nrop_subscription.resources | length == 1
+    - nrop_subscription.resources[0].status.currentCSV | default('') is search('v' ~ (nrop_config_version | regex_escape) ~ '\\.')
+    - nrop_subscription.resources[0].status.installedCSV | default('') == nrop_subscription.resources[0].status.currentCSV | default('')
+    - nrop_subscription.resources[0].status.state | default('') == 'AtLatestKnown'
+  retries: 90
+  delay: 10
+
+- name: Wait for the installed target CSV
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    name: "{{ nrop_subscription.resources[0].status.installedCSV }}"
+    namespace: openshift-numaresources
+  register: nrop_installed_csv
+  until:
+    - nrop_installed_csv.resources | length == 1
+    - nrop_installed_csv.resources[0].status.phase | default('') == 'Succeeded'
+  retries: 90
+  delay: 10
+
+- name: Wait for the current NROP controller deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: numaresources-controller-manager
+    namespace: openshift-numaresources
+  register: nrop_controller
+  until:
+    - nrop_controller.resources | length == 1
+    - nrop_controller.resources[0].metadata.labels['olm.owner'] | default('') == nrop_subscription.resources[0].status.installedCSV
+    - nrop_controller.resources[0].spec.replicas | int > 0
+    - nrop_controller.resources[0].status.updatedReplicas | default(0) | int == nrop_controller.resources[0].spec.replicas | int
+    - nrop_controller.resources[0].status.readyReplicas | default(0) | int == nrop_controller.resources[0].spec.replicas | int
+  retries: 60
+  delay: 10
+
+- name: Wait for the NROP controller pods to be running
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: openshift-numaresources
+    label_selectors:
+      - control-plane=controller-manager
+    field_selectors:
+      - status.phase=Running
+  register: nrop_controller_pods
+  until: >-
+    nrop_controller_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined')
+    | list | length == nrop_controller.resources[0].spec.replicas | int
+  retries: 60
+  delay: 10

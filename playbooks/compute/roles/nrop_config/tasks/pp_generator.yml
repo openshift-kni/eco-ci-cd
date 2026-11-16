@@ -38,3 +38,4 @@
   vars:
     template_name: "templates/performanceprofile.yaml.j2"
     manifest_name: "{{ target }}_performance-profile.yaml"
+  when: not (nrop_config_cpu_discovery_only | bool)

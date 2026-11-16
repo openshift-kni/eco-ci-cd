@@ -1,0 +1,127 @@
+---
+- name: Authorize the target scheduler digest before upgrading NROP
+  when: nrop_artifact_phase == 'upgrade'
+  block:
+    - name: Select target scheduler image
+      ansible.builtin.set_fact:
+        nrop_upgrade_scheduler_image: >-
+          {{ ('registry.redhat.io' if nrop_catalog_source == 'prod' else 'registry.stage.redhat.io')
+             ~ ('/openshift5/' if nrop_operator_version is version('5.0', '>=') else '/openshift4/')
+             ~ ('noderesourcetopology-scheduler-container-rhel8'
+                if nrop_operator_version is version('4.14', '<') else 'noderesourcetopology-scheduler-rhel9')
+             ~ ':v' ~ nrop_operator_version }}
+
+    - name: Resolve the target scheduler digest
+      block:
+        - name: Create a temporary scheduler pull-secret file
+          ansible.builtin.tempfile:
+            state: file
+            suffix: nrop-scheduler-pull-secret
+          register: nrop_upgrade_authfile
+          no_log: true
+
+        - name: Write scheduler pull secret
+          ansible.builtin.copy:
+            content: "{{ pull_secret_string | b64decode }}"
+            dest: "{{ nrop_upgrade_authfile.path }}"
+            mode: '0600'
+          no_log: true
+
+        - name: Inspect target scheduler image
+          ansible.builtin.command:
+            argv:
+              - skopeo
+              - inspect
+              - --override-os
+              - linux
+              - --override-arch
+              - amd64
+              - --authfile
+              - "{{ nrop_upgrade_authfile.path }}"
+              - "docker://{{ nrop_upgrade_scheduler_image }}"
+          register: nrop_upgrade_scheduler_inspect
+          retries: 5
+          delay: 5
+          until: nrop_upgrade_scheduler_inspect.rc == 0
+          changed_when: false
+          no_log: true
+
+        - name: Remember target scheduler digest
+          ansible.builtin.set_fact:
+            nrop_upgrade_scheduler_digest: "{{ (nrop_upgrade_scheduler_inspect.stdout | from_json).Digest }}"
+      always:
+        - name: Remove temporary scheduler pull-secret file
+          ansible.builtin.file:
+            path: "{{ nrop_upgrade_authfile.path }}"
+            state: absent
+          when: nrop_upgrade_authfile.path is defined
+          no_log: true
+
+    - name: Update the existing subscription's scheduler digest allow-list
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: numaresources-operator
+            namespace: openshift-numaresources
+          spec:
+            config:
+              env:
+                - name: SCHEDULER_IMAGE_DIGESTS
+                  value: "{{ nrop_upgrade_scheduler_digest }}"
+
+- name: Deploy NROP operator subscription
+  ansible.builtin.include_tasks: deploy_operators.yml
+
+- name: Configure NROP on worker MCP (MNO)
+  ansible.builtin.include_role:
+    name: nrop_config
+  vars:
+    test_env: "{{ nrop_catalog_source }}"
+    scheduable_master: false
+    is_full_schedulable_cluster: false
+    deploy_performance_profile_only: false
+    nrop_config_apply_perf_profile: false
+    nrop_config_target_version: "{{ nrop_operator_version }}"
+    nrop_config_operator_only: "{{ nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'] }}"
+    nrop_config_worker_pool: "{{ nrop_worker_mcp | default('worker') }}"
+    nrop_config_deploy_sample_devices: false
+    nrop_config_prepared_scheduler_image: >-
+      {{ ((nrop_upgrade_scheduler_image | regex_replace(':[^/]+$', '')) ~ '@' ~ nrop_upgrade_scheduler_digest)
+         if nrop_artifact_phase == 'upgrade' else '' }}
+
+- name: Apply a missing performance profile after NROP is ready
+  ansible.builtin.include_role:
+    name: nrop_config
+    tasks_from: preformance_profile.yml
+  vars:
+    nrop_config_profile_if_missing: true
+  when:
+    - apply_perf_profile | bool
+    - not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+
+- name: Verify NROP after the performance profile rollout
+  when:
+    - apply_perf_profile | bool
+    - not (nrop_artifact_phase == 'upgrade' and upgrade_type in ['eus', 'canary'])
+  block:
+    - name: Verify the controller
+      ansible.builtin.include_role:
+        name: nrop_config
+        tasks_from: wait_controller.yml
+
+    - name: Verify the RTE DaemonSets
+      ansible.builtin.include_role:
+        name: nrop_config
+        tasks_from: wait_rte.yml
+
+    - name: Verify the scheduler replicas
+      ansible.builtin.include_role:
+        name: nrop_config
+        tasks_from: wait_scheduler.yml
+
+- name: Write NROP lane artifacts (digests and manifests)
+  ansible.builtin.include_tasks: collect_nrop_artifacts.yml

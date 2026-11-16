@@ -1,0 +1,152 @@
+---
+- name: Set catalog facts for artifacts
+  ansible.builtin.set_fact:
+    nrop_artifact_catalog_name: "{{ nrop_operator_spec[0].catalog }}"
+    nrop_artifact_catalog_image: >-
+      {{
+        'registry.redhat.io/redhat/redhat-operator-index:v' ~ nrop_operator_version
+        if nrop_catalog_source == 'prod'
+        else 'quay.io/redhat-user-workloads/telco-5g-tenant/numaresources-operator-fbc-'
+        ~ (nrop_operator_version | replace('.', '-')) ~ ':latest'
+      }}
+    nrop_artifact_scheduler_image: >-
+      {{
+        ('registry.redhat.io' if nrop_catalog_source == 'prod' else 'registry.stage.redhat.io')
+        ~ ('/openshift5/' if nrop_operator_version is version('5.0', '>=') else '/openshift4/')
+        ~ ('noderesourcetopology-scheduler-container-rhel8'
+          if (nrop_operator_version is version('4.14', '<'))
+          else 'noderesourcetopology-scheduler-rhel9')
+        ~ ':v' ~ nrop_operator_version
+      }}
+
+- name: Ensure artifacts directory exists
+  ansible.builtin.file:
+    path: "{{ artifacts_folder }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0755"
+  become: true
+
+- name: Get installed NROP CSV metadata
+  ansible.builtin.shell: |
+    set -euo pipefail
+    NS="openshift-numaresources"
+    CSV="$(oc get subscription numaresources-operator -n "$NS" -o jsonpath='{.status.installedCSV}')"
+    test -n "$CSV"
+    VERSION="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.version}')"
+    OPERATOR="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.relatedImages[?(@.name=="manager")].image}')"
+    if [ -z "$OPERATOR" ]; then
+      OPERATOR="$(oc get csv "$CSV" -n "$NS" -o jsonpath='{.spec.relatedImages[0].image}')"
+    fi
+    BUNDLE="$(oc get installplan -n "$NS" -o json | jq -r --arg csv "$CSV" '
+      [.items[] | select(.spec.clusterServiceVersionNames[]? == $csv) | .status.bundleLookups[0].path // empty]
+      | map(select(length > 0))
+      | last // empty
+    ')"
+    if [ -z "$BUNDLE" ]; then
+      BUNDLE="$(oc get clusterextension numaresources-operator -o json 2>/dev/null | jq -r '
+        .status.install.bundle // .status.content.reference // empty
+      ' || true)"
+    fi
+    printf '%s\n' "$CSV"
+    printf '%s\n' "$VERSION"
+    printf '%s\n' "$BUNDLE"
+    printf '%s\n' "$OPERATOR"
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  register: nrop_bundle_operator_lookup
+  retries: 5
+  delay: 5
+  until:
+    - nrop_bundle_operator_lookup.rc == 0
+    - (nrop_bundle_operator_lookup.stdout_lines | length) >= 4
+    - (nrop_bundle_operator_lookup.stdout_lines[2] | length) > 0
+    - (nrop_bundle_operator_lookup.stdout_lines[3] | length) > 0
+  changed_when: false
+
+- name: Set bundle and operator image facts
+  ansible.builtin.set_fact:
+    nrop_bundle_name: "{{ nrop_bundle_operator_lookup.stdout_lines[0] }}"
+    nrop_bundle_version: "{{ nrop_bundle_operator_lookup.stdout_lines[1] }}"
+    nrop_bundle_image: "{{ nrop_bundle_operator_lookup.stdout_lines[2] }}"
+    nrop_operator_image: "{{ nrop_bundle_operator_lookup.stdout_lines[3] }}"
+    nrop_bundle_digest: "{{ nrop_bundle_operator_lookup.stdout_lines[2] | regex_search('sha256:[a-zA-Z0-9]+') }}"
+    nrop_operator_digest: "{{ nrop_bundle_operator_lookup.stdout_lines[3] | regex_search('sha256:[a-zA-Z0-9]+') }}"
+
+- name: Read the deployed CatalogSource
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    name: "{{ nrop_artifact_catalog_name }}"
+    namespace: openshift-marketplace
+  register: nrop_artifact_catalog
+
+- name: Require the deployed CatalogSource image
+  ansible.builtin.assert:
+    that:
+      - nrop_artifact_catalog.resources | length == 1
+      - nrop_artifact_catalog.resources[0].spec.image | default('') | length > 0
+
+- name: Record deployed catalog and scheduler digests
+  ansible.builtin.set_fact:
+    nrop_artifact_catalog_deployed: "{{ nrop_artifact_catalog.resources[0].spec.image }}"
+    nrop_artifact_scheduler_pinned: "{{ scheduler_image_uri }}"
+
+- name: Require an immutable scheduler image
+  ansible.builtin.assert:
+    that:
+      - nrop_artifact_scheduler_pinned is search('@sha256:[0-9a-f]{64}$')
+    fail_msg: The selected scheduler has no immutable digest.
+
+- name: Save NROP image digests artifact
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/nrop-image-digests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}.yaml"
+    mode: "0644"
+    content: |
+      target_version: "{{ nrop_operator_version }}"
+      phase: "{{ nrop_artifact_phase }}"
+      nrop_source: "{{ nrop_catalog_source }}"
+      catalog_name: "{{ nrop_artifact_catalog_name }}"
+      catalog_image: "{{ nrop_artifact_catalog_image }}"
+      catalog_deployed_image: "{{ nrop_artifact_catalog_deployed }}"
+      catalog_digest: "{{ (nrop_artifact_catalog_deployed | regex_search('@sha256:[0-9a-f]{64}$') | default('', true)) | replace('@', '') }}"
+      catalog_digest_source: "{{ 'catalogsource' if nrop_artifact_catalog_deployed is search('@sha256:[0-9a-f]{64}$') else 'unavailable' }}"
+      bundle_name: "{{ nrop_bundle_name }}"
+      bundle_version: "{{ nrop_bundle_version }}"
+      bundle_image: "{{ nrop_bundle_image }}"
+      bundle_digest: "{{ nrop_bundle_digest }}"
+      operator_image: "{{ nrop_operator_image }}"
+      operator_digest: "{{ nrop_operator_digest }}"
+      scheduler_image: "{{ nrop_artifact_scheduler_image }}"
+      scheduler_image_digest_ref: "{{ nrop_artifact_scheduler_pinned | default('') }}"
+      scheduler_digest: "{{ nrop_artifact_scheduler_pinned | regex_search('sha256:[0-9a-f]{64}') }}"
+  become: true
+
+- name: Export NROP manifests for debugging
+  block:
+    - name: Ensure manifests artifact directory exists
+      ansible.builtin.file:
+        path: "{{ artifacts_folder }}/manifests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: "0755"
+      become: true
+
+    - name: Export applied NROP lane manifests
+      ansible.builtin.shell: |
+        set -euo pipefail
+        DEST="{{ artifacts_folder }}/manifests-{{ nrop_operator_version | replace('.', '-') }}-{{ nrop_artifact_phase }}"
+        oc get catalogsource "{{ nrop_artifact_catalog_name }}" -n openshift-marketplace -o yaml > "${DEST}/catalogsource.yaml"
+        oc get namespace openshift-numaresources -o yaml > "${DEST}/namespace.yaml"
+        oc get operatorgroup numaresources-operator -n openshift-numaresources -o yaml > "${DEST}/operatorgroup.yaml" 2>/dev/null \
+          || oc get operatorgroup -n openshift-numaresources -o yaml > "${DEST}/operatorgroup.yaml"
+        oc get subscription -n openshift-numaresources -o yaml > "${DEST}/subscription.yaml"
+        oc get numaresourcesoperator numaresourcesoperator -o yaml > "${DEST}/numaresourcesoperator.yaml"
+        oc get numaresourcesscheduler numaresourcesscheduler -o yaml > "${DEST}/numaresourcesscheduler.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+  rescue:
+    - name: Warn when manifest export fails
+      ansible.builtin.debug:
+        msg: "Manifest export failed; continuing without complete debugging artifacts: {{ ansible_failed_result.msg | default('unknown error') }}"

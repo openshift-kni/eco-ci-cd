@@ -1,0 +1,57 @@
+---
+- name: Get scheduler configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Scheduler
+    name: cluster
+  register: scheduler_info
+
+- name: Set NROP target pool and base image
+  ansible.builtin.set_fact:
+    nrop_target_pool: "{{ 'master' if scheduler_info.resources[0].spec.mastersSchedulable | default(false) else nrop_config_worker_pool }}"
+    base_image: "{{ 'container-rhel8' if nrop_config_version is version('4.14', '<') else 'rhel9' }}"
+
+- name: Check if it is a full schedulable cluster
+  when: nrop_target_pool == 'master'
+  block:
+    - name: Get node information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes_info
+
+    - name: Mark the full schedulable cluster
+      ansible.builtin.set_fact:
+        is_full_schedulable_cluster: true
+      when: nodes_info.resources | length >= 4
+
+- name: Print target pool
+  ansible.builtin.debug:
+    msg: "Target pool: {{ nrop_target_pool }}"
+
+- name: Wait for the NROP controller
+  ansible.builtin.include_tasks: wait_controller.yml
+  when: not (deploy_performance_profile_only | bool)
+
+- name: Apply the NROP operator manifest
+  ansible.builtin.include_tasks: deploy_manifest.yml
+  vars:
+    template_name: templates/operator.yaml.j2
+    manifest_name: numaresourcesoperator.yaml
+  when:
+    - not (deploy_performance_profile_only | bool)
+    - not (nrop_config_operator_only | bool)
+
+- name: Wait for the NROP operator MCP rollout
+  ansible.builtin.include_tasks: wait_for_mcp.yml
+  when:
+    - not (deploy_performance_profile_only | bool)
+    - not (nrop_config_operator_only | bool)
+    - nrop_config_version is version('4.18', '<')
+    - nrop_config_manifest_result is changed
+
+- name: Wait for the RTE DaemonSets
+  ansible.builtin.include_tasks: wait_rte.yml
+  when:
+    - not (deploy_performance_profile_only | bool)
+    - not (nrop_config_operator_only | bool)

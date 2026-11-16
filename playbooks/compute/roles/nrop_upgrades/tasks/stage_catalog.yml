@@ -1,0 +1,253 @@
+---
+# The shared mirror role creates a CatalogSource before mirroring all bundles.
+# Use a temporary source so subscriptions only see the digest-pinned catalog afterward.
+- name: Mirror and pin the NROP stage catalog
+  block:
+    - name: Create temporary NROP catalog authentication
+      ansible.builtin.tempfile:
+        state: file
+        suffix: nrop-stage-auth
+      register: nrop_stage_authfile
+      no_log: true
+
+    - name: Add the internal registry to the pull secret
+      ansible.builtin.copy:
+        content: >-
+          {{ (pull_secret_string | b64decode | from_json)
+             | combine({'auths': {(disconnected_registry_url ~ ':' ~ disconnected_registry_port):
+                        {'auth': ((ansible_user ~ ':' ~ ansible_password) | b64encode)}}}, recursive=True)
+             | to_json }}
+        dest: "{{ nrop_stage_authfile.path }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Stage the versioned NROP catalog for the shared mirror role
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - copy
+          - --all
+          - --retry-times
+          - '3'
+          - --authfile
+          - "{{ nrop_stage_authfile.path }}"
+          - "docker://{{ nrop_stage_catalog_source }}:latest"
+          - "docker://{{ nrop_stage_catalog_repository }}:{{ nrop_stage_catalog_tag }}"
+      changed_when: true
+
+    - name: Inspect the staged NROP catalog digest
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --no-tags
+          - --authfile
+          - "{{ nrop_stage_authfile.path }}"
+          - --format
+          - "{% raw %}{{ .Digest }}{% endraw %}"
+          - "docker://{{ nrop_stage_catalog_repository }}:{{ nrop_stage_catalog_tag }}"
+      register: nrop_stage_catalog_staged_digest
+      retries: 5
+      delay: 5
+      until: nrop_stage_catalog_staged_digest.rc == 0
+      changed_when: false
+
+    - name: Require an immutable staged NROP catalog digest
+      ansible.builtin.assert:
+        that:
+          - nrop_stage_catalog_staged_digest.stdout | trim is match('^sha256:[0-9a-f]{64}$')
+
+    - name: Mirror the NROP catalog signature when available
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_user_dir }}/.local/bin/oc"
+          - image
+          - mirror
+          - --insecure=true
+          - -a
+          - "{{ nrop_stage_authfile.path }}"
+          - "{{ nrop_stage_catalog_source }}:{{ nrop_stage_catalog_staged_digest.stdout | trim | replace(':', '-') }}.sig"
+          - "{{ nrop_stage_catalog_repository }}:{{ nrop_stage_catalog_staged_digest.stdout | trim | replace(':', '-') }}.sig"
+      register: nrop_stage_catalog_signature
+      changed_when: nrop_stage_catalog_signature.rc == 0
+      failed_when: false
+      ignore_errors: true
+      when: nrop_operator_version is version('4.21', '>=')
+
+    - name: Check for an existing temporary NROP CatalogSource
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        name: "{{ nrop_stage_temp_catalog }}"
+      register: nrop_stage_existing_temp
+
+    - name: Refuse to overwrite a temporary CatalogSource
+      ansible.builtin.assert:
+        that:
+          - nrop_stage_existing_temp.resources | length == 0
+        fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} already exists."
+
+    - name: Create the temporary NROP CatalogSource
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: CatalogSource
+          metadata:
+            name: "{{ nrop_stage_temp_catalog }}"
+            namespace: openshift-marketplace
+            labels:
+              nrop-ci.openshift.io/temporary-catalog: 'true'
+          spec:
+            sourceType: grpc
+            image: "{{ nrop_stage_catalog_repository }}:{{ nrop_stage_catalog_tag }}"
+      register: nrop_stage_temp_created
+
+    - name: Mirror NROP operator images
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+
+    - name: Inspect the final NROP catalog digest
+      ansible.builtin.command:
+        argv:
+          - skopeo
+          - inspect
+          - --no-tags
+          - --authfile
+          - "{{ nrop_stage_authfile.path }}"
+          - --format
+          - "{% raw %}{{ .Digest }}{% endraw %}"
+          - "docker://{{ nrop_stage_catalog_repository }}"
+      register: nrop_stage_catalog_final_digest
+      retries: 5
+      delay: 5
+      until: nrop_stage_catalog_final_digest.rc == 0
+      changed_when: false
+
+    - name: Require the final catalog to match the staged image
+      ansible.builtin.assert:
+        that:
+          - nrop_stage_catalog_final_digest.stdout | trim == nrop_stage_catalog_staged_digest.stdout | trim
+        fail_msg: The NROP catalog changed while mirroring; refusing to use it.
+
+    - name: Read the mirrored NROP CatalogSource
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        name: numaresources-operator-fbc
+      register: nrop_stage_catalog
+
+    - name: Require a compatible NROP CatalogSource
+      ansible.builtin.assert:
+        that:
+          - nrop_stage_catalog.resources | length <= 1
+          - nrop_stage_catalog.resources | length == 0 or nrop_stage_catalog.resources[0].spec.sourceType | default('') == 'grpc'
+        fail_msg: The existing NROP CatalogSource is not compatible; refusing to overwrite it.
+
+    - name: Create the pinned NROP CatalogSource
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: CatalogSource
+          metadata:
+            name: numaresources-operator-fbc
+            namespace: openshift-marketplace
+          spec:
+            sourceType: grpc
+            image: "{{ nrop_stage_catalog_repository }}@{{ nrop_stage_catalog_final_digest.stdout | trim }}"
+      when: nrop_stage_catalog.resources | length == 0
+
+    - name: Pin the NROP CatalogSource to the mirrored digest
+      kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        name: numaresources-operator-fbc
+        patch:
+          - op: test
+            path: /metadata/uid
+            value: "{{ nrop_stage_catalog.resources[0].metadata.uid }}"
+          - op: test
+            path: /metadata/resourceVersion
+            value: "{{ nrop_stage_catalog.resources[0].metadata.resourceVersion }}"
+          - op: test
+            path: /spec/image
+            value: "{{ nrop_stage_catalog.resources[0].spec.image }}"
+          - op: replace
+            path: /spec/image
+            value: "{{ nrop_stage_catalog_repository }}@{{ nrop_stage_catalog_final_digest.stdout | trim }}"
+      when:
+        - nrop_stage_catalog.resources | length == 1
+        - nrop_stage_catalog.resources[0].spec.image | default('') != nrop_stage_catalog_repository ~ '@' ~ (nrop_stage_catalog_final_digest.stdout | trim)
+
+    - name: Use the pinned NROP CatalogSource for the subscription
+      ansible.builtin.set_fact:
+        nrop_operator_spec: "{{ nrop_operator_spec | map('combine', {'catalog': 'numaresources-operator-fbc'}) | list }}"
+
+  always:
+    - name: Clean up temporary NROP catalog resources
+      block:
+        - name: Remove the temporary NROP CatalogSource
+          when: nrop_stage_temp_created.result.metadata.uid is defined
+          block:
+            - name: Read the temporary NROP CatalogSource
+              kubernetes.core.k8s_info:
+                kubeconfig: "{{ kubeconfig }}"
+                api_version: operators.coreos.com/v1alpha1
+                kind: CatalogSource
+                namespace: openshift-marketplace
+                name: "{{ nrop_stage_temp_catalog }}"
+              register: nrop_stage_temp_current
+
+            - name: Read subscriptions before temporary catalog cleanup
+              kubernetes.core.k8s_info:
+                kubeconfig: "{{ kubeconfig }}"
+                api_version: operators.coreos.com/v1alpha1
+                kind: Subscription
+              register: nrop_stage_temp_subscriptions
+
+            - name: Require the temporary catalog to remain unused and owned
+              ansible.builtin.assert:
+                that:
+                  - nrop_stage_temp_current.resources | length <= 1
+                  - >-
+                    nrop_stage_temp_current.resources | length == 0 or
+                    (nrop_stage_temp_current.resources[0].metadata.uid == nrop_stage_temp_created.result.metadata.uid and
+                     nrop_stage_temp_current.resources[0].metadata.labels['nrop-ci.openshift.io/temporary-catalog'] | default('') == 'true')
+                  - >-
+                    nrop_stage_temp_subscriptions.resources | selectattr('spec.source', 'defined')
+                    | selectattr('spec.source', 'equalto', nrop_stage_temp_catalog)
+                    | selectattr('spec.sourceNamespace', 'defined')
+                    | selectattr('spec.sourceNamespace', 'equalto', 'openshift-marketplace') | list | length == 0
+                fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} changed or is in use; it was not removed."
+
+            - name: Remove only the temporary NROP CatalogSource
+              kubernetes.core.k8s:
+                kubeconfig: "{{ kubeconfig }}"
+                api_version: operators.coreos.com/v1alpha1
+                kind: CatalogSource
+                namespace: openshift-marketplace
+                name: "{{ nrop_stage_temp_catalog }}"
+                state: absent
+                wait: true
+                wait_timeout: 300
+                delete_options:
+                  preconditions:
+                    uid: "{{ nrop_stage_temp_current.resources[0].metadata.uid }}"
+                    resourceVersion: "{{ nrop_stage_temp_current.resources[0].metadata.resourceVersion }}"
+              when: nrop_stage_temp_current.resources | length == 1
+      always:
+        - name: Remove temporary NROP catalog authentication
+          ansible.builtin.file:
+            path: "{{ nrop_stage_authfile.path }}"
+            state: absent
+          when: nrop_stage_authfile.path is defined
+          no_log: true

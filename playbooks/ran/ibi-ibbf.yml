@@ -1,0 +1,222 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Execute IBI hardware replacement and recover target policies
+# Description  : Prepares and runs eco-gotests hardware spec 78333 (IBI image-
+#                based boot flow), retains its exit status, then recovers
+#                replacement policies through ordered Ansible tasks. Running
+#                this playbook powers off the original target through the
+#                eco-gotests suite. This is the only entry point for the IBBF
+#                workflow. Imported tasks handle bastion preparation, execution,
+#                policy recovery and finalization. A shared observation task
+#                checks replacement readiness and hub/spoke policy state.
+#
+# Prerequisites:
+#   - Exactly one target bastion in the inventory (include localhost and bastion)
+#   - Replacement preinstall completed; original target is healthy and ACM-managed
+#   - oc, Python 3 and the Kubernetes Python client installed on the bastion
+#   - Controller has GNU date, the existing Ansible collections, and Python netaddr
+#   - ANSIBLE_PRIVATE_KEY_FILE set for the nested launcher-preparation playbook
+#   - For controllers without a writable home directory: ANSIBLE_REMOTE_TEMP=/tmp
+#   - ibi_ibbf_report_dir already created by the caller (Prow step does mkdir -p)
+#   - ibi_ibbf_result_file already initialised to 1 by the caller
+#
+# Key Tasks:
+#   - Validate all controller paths and enforce a single-bastion scope
+#   - Validate IBBF config values, cluster identity, and BMC addresses
+#   - Read the spoke kubeconfig from ACM and write it privately on the bastion
+#   - Validate the pinned replacement policy fixture
+#   - Verify the target and save its policy baseline
+#   - Prepare the eco-gotests launcher via nested ansible-playbook invocation
+#   - Patch the launcher to remove interactive TTY allocation for CI execution
+#   - Execute hardware spec 78333; retain its exit status and unchanged JUnit report
+#   - Recover policies after hardware passes; reuse tasks/ibi-ibbf-policy.yml for fresh snapshots
+#   - Always: collect all reports, fetch bastion logs, clean up private files
+#   - Write ibbf-status.json and the final result file only after collection/cleanup
+#
+# Usage:
+#   ansible-playbook ./playbooks/ran/ibi-ibbf.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py \
+#     -e @ibbf-vars.json
+#
+# Required variables:
+#   ibi_ibbf_hub_kubeconfig  # string: Absolute path to hub kubeconfig on the bastion (required)
+#   ibi_ibbf_spoke           # string: Target spoke cluster name (Kubernetes DNS-label format) (required)
+#   ibi_ibbf_version         # string: OCP release family, e.g. "4.20" (required)
+#   ibi_ibbf_original_bmc    # string: Original target BMC IPv4 address (required)
+#   ibi_ibbf_replacement_bmc # string: Replacement BMC IPv4 address — must differ from original (required)
+#   ibi_ibbf_target_ip       # string: Reserved static target IPv4 or IPv6 address (required)
+#   ibi_ibbf_work_dir        # string: Launcher directory matching /tmp/eco_gotests_ibi_ibbf/ibi-ibbf.<alphanumeric> (required)
+#   ibi_ibbf_report_dir      # string: Absolute controller directory for all collected reports (required)
+#   ibi_ibbf_result_file     # string: Absolute controller path for the final test result file (required)
+#   ibi_ibbf_inventory       # string: Absolute controller path to the inventory for launcher preparation (required)
+#
+# Optional variables:
+#   ibi_ibbf_policy_path     # string: Replacement policy path; default empty keeps the current path
+#   ibi_ibbf_policy_repo     # string: HTTPS repository URL for replacement policies
+#   ibi_ibbf_policy_revision # string: Immutable 40-character Git commit hash for replacement policies
+#
+# Outputs (all written to ibi_ibbf_report_dir on the controller):
+#   report/**              — hardware and policy JUnit XML and console logs
+#   runner.log             — eco-gotests launcher stdout/stderr with bastion identity redacted
+#   setup.log              — nested launcher-preparation playbook output (redacted)
+#   preflight.log          — target verification output (redacted)
+#   policy-fixture.log     — policy fixture validation output (redacted)
+#   policy-gate.log        — policy recovery and gate output (redacted; only when hardware passed)
+#   ibbf-status.json       — machine-readable exit codes for each stage
+#   ibi_ibbf_result_file   — 0 = tests passed, 1 = test or infrastructure failure
+#
+# Exit behaviour: Runner exit 0 permits policy recovery; exit 1 skips recovery
+#   and is retained as a failed test, including suite setup/teardown failures.
+#   Ansible succeeds with a saved test result of 1 so downstream reporting can
+#   continue. Other runner exit codes, playbook setup/transport errors, missing
+#   reports, report collection or cleanup errors cause Ansible to fail.
+#   Private files on the bastion are always removed; remote reports are retained
+#   for the reporting stage. Native Ansible tasks validate fixtures, compare
+#   policy data, and collect JUnit XML without parsing individual test results.
+
+- name: Prepare IBBF controller inputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Validate controller paths and target scope
+      ansible.builtin.assert:
+        that:
+          - query('ansible.builtin.inventory_hostnames', 'bastion') | length == 1
+          - ibi_ibbf_work_dir | default('') is match('^/tmp/eco_gotests_ibi_ibbf/ibi-ibbf\.[A-Za-z0-9]+$')
+          - ibi_ibbf_report_dir | default('') is match('^/.+')
+          - ibi_ibbf_result_file | default('') is match('^/.+[^/]$')
+          - ibi_ibbf_inventory | default('') is match('^/.+')
+        fail_msg: IBBF requires one target bastion and explicit absolute input/output paths.
+
+    - name: Prepare private controller configuration
+      block:
+        - name: Create a private controller working directory
+          ansible.builtin.tempfile:
+            state: directory
+            path: /tmp
+            prefix: ibi-ibbf-controller.
+          register: ibi_ibbf_controller_work
+
+        - name: Resolve private paths outside the launcher directory
+          ansible.builtin.set_fact:
+            ibi_ibbf_private_dir: "/tmp/{{ ibi_ibbf_work_dir | basename }}-private"
+
+        - name: Resolve the IBBF configuration
+          ansible.builtin.set_fact:
+            ibi_ibbf_config:
+              hub_kubeconfig: "{{ ibi_ibbf_hub_kubeconfig }}"
+              spoke: "{{ ibi_ibbf_spoke }}"
+              version: "{{ ibi_ibbf_version }}"
+              original_bmc: "{{ ibi_ibbf_original_bmc }}"
+              replacement_bmc: "{{ ibi_ibbf_replacement_bmc }}"
+              target_ip: "{{ ibi_ibbf_target_ip }}"
+              env_file: "{{ ibi_ibbf_private_dir }}/bmc.env"
+              spoke_kubeconfig: "{{ ibi_ibbf_private_dir }}/spoke.kubeconfig"
+              baseline_file: "{{ ibi_ibbf_private_dir }}/policies.json"
+              report_dir: "{{ ibi_ibbf_work_dir }}/report"
+              policy_path: "{{ '' if ibi_ibbf_policy_path | default('') == 'none' else ibi_ibbf_policy_path | default('') }}"
+              policy_repo: "{{ ibi_ibbf_policy_repo | default('') }}"
+              policy_revision: "{{ ibi_ibbf_policy_revision | default('') }}"
+
+        - name: Validate required IBBF values
+          ansible.builtin.assert:
+            that:
+              - item.value is string
+              - item.value | length > 0
+              - item.value is not search('[\r\n\x00]')
+            fail_msg: "Missing or invalid IBBF input: {{ item.key }}"
+          loop: "{{ ibi_ibbf_config | dict2items | rejectattr('key', 'match', '^policy_') | list }}"
+          loop_control:
+            label: "{{ item.key }}"
+
+        - name: Validate cluster identity and replacement policy scope
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_config.hub_kubeconfig is match('^/.+')
+              - ibi_ibbf_config.spoke is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+              - ibi_ibbf_config.version is match('^[0-9]+\.[0-9]+$')
+              - ibi_ibbf_config.original_bmc != ibi_ibbf_config.replacement_bmc
+              - >-
+                ibi_ibbf_config.policy_path in ['', 'none'] or
+                (ibi_ibbf_config.policy_path == ibi_ibbf_config.version ~ '/' ~ ibi_ibbf_config.spoke ~
+                 '/policygentemplate/ztp-test/ibbf-test' and
+                 ibi_ibbf_config.policy_repo is match('^https://[a-zA-Z0-9./:_-]+$') and
+                 ibi_ibbf_config.policy_revision is match('^[a-f0-9]{40}$'))
+            fail_msg: IBBF requires the original target identity and the pinned replacement policy path.
+
+        - name: Validate distinct BMC IPv4 addresses
+          ansible.builtin.assert:
+            that:
+              - item is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+              - item.split('.') | map('int') | max <= 255
+              - item.split('.') | reject('match', '^(0|[1-9][0-9]*)$') | list | length == 0
+            fail_msg: IBBF BMC addresses must be valid IPv4 addresses.
+          loop:
+            - "{{ ibi_ibbf_config.original_bmc }}"
+            - "{{ ibi_ibbf_config.replacement_bmc }}"
+
+        - name: Record successful controller preparation
+          ansible.builtin.set_fact:
+            ibi_ibbf_controller_prepared: true
+      rescue:
+        - name: Remove incomplete private controller preparation
+          ansible.builtin.file:
+            path: "{{ ibi_ibbf_controller_work.path }}"
+            state: absent
+          when: ibi_ibbf_controller_work.path is defined
+
+        - name: Stop on invalid controller preparation
+          ansible.builtin.fail:
+            msg: IBBF controller preparation failed; hardware tests were not started.
+
+- name: Execute IBBF and retain all reports
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Require controller preparation
+      ansible.builtin.assert:
+        that:
+          - hostvars['localhost'].ibi_ibbf_controller_prepared | default(false)
+        fail_msg: Run IBBF with both localhost and bastion included.
+
+    - name: Initialize execution state
+      ansible.builtin.set_fact:
+        ibi_ibbf_config: "{{ hostvars['localhost'].ibi_ibbf_config }}"
+        ibi_ibbf_private_dir: "{{ hostvars['localhost'].ibi_ibbf_private_dir }}"
+        ibi_ibbf_controller_dir: "{{ hostvars['localhost'].ibi_ibbf_controller_work.path }}"
+        ibi_ibbf_execution_complete: false
+        ibi_ibbf_test_result: 1
+
+    - name: Run IBBF with report collection and private-file cleanup
+      ignore_unreachable: true
+      block:
+        - name: Prepare the IBBF bastion and baseline
+          ansible.builtin.import_tasks: tasks/ibi-ibbf-prepare.yml
+
+        - name: Run the IBBF hardware test
+          ansible.builtin.import_tasks: tasks/ibi-ibbf-run.yml
+
+        - name: Recover replacement policies
+          ansible.builtin.import_tasks: tasks/ibi-ibbf-recover.yml
+
+        - name: Record the completed test outcome
+          ansible.builtin.set_fact:
+            ibi_ibbf_test_result: "{{ 0 if ibi_ibbf_run.rc | int == 0 and ibi_ibbf_policy_rc | default(1) == 0 else 1 }}"
+            ibi_ibbf_execution_complete: true
+      rescue:
+        - name: Retain the blocking infrastructure failure
+          ansible.builtin.set_fact:
+            ibi_ibbf_execution_complete: false
+      always:
+        - name: Finalize IBBF reports and execution status
+          ansible.builtin.import_tasks: tasks/ibi-ibbf-finalize.yml

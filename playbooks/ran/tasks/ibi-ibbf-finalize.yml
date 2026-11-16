@@ -1,0 +1,168 @@
+---
+# Collect reports, clean private files and publish the final execution status.
+# Included by ibi-ibbf.yml; uses its shared execution state.
+- name: Discover all retained reports including policy results
+  ansible.builtin.find:
+    paths: "{{ ibi_ibbf_work_dir }}/report"
+    recurse: true
+    file_type: file
+  register: ibi_ibbf_report_files
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Collect all reports preserving relative paths
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ibi_ibbf_report_dir }}/report/{{ item.path | relpath(ibi_ibbf_work_dir ~ '/report') }}"
+    flat: true
+  loop: "{{ ibi_ibbf_report_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: ibi_ibbf_report_fetch
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Discover retained bastion logs
+  ansible.builtin.find:
+    paths: "{{ ibi_ibbf_private_dir }}"
+    patterns: '*.log'
+    file_type: file
+  register: ibi_ibbf_log_files
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Retrieve bastion logs privately on the controller
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: "{{ ibi_ibbf_controller_dir }}/{{ item.path | basename }}"
+    flat: true
+  loop: "{{ ibi_ibbf_log_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: ibi_ibbf_log_fetch
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Discover controller logs for publication
+  ansible.builtin.find:
+    paths: "{{ ibi_ibbf_controller_dir }}"
+    patterns: '*.log'
+    file_type: file
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: ibi_ibbf_controller_logs
+  ignore_errors: true
+
+- name: Publish logs with bastion identities redacted
+  ansible.builtin.copy:
+    content: >-
+      {{ lookup('ansible.builtin.file', item.path) |
+         replace((hostvars[inventory_hostname].ansible_user | default('telcov10n')) ~ '@' ~
+                 (hostvars[inventory_hostname].ansible_host | default(inventory_hostname)), '<bastion>') |
+         replace(hostvars[inventory_hostname].ansible_host | default(inventory_hostname), '<bastion>') }}
+    dest: "{{ ibi_ibbf_report_dir }}/{{ item.path | basename }}"
+    mode: '0600'
+  loop: "{{ ibi_ibbf_controller_logs.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: ibi_ibbf_log_publish
+  ignore_errors: true
+  no_log: true
+
+- name: Remove private bastion credentials and baseline
+  ansible.builtin.file:
+    path: "{{ ibi_ibbf_private_dir }}"
+    state: absent
+  register: ibi_ibbf_remote_cleanup
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Remove private controller files
+  ansible.builtin.file:
+    path: "{{ ibi_ibbf_controller_dir }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: ibi_ibbf_controller_cleanup
+  ignore_errors: true
+
+- name: Resolve report collection and cleanup status
+  ansible.builtin.set_fact:
+    ibi_ibbf_collection_ok: >-
+      {{ ibi_ibbf_report_files is succeeded and ibi_ibbf_report_files is not unreachable and
+         (ibi_ibbf_report_files.files | default([]) | length > 0) and
+         not (ibi_ibbf_report_files.skipped_paths | default({})) and
+         ibi_ibbf_report_fetch is succeeded and ibi_ibbf_report_fetch is not unreachable and
+         (ibi_ibbf_report_fetch.results | default([]) | selectattr('unreachable', 'defined') |
+          selectattr('unreachable') | list | length == 0) and
+         ibi_ibbf_log_files is succeeded and ibi_ibbf_log_files is not unreachable and
+         not (ibi_ibbf_log_files.skipped_paths | default({})) and
+         ibi_ibbf_log_fetch is succeeded and ibi_ibbf_log_fetch is not unreachable and
+         (ibi_ibbf_log_fetch.results | default([]) | selectattr('unreachable', 'defined') |
+          selectattr('unreachable') | list | length == 0) and
+         ibi_ibbf_controller_logs is succeeded and ibi_ibbf_controller_logs is not unreachable and
+         not (ibi_ibbf_controller_logs.skipped_paths | default({})) and
+         ibi_ibbf_log_publish is succeeded and ibi_ibbf_log_publish is not unreachable and
+         (ibi_ibbf_log_publish.results | default([]) | selectattr('unreachable', 'defined') |
+          selectattr('unreachable') | list | length == 0) and
+         (not ibi_ibbf_execution_complete or
+          ((['setup.log', 'policy-fixture.log', 'preflight.log', 'runner.log'] +
+            (['policy-gate.log'] if ibi_ibbf_run.rc | default(125) | int == 0 else [])) |
+           difference(ibi_ibbf_controller_logs.files | default([]) | map(attribute='path') | map('basename') | list) | length == 0))
+      }}
+    ibi_ibbf_cleanup_ok: >-
+      {{ ibi_ibbf_remote_cleanup is succeeded and ibi_ibbf_remote_cleanup is not unreachable and
+         ibi_ibbf_controller_cleanup is succeeded and ibi_ibbf_controller_cleanup is not unreachable }}
+
+- name: Resolve the stage status independently of test assertions
+  ansible.builtin.set_fact:
+    ibi_ibbf_stage_ok: "{{ ibi_ibbf_execution_complete and ibi_ibbf_collection_ok and ibi_ibbf_cleanup_ok }}"
+
+- name: Save the IBBF outcome diagnostics
+  ignore_unreachable: false
+  ansible.builtin.copy:
+    dest: "{{ ibi_ibbf_report_dir }}/ibbf-status.json"
+    content: >-
+      {{ {'runner': ibi_ibbf_run.rc | default(125),
+          'hardware': ibi_ibbf_run.rc | default(125),
+          'policy': ibi_ibbf_policy_rc | default(none),
+          'test': ibi_ibbf_test_result | int,
+          'collection': 0 if ibi_ibbf_collection_ok else 1,
+          'cleanup': 0 if ibi_ibbf_cleanup_ok else 1,
+          'stage': 0 if ibi_ibbf_stage_ok else 1} | to_nice_json }}
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+- name: Save the final test result only after collection and cleanup
+  ignore_unreachable: false
+  ansible.builtin.copy:
+    dest: "{{ ibi_ibbf_result_file }}"
+    content: "{{ ibi_ibbf_test_result if ibi_ibbf_stage_ok else 1 }}\n"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+- name: Require successful infrastructure execution and collection
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_stage_ok
+    fail_msg: IBBF setup, execution, report collection or cleanup failed. Inspect the retained logs and ibbf-status.json.
+
+- name: Display the completed IBBF test outcome
+  ansible.builtin.debug:
+    msg: >-
+      IBBF stage completed; saved test result {{ ibi_ibbf_test_result }}.
+      Reporting may continue; final verification enforces this result.

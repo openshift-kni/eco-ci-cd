@@ -1,0 +1,620 @@
+---
+# Verify the replacement, activate its policies and run target-only TALM remediation.
+# Included by ibi-ibbf.yml; uses its shared execution state.
+- name: Initialize policy recovery and its shared deadline
+  ansible.builtin.set_fact:
+    ibi_ibbf_policy_started: "{{ now(utc=true).timestamp() | int }}"
+    ibi_ibbf_policy_rc: 1
+    ibi_ibbf_policy_phase: Validate the preflight policy baseline
+    ibi_ibbf_policy_message: Policy recovery did not complete.
+    ibi_ibbf_expected_templates: {}
+    ibi_ibbf_expected_source: {}
+    ibi_ibbf_cgu_status: {}
+  when: ibi_ibbf_run.rc | int == 0
+- name: Recover policies while retaining a separate JUnit result
+  when: ibi_ibbf_run.rc | int == 0
+  block:
+    - name: Require the original policy identities and node UID
+      ansible.builtin.assert:
+        that:
+          - ibi_ibbf_baseline.node_uid | default('') | length > 0
+          - ibi_ibbf_baseline.policies | default({}) | length > 0
+          - ibi_ibbf_baseline.policies.values() | select('equalto', []) | list | length == 0
+        fail_msg: The preflight policy baseline is incomplete.
+
+    - name: Resolve the shared policy recovery deadline
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_deadline: >-
+          {{ ibi_ibbf_policy_started | int + (4500 if ibi_ibbf_baseline.policy_path != 'none' else 3000) }}
+
+    - name: Start replacement node readiness
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_phase: Replacement node readiness
+        ibi_ibbf_wait_deadline: '{{ [ibi_ibbf_policy_started | int + 900, ibi_ibbf_policy_deadline | int] | min }}'
+        ibi_ibbf_wait_complete: false
+        ibi_ibbf_wait_api_error: false
+    - name: Wait for a different Ready replacement node
+      ansible.builtin.include_tasks: ibi-ibbf-policy.yml
+      vars:
+        ibi_ibbf_wait_goal: node
+      loop: '{{ range(0, ([0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max) // 30 + 1) | list }}'
+      loop_control:
+        loop_var: ibi_ibbf_poll_attempt
+        label: Replacement node readiness
+    - name: Classify replacement node readiness timeout
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_rc: '{{ 1 if ibi_ibbf_wait_api_error else 10 }}'
+      when: not ibi_ibbf_wait_complete
+    - name: Require replacement node readiness
+      ansible.builtin.assert:
+        that: ibi_ibbf_wait_complete
+        fail_msg: Replacement node readiness did not complete before its deadline.
+    - name: Validate the replacement creation time before policy changes
+      ansible.builtin.assert:
+        that:
+          - >-
+            ibi_ibbf_cutoff is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$')
+          - >-
+            (ibi_ibbf_cutoff | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z' if '.' in ibi_ibbf_cutoff
+                                          else '%Y-%m-%dT%H:%M:%S%z')).tzinfo is not none
+        fail_msg: The replacement node has no valid creation timestamp.
+
+    - name: Activate the pinned replacement policies after verified fencing
+      when: ibi_ibbf_baseline.policy_path != 'none'
+      block:
+        - name: Record the handover phase
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_phase: Verify replacement identity and fencing
+
+        - name: Read the replacement ClusterInstance
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: siteconfig.open-cluster-management.io/v1alpha1
+            kind: ClusterInstance
+            namespace: "{{ ibi_ibbf_config.spoke }}"
+            name: "{{ ibi_ibbf_config.spoke }}"
+          register: ibi_ibbf_replacement_ci
+          timeout: 120
+          no_log: true
+
+        - name: Require a readable replacement ClusterInstance
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_replacement_ci is not unreachable
+              - ibi_ibbf_replacement_ci.resources | default([]) | length == 1
+            fail_msg: Cannot read the replacement ClusterInstance.
+
+        - name: Identify an unexpected replacement ClusterInstance
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: 10
+          when: >-
+            ibi_ibbf_replacement_ci.resources[0].spec.nodes | length != 1 or
+            (ibi_ibbf_replacement_ci.resources[0].spec.nodes[0].bmcAddress | urlsplit('hostname')) != ibi_ibbf_baseline.replacement_bmc
+
+        - name: Require the ClusterInstance to reference the replacement BMC
+          ansible.builtin.assert:
+            that: ibi_ibbf_policy_rc != 10
+            fail_msg: ClusterInstance does not reference the replacement BMC.
+
+        - name: Read the replacement BareMetalHost
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ ibi_ibbf_config.spoke }}"
+            name: "{{ ibi_ibbf_replacement_ci.resources[0].spec.nodes[0].hostName }}"
+          register: ibi_ibbf_replacement_bmh
+          timeout: 120
+          no_log: true
+
+        - name: Require a readable replacement BareMetalHost
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_replacement_bmh is not unreachable
+              - ibi_ibbf_replacement_bmh.resources | default([]) | length == 1
+            fail_msg: Cannot read the replacement BareMetalHost.
+
+        - name: Identify an unexpected replacement BareMetalHost
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: 10
+          when: >-
+            ibi_ibbf_replacement_bmh.resources[0].metadata.deletionTimestamp | default('') or
+            (ibi_ibbf_replacement_bmh.resources[0].spec.bmc.address | urlsplit('hostname')) != ibi_ibbf_baseline.replacement_bmc
+
+        - name: Require the BareMetalHost to reference the replacement BMC
+          ansible.builtin.assert:
+            that: ibi_ibbf_policy_rc != 10
+            fail_msg: BareMetalHost does not reference the replacement BMC.
+
+        - name: Read the retained BMC credentials for fencing verification
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: v1
+            kind: Secret
+            namespace: "{{ ibi_ibbf_config.spoke }}"
+            name: "{{ ibi_ibbf_baseline.bmc_secret }}"
+          register: ibi_ibbf_fencing_secret
+          timeout: 120
+          no_log: true
+
+        - name: Require readable fencing credentials
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_fencing_secret is not unreachable
+              - ibi_ibbf_fencing_secret.resources | default([]) | length == 1
+            fail_msg: Cannot read the retained BMC credentials.
+
+        - name: Read original and replacement power states
+          ansible.builtin.uri:
+            url: "https://{{ item.host }}/redfish/v1/Systems/System.Embedded.1"
+            url_username: "{{ ibi_ibbf_fencing_secret.resources[0].data.username | b64decode }}"
+            url_password: "{{ ibi_ibbf_fencing_secret.resources[0].data.password | b64decode }}"
+            force_basic_auth: true
+            use_proxy: false
+            validate_certs: false
+            timeout: 30
+            return_content: true
+          loop:
+            - host: "{{ ibi_ibbf_baseline.original_bmc }}"
+              power: 'Off'
+            - host: "{{ ibi_ibbf_baseline.replacement_bmc }}"
+              power: 'On'
+          register: ibi_ibbf_fencing
+          timeout: 120
+          no_log: true
+
+        - name: Require both fencing observations
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_fencing is not unreachable
+              - ibi_ibbf_fencing.results | default([]) | length == 2
+              - ibi_ibbf_fencing.results | map(attribute='status') | list == [200, 200]
+              - ibi_ibbf_fencing.results | map(attribute='json.PowerState') | list | length == 2
+            fail_msg: Original fencing and replacement power state could not be verified.
+
+        - name: Classify an observed fencing failure
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: 10
+          when: ibi_ibbf_fencing.results | map(attribute='json.PowerState') | list != ['Off', 'On']
+
+        - name: Require the original off and replacement on
+          ansible.builtin.assert:
+            that: ibi_ibbf_policy_rc != 10
+            fail_msg: Original fencing or replacement power does not match the expected state.
+
+        - name: Resolve the pinned replacement Application source
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_phase: Activate replacement policy Application
+            ibi_ibbf_expected_source: >-
+              {{ ibi_ibbf_baseline.policy_app.source |
+                 combine({'path': ibi_ibbf_baseline.policy_path, 'targetRevision': ibi_ibbf_baseline.policy_revision}) }}
+
+        - name: Change the policy source only if its identity and original source still match
+          kubernetes.core.k8s_json_patch:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: argoproj.io/v1alpha1
+            kind: Application
+            namespace: openshift-gitops
+            name: policies
+            patch:
+              - op: test
+                path: /metadata/uid
+                value: "{{ ibi_ibbf_baseline.policy_app.uid }}"
+              - op: test
+                path: /spec/source
+                value: "{{ ibi_ibbf_baseline.policy_app.source }}"
+              - op: replace
+                path: /spec/source
+                value: "{{ ibi_ibbf_expected_source }}"
+          register: ibi_ibbf_policy_patch
+          timeout: 120
+          no_log: true
+
+          when: now(utc=true).timestamp() | int < ibi_ibbf_policy_deadline | int
+        - name: Classify recovery deadline exhaustion before mutation
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: 10
+          when: ibi_ibbf_policy_patch is skipped
+        - name: Require the guarded Application patch to complete
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_policy_patch is not unreachable
+              - ibi_ibbf_policy_patch.result is defined
+            fail_msg: The guarded replacement Application update did not complete.
+          when: not (ibi_ibbf_policy_patch is skipped)
+
+        - name: Start replacement policy application synchronization
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_phase: Replacement policy Application synchronization
+            ibi_ibbf_wait_deadline: '{{ [now(utc=true).timestamp() | int + 600, ibi_ibbf_policy_deadline | int] | min }}'
+        - name: Verify Replacement policy Application synchronization
+          vars:
+            ibi_ibbf_app: >-
+              {{ ibi_ibbf_policy_app_current.resources[0] if ibi_ibbf_condition_api_ok else {} }}
+            ibi_ibbf_condition_api_ok: >-
+              {{ ibi_ibbf_policy_app_current is succeeded and ibi_ibbf_policy_app_current is not unreachable and
+
+              ibi_ibbf_policy_app_current.resources | default([]) | length == 1 }}
+            ibi_ibbf_condition_ready: >-
+              {{ ibi_ibbf_condition_api_ok and ibi_ibbf_condition_identity_ok and (not ibi_ibbf_app.operation |
+
+              default({}) and    ibi_ibbf_app.status.sync.status | default('') == 'Synced' and
+
+              ibi_ibbf_app.status.sync.revision | default('') == ibi_ibbf_baseline.policy_revision and
+
+              ibi_ibbf_app.status.sync.comparedTo.source | default({}) == ibi_ibbf_expected_source and
+
+              ibi_ibbf_app.status.operationState.phase | default('') == 'Succeeded' and
+
+              ibi_ibbf_app.status.operationState.syncResult.revision | default('') ==
+
+              ibi_ibbf_baseline.policy_revision and    ibi_ibbf_app.status.operationState.syncResult.source |
+
+              default({}) == ibi_ibbf_expected_source) }}
+            ibi_ibbf_condition_identity_ok: >-
+              {{ ibi_ibbf_condition_api_ok and (ibi_ibbf_policy_app_current.resources | default([]) | length == 1)
+
+              and (not ibi_ibbf_policy_app_current.resources[0].metadata.deletionTimestamp | default('')) and
+
+              (ibi_ibbf_policy_app_current.resources[0].metadata.uid == ibi_ibbf_baseline.policy_app.uid) and
+
+              (ibi_ibbf_policy_app_current.resources[0].spec.source == ibi_ibbf_expected_source) and
+
+              (ibi_ibbf_policy_app_current.resources[0].status.conditions | default([]) | selectattr('type', 'in',
+
+              ['ComparisonError', 'InvalidSpecError', 'SyncError']) | list | length == 0) }}
+          block:
+            - name: Wait for the pinned replacement Application synchronization
+              kubernetes.core.k8s_info:
+                kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+                api_version: argoproj.io/v1alpha1
+                kind: Application
+                namespace: openshift-gitops
+                name: policies
+              register: ibi_ibbf_policy_app_current
+              timeout: 120
+              no_log: true
+
+              until: not ibi_ibbf_condition_api_ok or not ibi_ibbf_condition_identity_ok or ibi_ibbf_condition_ready or
+                now(utc=true).timestamp() | int >= ibi_ibbf_wait_deadline | int
+              retries: '{{ ([0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max) // 30 + 1 }}'
+              delay: 30
+              ignore_errors: true
+              when: now(utc=true).timestamp() | int < ibi_ibbf_wait_deadline | int
+            - name: Classify replacement policy application synchronization failure
+              ansible.builtin.set_fact:
+                ibi_ibbf_policy_rc: >-
+                  {{ 10 if (ibi_ibbf_policy_app_current is skipped or
+                            (ibi_ibbf_condition_api_ok and ibi_ibbf_condition_identity_ok))
+                     else 1 }}
+              when: not ibi_ibbf_condition_ready
+            - name: Require replacement policy application synchronization
+              ansible.builtin.assert:
+                that: ibi_ibbf_condition_ready
+                fail_msg: Replacement policy Application synchronization did not complete before its deadline.
+        - name: Read the newly rendered root policies
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: policy.open-cluster-management.io/v1
+            kind: Policy
+            namespace: "{{ item[0] }}"
+            name: "{{ item[1] }}"
+          loop: "{{ ibi_ibbf_baseline.roots }}"
+          register: ibi_ibbf_replacement_roots
+          timeout: 120
+          no_log: true
+
+        - name: Require every replacement root policy
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_replacement_roots is not unreachable
+              - >-
+                ibi_ibbf_replacement_roots.results | map(attribute='resources') | map('length') | list ==
+                [1] * (ibi_ibbf_baseline.roots | length)
+            fail_msg: Cannot read every replacement root policy.
+
+        - name: Resolve rendered replacement policy definitions
+          ansible.builtin.set_fact:
+            ibi_ibbf_template_data:
+              roots: "{{ ibi_ibbf_replacement_roots.results | map(attribute='resources') | flatten }}"
+              baseline: "{{ ibi_ibbf_baseline.policies }}"
+              previous: "{{ ibi_ibbf_baseline.root_templates }}"
+          no_log: true
+
+        - name: Validate rendered root policies and their ConfigurationPolicy definitions
+          vars:
+            ibi_ibbf_objects: "{{ item.spec['policy-templates'] | map(attribute='objectDefinition') | list }}"
+            ibi_ibbf_names: "{{ ibi_ibbf_objects | map(attribute='metadata.name') | list }}"
+          ansible.builtin.assert:
+            that:
+              - item.spec['policy-templates'] is sequence and item.spec['policy-templates'] is not string
+              - ibi_ibbf_objects | length > 0
+              - ibi_ibbf_objects | rejectattr('kind', 'equalto', 'ConfigurationPolicy') | list | length == 0
+              - not (ibi_ibbf_objects | to_json) is search('\\{\\{hub')
+              - ibi_ibbf_names | reject('string') | list | length == 0
+              - ibi_ibbf_names | select('equalto', '') | list | length == 0
+              - ibi_ibbf_names | unique | length == ibi_ibbf_names | length
+              - ibi_ibbf_objects | map(attribute='spec') | reject('mapping') | list | length == 0
+            fail_msg: Rendered replacement policy definitions are invalid.
+          loop: "{{ ibi_ibbf_template_data.roots }}"
+          no_log: true
+
+        - name: Build the expected replacement specifications
+          ansible.builtin.set_fact:
+            ibi_ibbf_expected_templates: >-
+              {{ ibi_ibbf_expected_templates | combine({item.metadata.namespace ~ '.' ~ item.metadata.name:
+                 dict(item.spec['policy-templates'] | map(attribute='objectDefinition.metadata.name') |
+                      zip(item.spec['policy-templates'] | map(attribute='objectDefinition.spec')))}) }}
+          loop: "{{ ibi_ibbf_template_data.roots }}"
+          no_log: true
+
+        - name: Require the complete rendered root policy scope
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_template_data.roots | length > 0
+              - ibi_ibbf_template_data.baseline is mapping and ibi_ibbf_template_data.baseline | length > 0
+              - ibi_ibbf_expected_templates | length == ibi_ibbf_template_data.roots | length
+              - ibi_ibbf_expected_templates.keys() | sort == ibi_ibbf_template_data.previous.keys() | sort
+              - ibi_ibbf_expected_templates.keys() | difference(ibi_ibbf_template_data.baseline.keys()) | length == 0
+            fail_msg: Rendered remediation root policy scope changed.
+
+        - name: Require unchanged ConfigurationPolicy identities
+          ansible.builtin.assert:
+            that:
+              - item.value.keys() | sort == ibi_ibbf_template_data.baseline[item.key] | map(attribute='name') | unique | sort
+            fail_msg: Replacement ConfigurationPolicy identities changed.
+          loop: "{{ ibi_ibbf_expected_templates | dict2items }}"
+          no_log: true
+
+        - name: Validate the previous hardware policy definitions before comparison
+          vars:
+            ibi_ibbf_previous: "{{ ibi_ibbf_template_data.previous[item.metadata.namespace ~ '.' ~ item.metadata.name] }}"
+            ibi_ibbf_previous_names: "{{ ibi_ibbf_previous | map(attribute='objectDefinition.metadata.name') | list }}"
+          ansible.builtin.assert:
+            that:
+              - ibi_ibbf_previous is sequence and ibi_ibbf_previous is not string and ibi_ibbf_previous | length > 0
+              - ibi_ibbf_previous | rejectattr('objectDefinition.kind', 'equalto', 'ConfigurationPolicy') | list | length == 0
+              - not (ibi_ibbf_previous | to_json) is search('\\{\\{hub')
+              - ibi_ibbf_previous_names | reject('string') | list | length == 0
+              - ibi_ibbf_previous_names | select('equalto', '') | list | length == 0
+              - ibi_ibbf_previous_names | unique | length == ibi_ibbf_previous_names | length
+              - ibi_ibbf_previous | map(attribute='objectDefinition.spec') | reject('mapping') | list | length == 0
+            fail_msg: Previous hardware policy definitions are invalid.
+          loop: "{{ ibi_ibbf_template_data.roots | selectattr('metadata.namespace', 'in', ['ztp-group', 'ztp-site']) | list }}"
+          no_log: true
+
+        - name: Classify an unchanged hardware policy specification
+          vars:
+            ibi_ibbf_key: "{{ item.metadata.namespace ~ '.' ~ item.metadata.name }}"
+            ibi_ibbf_previous: "{{ ibi_ibbf_template_data.previous[ibi_ibbf_key] }}"
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: 10
+          when: >-
+            ibi_ibbf_expected_templates[ibi_ibbf_key] ==
+            dict(ibi_ibbf_previous | map(attribute='objectDefinition.metadata.name') |
+                 zip(ibi_ibbf_previous | map(attribute='objectDefinition.spec')))
+          loop: "{{ ibi_ibbf_template_data.roots | selectattr('metadata.namespace', 'in', ['ztp-group', 'ztp-site']) | list }}"
+          no_log: true
+
+        - name: Require changed replacement hardware specifications
+          ansible.builtin.assert:
+            that: ibi_ibbf_policy_rc != 10
+            fail_msg: Hardware policy specifications did not change after Argo synchronization.
+
+    - name: Start fresh replacement policy specifications and evaluations
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_phase: Fresh replacement policy specifications and evaluations
+        ibi_ibbf_wait_deadline: '{{ [now(utc=true).timestamp() | int + 900, ibi_ibbf_policy_deadline | int] | min }}'
+        ibi_ibbf_wait_complete: false
+        ibi_ibbf_wait_api_error: false
+    - name: Wait for fresh policy specifications and evaluations before TALM remediation
+      ansible.builtin.include_tasks: ibi-ibbf-policy.yml
+      vars:
+        ibi_ibbf_wait_goal: fresh
+      loop: '{{ range(0, ([0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max) // 30 + 1) | list }}'
+      loop_control:
+        loop_var: ibi_ibbf_poll_attempt
+        label: Fresh replacement policy specifications and evaluations
+    - name: Classify fresh replacement policy specifications and evaluations timeout
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_rc: '{{ 1 if ibi_ibbf_wait_api_error else 10 }}'
+      when: not ibi_ibbf_wait_complete
+    - name: Require fresh replacement policy specifications and evaluations
+      ansible.builtin.assert:
+        that: ibi_ibbf_wait_complete
+        fail_msg: Fresh replacement policy specifications and evaluations did not complete before its deadline.
+    - name: Record the target-only remediation phase
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_phase: Create target-only TALM remediation
+
+    - name: Create a fresh target-only remediation after policy propagation
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: ran.openshift.io/v1alpha1
+          kind: ClusterGroupUpgrade
+          metadata:
+            generateName: "{{ ibi_ibbf_config.spoke }}-post-ibbf-"
+            namespace: ztp-install
+          spec:
+            clusters: ["{{ ibi_ibbf_config.spoke }}"]
+            enable: true
+            backup: false
+            preCaching: false
+            managedPolicies: "{{ ibi_ibbf_baseline.roots | map('last') | list }}"
+            remediationStrategy:
+              maxConcurrency: 1
+              timeout: 30
+      register: ibi_ibbf_cgu_created
+      timeout: 120
+      no_log: true
+
+      when: now(utc=true).timestamp() | int < ibi_ibbf_policy_deadline | int
+    - name: Classify recovery deadline exhaustion before mutation
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_rc: 10
+      when: ibi_ibbf_cgu_created is skipped
+    - name: Require an identified remediation object
+      ansible.builtin.assert:
+        that:
+          - ibi_ibbf_cgu_created is not unreachable
+          - ibi_ibbf_cgu_created.result.metadata.uid | default('') | length > 0
+          - ibi_ibbf_cgu_created.result.metadata.name | default('') | length > 0
+        fail_msg: Target-only remediation creation did not return an identity.
+      when: not (ibi_ibbf_cgu_created is skipped)
+
+    - name: Retain the new remediation identity
+      ansible.builtin.set_fact:
+        ibi_ibbf_cgu_name: "{{ ibi_ibbf_cgu_created.result.metadata.name }}"
+        ibi_ibbf_cgu_uid: "{{ ibi_ibbf_cgu_created.result.metadata.uid }}"
+      when: not (ibi_ibbf_cgu_created is skipped)
+
+    - name: Start post-ibbf talm remediation
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_phase: Post-IBBF TALM remediation
+        ibi_ibbf_wait_deadline: '{{ ibi_ibbf_policy_deadline | int }}'
+      when: not (ibi_ibbf_cgu_created is skipped)
+    - name: Verify Post-IBBF TALM remediation
+      when: not (ibi_ibbf_cgu_created is skipped)
+      vars:
+        ibi_ibbf_condition_api_ok: >-
+          {{ ibi_ibbf_cgu_current is succeeded and ibi_ibbf_cgu_current is not unreachable and
+
+          ibi_ibbf_cgu_current.resources | default([]) | length == 1 }}
+        ibi_ibbf_condition_ready: >-
+          {{ ibi_ibbf_condition_api_ok and ibi_ibbf_condition_identity_ok and
+
+          ibi_ibbf_cgu_current.resources[0].status.conditions | default([]) | selectattr('type', 'equalto',
+
+          'Succeeded') | selectattr('status', 'equalto', 'True') | list | length > 0 }}
+        ibi_ibbf_condition_identity_ok: >-
+          {{ ibi_ibbf_condition_api_ok and ibi_ibbf_cgu_current.resources[0].metadata.uid == ibi_ibbf_cgu_uid
+
+          }}
+      block:
+        - name: Wait for the exact TALM remediation to succeed
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+            api_version: ran.openshift.io/v1alpha1
+            kind: ClusterGroupUpgrade
+            namespace: ztp-install
+            name: "{{ ibi_ibbf_cgu_name }}"
+          register: ibi_ibbf_cgu_current
+          timeout: 120
+          no_log: true
+
+          until: not ibi_ibbf_condition_api_ok or not ibi_ibbf_condition_identity_ok or ibi_ibbf_condition_ready or
+            now(utc=true).timestamp() | int >= ibi_ibbf_wait_deadline | int
+          retries: '{{ ([0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max) // 30 + 1 }}'
+          delay: 30
+          ignore_errors: true
+          when: now(utc=true).timestamp() | int < ibi_ibbf_wait_deadline | int
+        - name: Retain target-only remediation progress
+          ansible.builtin.set_fact:
+            ibi_ibbf_cgu_status:
+              name: "{{ ibi_ibbf_cgu_name }}"
+              uid: "{{ ibi_ibbf_cgu_uid }}"
+              conditions: "{{ ibi_ibbf_cgu_current.resources[0].status.conditions | default([]) }}"
+              clusters: "{{ ibi_ibbf_cgu_current.resources[0].status.clusters | default([]) }}"
+          no_log: true
+
+          when: ibi_ibbf_condition_api_ok
+        - name: Classify post-ibbf talm remediation failure
+          ansible.builtin.set_fact:
+            ibi_ibbf_policy_rc: >-
+              {{ 10 if (ibi_ibbf_cgu_current is skipped or
+                        (ibi_ibbf_condition_api_ok and ibi_ibbf_condition_identity_ok))
+                 else 1 }}
+          when: not ibi_ibbf_condition_ready
+        - name: Require post-ibbf talm remediation
+          ansible.builtin.assert:
+            that: ibi_ibbf_condition_ready
+            fail_msg: Post-IBBF TALM remediation did not complete before its deadline.
+    - name: Start target policy compliance
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_phase: Target policy compliance
+        ibi_ibbf_wait_deadline: '{{ ibi_ibbf_policy_deadline | int }}'
+        ibi_ibbf_wait_complete: false
+        ibi_ibbf_wait_api_error: false
+    - name: Wait for fresh complete target policy compliance
+      ansible.builtin.include_tasks: ibi-ibbf-policy.yml
+      vars:
+        ibi_ibbf_wait_goal: compliant
+      loop: '{{ range(0, ([0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max) // 30 + 1) | list }}'
+      loop_control:
+        loop_var: ibi_ibbf_poll_attempt
+        label: Target policy compliance
+    - name: Classify target policy compliance timeout
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_rc: '{{ 1 if ibi_ibbf_wait_api_error else 10 }}'
+      when: not ibi_ibbf_wait_complete
+    - name: Require target policy compliance
+      ansible.builtin.assert:
+        that: ibi_ibbf_wait_complete
+        fail_msg: Target policy compliance did not complete before its deadline.
+    - name: Record successful policy recovery
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_rc: 0
+        ibi_ibbf_policy_message: All expected target policies are freshly evaluated and Compliant.
+  rescue:
+    - name: Retain the policy failure without exposing API responses
+      ansible.builtin.set_fact:
+        ibi_ibbf_policy_message: "{{ ibi_ibbf_policy_phase }} did not complete successfully."
+  always:
+    - name: Write policy artifacts and always render the JUnit report
+      block:
+        - name: Write policy recovery reports and the safe execution summary
+          ansible.builtin.copy:
+            dest: "{{ item.dest }}"
+            content: "{{ item.content }}"
+            mode: '0600'
+          loop:
+            - dest: "{{ ibi_ibbf_work_dir }}/report/expected-policies.json"
+              content: "{{ ibi_ibbf_baseline.policies | default({}) | to_nice_json }}"
+            - dest: "{{ ibi_ibbf_work_dir }}/report/post-ibbf-cgu-status.json"
+              content: "{{ ibi_ibbf_cgu_status | to_nice_json }}"
+            - dest: "{{ ibi_ibbf_private_dir }}/policy-gate.log"
+              content: "{{ ibi_ibbf_policy_message }}\nPolicy result: {{ ibi_ibbf_policy_rc }}\n"
+          loop_control:
+            label: "{{ item.dest | basename }}"
+          register: ibi_ibbf_policy_report_write
+          no_log: true
+      always:
+        - name: Render the policy recovery JUnit report
+          ansible.builtin.template:
+            src: ibi-ibbf-policy-junit.xml.j2
+            dest: "{{ ibi_ibbf_work_dir }}/report/junit_ibbf_policy_gate.xml"
+            mode: '0600'
+          register: ibi_ibbf_policy_junit_write
+          no_log: true
+
+    - name: Require all policy reports to be retained
+      ansible.builtin.assert:
+        that:
+          - ibi_ibbf_policy_report_write is not unreachable
+          - ibi_ibbf_policy_junit_write is not unreachable
+          - >-
+            ibi_ibbf_policy_report_write.results | selectattr('unreachable', 'defined') |
+            selectattr('unreachable') | list | length == 0
+        fail_msg: Policy recovery reports could not be retained.
+- name: Require completed policy execution when hardware passed
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_policy_rc | default(125) | int in [0, 10]
+    fail_msg: IBBF policy recovery encountered an execution error.
+  when: ibi_ibbf_run.rc | int == 0
+
+- name: Verify the completed policy gate produced its JUnit report
+  ansible.builtin.stat:
+    path: "{{ ibi_ibbf_work_dir }}/report/junit_ibbf_policy_gate.xml"
+  register: ibi_ibbf_policy_junit
+  when: ibi_ibbf_run.rc | int == 0
+
+- name: Require the policy gate report when hardware passed
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_policy_junit.stat.isreg | default(false)
+      - ibi_ibbf_policy_junit.stat.size | default(0) | int > 0
+    fail_msg: Completed policy execution did not retain its JUnit result.
+  when: ibi_ibbf_run.rc | int == 0

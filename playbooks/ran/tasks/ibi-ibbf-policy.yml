@@ -1,0 +1,389 @@
+---
+# One replacement or policy observation within the shared recovery deadline.
+# Admission is frozen once at the start of each call so a deadline cannot
+# split classification across the read of a single snapshot.
+#
+# Goals (ibi_ibbf_wait_goal):
+#   node      — wait for a different Ready replacement node; sets ibi_ibbf_cutoff on success
+#   fresh     — wait for hub and spoke policies with post-cutoff evaluations on all CPs
+#   compliant — wait for fresh evaluations where all policies are Compliant
+#
+# Sets ibi_ibbf_wait_complete=true when the goal is met, and ibi_ibbf_wait_api_error=true
+# on API failures. Required context comes from ibi_ibbf_config, ibi_ibbf_baseline,
+# ibi_ibbf_expected_source, and ibi_ibbf_expected_templates (set by the caller).
+# Caller must set ibi_ibbf_wait_deadline, ibi_ibbf_wait_complete, and ibi_ibbf_wait_api_error
+# before entering the loop; ibi_ibbf_cutoff must be set before using the fresh/compliant goals.
+- name: Check whether another recovery observation may start
+  ansible.builtin.set_fact:
+    ibi_ibbf_observe_active: "{{ not ibi_ibbf_wait_complete and now(utc=true).timestamp() | int < ibi_ibbf_wait_deadline | int }}"
+
+- name: Observe the replacement while the recovery wait is active
+  when: ibi_ibbf_observe_active
+  no_log: true
+  block:
+    - name: Reset the last API observation
+      ansible.builtin.set_fact:
+        ibi_ibbf_wait_api_error: false
+        ibi_ibbf_app_synced: true
+
+    - name: Observe replacement node readiness
+      when: ibi_ibbf_wait_goal == 'node'
+      block:
+        - name: Read the replacement node during readiness polling
+          ansible.builtin.command:
+            argv:
+              - timeout
+              - 45s
+              - oc
+              - "--kubeconfig={{ ibi_ibbf_config.spoke_kubeconfig }}"
+              - --request-timeout=30s
+              - get
+              - nodes
+              - -o
+              - json
+          register: ibi_ibbf_replacement_nodes
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          timeout: 120
+          no_log: true
+
+        - name: Record replacement API availability
+          ansible.builtin.set_fact:
+            ibi_ibbf_wait_api_error: >-
+              {{ ibi_ibbf_replacement_nodes is failed or ibi_ibbf_replacement_nodes is unreachable or
+                 ibi_ibbf_replacement_nodes.rc | default(125) | int != 0 }}
+
+        - name: Decode a successful replacement node observation
+          ansible.builtin.set_fact:
+            ibi_ibbf_replacement_node_items: "{{ (ibi_ibbf_replacement_nodes.stdout | from_json)['items'] }}"
+          when: not ibi_ibbf_wait_api_error
+          no_log: true
+
+        - name: Resolve replacement readiness
+          ansible.builtin.set_fact:
+            ibi_ibbf_wait_complete: >-
+              {{ not ibi_ibbf_wait_api_error and
+                 ibi_ibbf_replacement_node_items | length == 1 and
+                 ibi_ibbf_replacement_node_items[0].metadata.uid != ibi_ibbf_baseline.node_uid and
+                 not ibi_ibbf_replacement_node_items[0].metadata.deletionTimestamp | default('') and
+                 ibi_ibbf_replacement_node_items[0].status.conditions | default([]) |
+                 selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0 }}
+
+        - name: Retain the replacement creation time as the evaluation cutoff
+          ansible.builtin.set_fact:
+            ibi_ibbf_cutoff: "{{ ibi_ibbf_replacement_node_items[0].metadata.creationTimestamp | default('') }}"
+          when: ibi_ibbf_wait_complete
+
+    - name: Observe fresh replacement policies
+      when: ibi_ibbf_wait_goal in ['fresh', 'compliant']
+      block:
+        - name: Read policy observations from the hub and replacement
+          ansible.builtin.command:
+            argv: >-
+              {{ ['timeout', '45s', 'oc', '--kubeconfig=' ~ item.kubeconfig, '--request-timeout=30s', 'get', item.resource] +
+                 item.scope + ['-o', 'json'] }}
+          loop:
+            - kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+              resource: policies.policy.open-cluster-management.io
+              scope: ['-n', "{{ ibi_ibbf_config.spoke }}"]
+            - kubeconfig: "{{ ibi_ibbf_config.spoke_kubeconfig }}"
+              resource: configurationpolicies.policy.open-cluster-management.io
+              scope: ['-A']
+          register: ibi_ibbf_policy_observations
+          changed_when: false
+          failed_when: false
+          timeout: 120
+          no_log: true
+
+        - name: Record whether both policy APIs answered
+          ansible.builtin.set_fact:
+            ibi_ibbf_wait_api_error: >-
+              {{ ibi_ibbf_policy_observations is failed or ibi_ibbf_policy_observations is unreachable or
+                 ibi_ibbf_policy_observations.results | default([]) | length != 2 or
+                 ibi_ibbf_policy_observations.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0 or
+                 ibi_ibbf_policy_observations.results | selectattr('unreachable', 'defined') |
+                 selectattr('unreachable') | list | length > 0 or
+                 ibi_ibbf_policy_observations.results | selectattr('rc', 'undefined') | list | length > 0 or
+                 ibi_ibbf_policy_observations.results | rejectattr('rc', 'equalto', 0) | list | length > 0 }}
+
+        - name: Verify the pinned policy Application
+          when: not ibi_ibbf_wait_api_error
+          block:
+            - name: Verify the replacement Application throughout propagation
+              when: ibi_ibbf_expected_source | length > 0
+              block:
+                - name: Read the policy Application
+                  kubernetes.core.k8s_info:
+                    kubeconfig: "{{ ibi_ibbf_config.hub_kubeconfig }}"
+                    api_version: argoproj.io/v1alpha1
+                    kind: Application
+                    namespace: openshift-gitops
+                    name: policies
+                  register: ibi_ibbf_policy_app_current
+                  failed_when: false
+                  ignore_errors: true
+                  timeout: 120
+                  no_log: true
+
+                - name: Record Application API availability
+                  ansible.builtin.set_fact:
+                    ibi_ibbf_wait_api_error: >-
+                      {{ ibi_ibbf_policy_app_current is failed or ibi_ibbf_policy_app_current is unreachable or
+                         ibi_ibbf_policy_app_current.resources is not defined or
+                         not ibi_ibbf_policy_app_current.api_found | default(false) }}
+
+                - name: Require the expected Application identity and source
+                  when: not ibi_ibbf_wait_api_error
+                  ansible.builtin.assert:
+                    that:
+                      - ibi_ibbf_policy_app_current is not unreachable
+                      - ibi_ibbf_policy_app_current.resources | default([]) | length == 1
+                      - not ibi_ibbf_policy_app_current.resources[0].metadata.deletionTimestamp | default('')
+                      - ibi_ibbf_policy_app_current.resources[0].metadata.uid == ibi_ibbf_baseline.policy_app.uid
+                      - ibi_ibbf_policy_app_current.resources[0].spec.source == ibi_ibbf_expected_source
+                      - >-
+                        ibi_ibbf_policy_app_current.resources[0].status.conditions | default([]) |
+                        selectattr('type', 'in', ['ComparisonError', 'InvalidSpecError', 'SyncError']) | list | length == 0
+                    fail_msg: The replacement policy Application changed or could not render and synchronize.
+
+                - name: Check the exact pinned synchronization result
+                  when: not ibi_ibbf_wait_api_error
+                  vars:
+                    ibi_ibbf_app: "{{ ibi_ibbf_policy_app_current.resources[0] }}"
+                  ansible.builtin.set_fact:
+                    ibi_ibbf_app_synced: >-
+                      {{ not ibi_ibbf_app.operation | default({}) and
+                         ibi_ibbf_app.status.sync.status | default('') == 'Synced' and
+                         ibi_ibbf_app.status.sync.revision | default('') == ibi_ibbf_baseline.policy_revision and
+                         ibi_ibbf_app.status.sync.comparedTo.source | default({}) == ibi_ibbf_expected_source and
+                         ibi_ibbf_app.status.operationState.phase | default('') == 'Succeeded' and
+                         ibi_ibbf_app.status.operationState.syncResult.revision | default('') == ibi_ibbf_baseline.policy_revision and
+                         ibi_ibbf_app.status.operationState.syncResult.source | default({}) == ibi_ibbf_expected_source }}
+
+        - name: Compare fresh policy specifications and evaluations
+          when: not ibi_ibbf_wait_api_error
+          vars:
+            ibi_ibbf_compare_data:
+              policies: "{{ (ibi_ibbf_policy_observations.results[0].stdout | from_json)['items'] }}"
+              configuration_policies: "{{ (ibi_ibbf_policy_observations.results[1].stdout | from_json)['items'] }}"
+              baseline: "{{ ibi_ibbf_baseline.policies }}"
+              expected_templates: "{{ ibi_ibbf_expected_templates }}"
+              cutoff: "{{ ibi_ibbf_cutoff }}"
+          block:
+            - name: Require the expected snapshot and policy identity scope
+              ansible.builtin.assert:
+                that:
+                  - ibi_ibbf_compare_data.baseline is mapping and ibi_ibbf_compare_data.baseline | length > 0
+                  - ibi_ibbf_compare_data.baseline.values() | reject('sequence') | list | length == 0
+                  - ibi_ibbf_compare_data.baseline.values() | select('string') | list | length == 0
+                  - ibi_ibbf_compare_data.baseline.values() | select('mapping') | list | length == 0
+                  - ibi_ibbf_compare_data.baseline.values() | select('equalto', []) | list | length == 0
+                  - ibi_ibbf_compare_data.expected_templates is mapping
+                  - ibi_ibbf_compare_data.expected_templates.keys() | difference(ibi_ibbf_compare_data.baseline.keys()) | length == 0
+                  - ibi_ibbf_compare_data.policies is sequence and ibi_ibbf_compare_data.policies is not string
+                  - ibi_ibbf_compare_data.configuration_policies is sequence and ibi_ibbf_compare_data.configuration_policies is not string
+                  - ibi_ibbf_compare_data.cutoff is string
+                fail_msg: Policy comparison inputs are incomplete or have an unexpected scope.
+              no_log: true
+
+            - name: Index the hub and spoke policy observations
+              ansible.builtin.set_fact:
+                ibi_ibbf_hub_snapshot: >-
+                  {{ dict(ibi_ibbf_compare_data.policies | map(attribute='metadata.name') | zip(ibi_ibbf_compare_data.policies)) }}
+                ibi_ibbf_leaf_snapshot: >-
+                  {{ dict(ibi_ibbf_compare_data.configuration_policies | map(attribute='metadata.namespace') |
+                     zip(ibi_ibbf_compare_data.configuration_policies | map(attribute='metadata.name')) | map('join', '/') |
+                     zip(ibi_ibbf_compare_data.configuration_policies)) }}
+                ibi_ibbf_snapshot_fresh: true
+                ibi_ibbf_snapshot_compliant: true
+                ibi_ibbf_snapshot_times: {}
+                ibi_ibbf_snapshot_replicas: {}
+                ibi_ibbf_snapshot_specs: []
+                ibi_ibbf_snapshot_spec_matches: {}
+                ibi_ibbf_snapshot_states: {}
+              no_log: true
+
+            - name: Reject duplicate policy identities in a snapshot
+              ansible.builtin.assert:
+                that:
+                  - ibi_ibbf_hub_snapshot | length == ibi_ibbf_compare_data.policies | length
+                  - ibi_ibbf_leaf_snapshot | length == ibi_ibbf_compare_data.configuration_policies | length
+                fail_msg: Duplicate policy identities were observed.
+
+            # RFC3339 filtering prevents GNU date from accepting timezone-free or relative dates.
+            # Run only once per distinct timestamp on the controller, avoiding extra bastion SSH calls.
+            - name: Parse timezone-bearing policy timestamps
+              vars:
+                ibi_ibbf_rfc3339: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$'
+                ansible_python_interpreter: "{{ ansible_playbook_python }}"
+              ansible.builtin.command:
+                argv: [date, --date, "{{ item }}", '+%s.%N']
+              loop: >-
+                {{ ([ibi_ibbf_compare_data.cutoff] +
+                    (ibi_ibbf_compare_data.configuration_policies | map(attribute='status.lastEvaluated', default='') | list)) |
+                   select('string') | select('match', ibi_ibbf_rfc3339) | unique | list }}
+              delegate_to: localhost
+              become: false
+              register: ibi_ibbf_timestamp_results
+              changed_when: false
+              failed_when: false
+              timeout: 120
+              no_log: true
+
+            - name: Require timestamp parsing to execute successfully
+              ansible.builtin.assert:
+                that:
+                  - item is not unreachable
+                  - item.rc | default(125) | int in [0, 1]
+                fail_msg: Policy timestamps could not be parsed.
+              loop: "{{ ibi_ibbf_timestamp_results.results }}"
+              no_log: true
+
+            - name: Retain valid evaluation epochs at microsecond precision
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_times: >-
+                  {{ ibi_ibbf_snapshot_times | combine({item.item:
+                       (item.stdout.split('.')[0] ~ '.' ~ item.stdout.split('.')[1][:6]) | float}) }}
+              loop: "{{ ibi_ibbf_timestamp_results.results }}"
+              when: item.rc == 0
+              no_log: true
+
+            - name: Require a valid replacement creation timestamp
+              ansible.builtin.assert:
+                that: ibi_ibbf_compare_data.cutoff in ibi_ibbf_snapshot_times
+                fail_msg: Invalid replacement creation timestamp.
+
+            - name: Validate replicated ConfigurationPolicy definitions
+              vars:
+                ibi_ibbf_objects: "{{ item.spec['policy-templates'] | map(attribute='objectDefinition') | list }}"
+                ibi_ibbf_names: "{{ ibi_ibbf_objects | map(attribute='metadata.name') | list }}"
+              ansible.builtin.assert:
+                that:
+                  - item.spec['policy-templates'] is sequence and item.spec['policy-templates'] is not string
+                  - ibi_ibbf_objects | length > 0
+                  - ibi_ibbf_objects | rejectattr('kind', 'equalto', 'ConfigurationPolicy') | list | length == 0
+                  - not (ibi_ibbf_objects | to_json) is search('\{\{hub')
+                  - ibi_ibbf_names | reject('string') | list | length == 0
+                  - ibi_ibbf_names | select('equalto', '') | list | length == 0
+                  - ibi_ibbf_names | unique | length == ibi_ibbf_names | length
+                  - ibi_ibbf_objects | map(attribute='spec') | reject('mapping') | list | length == 0
+                fail_msg: Replicated policy definitions are invalid.
+              loop: "{{ ibi_ibbf_compare_data.policies }}"
+              when: item.metadata.name in ibi_ibbf_compare_data.expected_templates and not item.metadata.deletionTimestamp | default('')
+              no_log: true
+
+            - name: Index the replicated specifications
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_replicas: >-
+                  {{ ibi_ibbf_snapshot_replicas | combine({item.metadata.name:
+                     dict(item.spec['policy-templates'] | map(attribute='objectDefinition.metadata.name') |
+                          zip(item.spec['policy-templates'] | map(attribute='objectDefinition.spec')))}) }}
+              loop: "{{ ibi_ibbf_compare_data.policies }}"
+              when: item.metadata.name in ibi_ibbf_compare_data.expected_templates and not item.metadata.deletionTimestamp | default('')
+              no_log: true
+
+            - name: Select replicated specifications for comparison
+              vars:
+                ibi_ibbf_owner: "{{ item[0].metadata.name }}"
+                ibi_ibbf_definition: "{{ item[1].objectDefinition }}"
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_specs: >-
+                  {{ ibi_ibbf_snapshot_specs + [{'owner': ibi_ibbf_owner, 'actual': ibi_ibbf_definition.spec,
+                       'expected': ibi_ibbf_compare_data.expected_templates[ibi_ibbf_owner][ibi_ibbf_definition.metadata.name]}] }}
+              loop: >-
+                {{ ibi_ibbf_compare_data.policies | selectattr('metadata.name', 'in', ibi_ibbf_snapshot_replicas.keys() | list) |
+                   subelements('spec.policy-templates') }}
+              when: ibi_ibbf_definition.metadata.name in ibi_ibbf_compare_data.expected_templates[ibi_ibbf_owner]
+              no_log: true
+
+            - name: Select spoke specifications for comparison
+              vars:
+                ibi_ibbf_leaf_key: "{{ item[1].namespace ~ '/' ~ item[1].name }}"
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_specs: >-
+                  {{ ibi_ibbf_snapshot_specs + [{'owner': item[0].key,
+                       'actual': ibi_ibbf_leaf_snapshot[ibi_ibbf_leaf_key].spec | default({}),
+                       'expected': ibi_ibbf_compare_data.expected_templates[item[0].key][item[1].name]}] }}
+              loop: "{{ ibi_ibbf_compare_data.baseline | dict2items | subelements('value') }}"
+              when: item[0].key in ibi_ibbf_compare_data.expected_templates and ibi_ibbf_leaf_key in ibi_ibbf_leaf_snapshot
+              no_log: true
+
+            # Normalize only the typed object-template envelope. Explicit recreateOption values
+            # and every field inside objectDefinition remain significant; only top-level TALM
+            # remediationAction differences are ignored. Other unexpected actual keys retain
+            # the previous behavior of comparing the fields specified by the expected policy.
+            - name: Compare specifications with the typed recreation default
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_spec_matches: >-
+                  {%- macro normalize(spec) -%}
+                  {%- set objects = [] -%}
+                  {%- for object in spec.get('object-templates', []) -%}
+                  {%- set _ = objects.append({'recreateOption': 'None'} | combine(object)) -%}
+                  {%- endfor -%}
+                  {{ (spec | combine({'object-templates': objects}) if 'object-templates' in spec else spec) | to_json }}
+                  {%- endmacro -%}
+                  {%- set actual = normalize(item.actual) | from_json -%}
+                  {%- set expected = normalize(item.expected) | from_json -%}
+                  {%- set result = namespace(matches=true) -%}
+                  {%- for key, value in expected.items() if key != 'remediationAction' -%}
+                  {%- set result.matches = result.matches and actual.get(key) == value -%}
+                  {%- endfor -%}
+                  {{ ibi_ibbf_snapshot_spec_matches | combine({item.owner:
+                       ibi_ibbf_snapshot_spec_matches.get(item.owner, true) and result.matches}) }}
+              loop: "{{ ibi_ibbf_snapshot_specs }}"
+              no_log: true
+
+            - name: Check each expected spoke evaluation and collect its compliance state
+              vars:
+                ibi_ibbf_leaf: "{{ ibi_ibbf_leaf_snapshot.get(item[1].namespace ~ '/' ~ item[1].name, {}) }}"
+                ibi_ibbf_status: "{{ ibi_ibbf_leaf.status | default({}) }}"
+                ibi_ibbf_time: "{{ ibi_ibbf_status.lastEvaluated | default('') }}"
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_fresh: >-
+                  {{ ibi_ibbf_snapshot_fresh and ibi_ibbf_leaf | length > 0 and
+                     not ibi_ibbf_leaf.metadata.deletionTimestamp | default('') and
+                     ibi_ibbf_status.lastEvaluatedGeneration | default(none) == ibi_ibbf_leaf.metadata.generation and
+                     ibi_ibbf_time in ibi_ibbf_snapshot_times and
+                     ibi_ibbf_snapshot_times[ibi_ibbf_time] >= ibi_ibbf_snapshot_times[ibi_ibbf_compare_data.cutoff] and
+                     ibi_ibbf_status.compliant | default('') in ['Compliant', 'NonCompliant'] }}
+                ibi_ibbf_snapshot_states: >-
+                  {{ ibi_ibbf_snapshot_states | combine({item[0].key:
+                       ibi_ibbf_snapshot_states.get(item[0].key, []) + [ibi_ibbf_status.compliant | default('')]}) }}
+              loop: "{{ ibi_ibbf_compare_data.baseline | dict2items | subelements('value') }}"
+              no_log: true
+
+            - name: Require coherent fresh hub and spoke policy states
+              vars:
+                ibi_ibbf_hub_policy: "{{ ibi_ibbf_hub_snapshot.get(item.key, {}) }}"
+                ibi_ibbf_expected_state: >-
+                  {{ 'Compliant' if ibi_ibbf_snapshot_states[item.key] | reject('equalto', 'Compliant') | list | length == 0 else 'NonCompliant' }}
+              ansible.builtin.set_fact:
+                ibi_ibbf_snapshot_fresh: >-
+                  {{ ibi_ibbf_snapshot_fresh and ibi_ibbf_hub_policy | length > 0 and
+                     not ibi_ibbf_hub_policy.metadata.deletionTimestamp | default('') and
+                     ibi_ibbf_hub_policy.status.compliant | default('') == ibi_ibbf_expected_state and
+                     (item.key not in ibi_ibbf_compare_data.expected_templates or
+                      (ibi_ibbf_snapshot_replicas.get(item.key, {}).keys() | sort == ibi_ibbf_compare_data.expected_templates[item.key].keys() | sort and
+                       ibi_ibbf_snapshot_spec_matches.get(item.key, false))) }}
+                ibi_ibbf_snapshot_compliant: "{{ ibi_ibbf_snapshot_compliant and ibi_ibbf_expected_state == 'Compliant' }}"
+              loop: "{{ ibi_ibbf_compare_data.baseline | dict2items }}"
+              no_log: true
+
+            - name: Resolve the snapshot comparison including newly assigned policies
+              ansible.builtin.set_fact:
+                ibi_ibbf_policy_comparison:
+                  fresh: "{{ ibi_ibbf_snapshot_fresh }}"
+                  compliant: >-
+                    {{ ibi_ibbf_snapshot_fresh and ibi_ibbf_snapshot_compliant and
+                       ibi_ibbf_compare_data.policies | map(attribute='status.compliant', default='') |
+                       reject('equalto', 'Compliant') | list | length == 0 }}
+
+            - name: Resolve fresh policy evaluation readiness
+              ansible.builtin.set_fact:
+                ibi_ibbf_wait_complete: "{{ ibi_ibbf_policy_comparison[ibi_ibbf_wait_goal] and ibi_ibbf_app_synced }}"
+
+    - name: Wait between recovery observations within the shared deadline
+      ansible.builtin.pause:
+        seconds: "{{ [30, [0, ibi_ibbf_wait_deadline | int - now(utc=true).timestamp() | int] | max] | min }}"
+      when: not ibi_ibbf_wait_complete and now(utc=true).timestamp() | int < ibi_ibbf_wait_deadline | int

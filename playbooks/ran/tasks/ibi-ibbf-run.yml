@@ -1,0 +1,93 @@
+---
+# Prepare the existing eco-gotests launcher and retain the hardware runner result.
+# Included by ibi-ibbf.yml; uses its shared execution state.
+- name: Prepare the existing eco-gotests launcher
+  ansible.builtin.shell:
+    cmd: >-
+      umask 077; exec timeout --kill-after=10s 1800s
+      {{ ansible_playbook_python | quote }} -m ansible.cli.playbook
+      {{ (playbook_dir ~ '/../deploy-run-eco-gotests.yaml') | quote }}
+      -i {{ ibi_ibbf_inventory | quote }} --extra-vars {{ ibi_ibbf_launcher_vars | to_json | quote }}
+      > {{ (ibi_ibbf_controller_dir ~ '/setup.log') | quote }} 2>&1
+    chdir: "{{ playbook_dir }}/../.."
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    ibi_ibbf_launcher_vars:
+      kubeconfig: "{{ ibi_ibbf_config.spoke_kubeconfig }}"
+      hub_clusterconfigs_path: "{{ ibi_ibbf_config.hub_kubeconfig | dirname | dirname }}"
+      eco_gotest_dir: "{{ ibi_ibbf_work_dir }}"
+      additional_test_env_variables: "--env-file {{ ibi_ibbf_config.env_file }}"
+      features: gitopsztp
+      labels: '"ibbf-end-to-end && test_id:78333"'
+      eco_gotests_tag: latest
+      test_timeout: 3h
+      eco_worker_label: ''
+      eco_cnf_core_net_switch_user: ''
+      eco_cnf_core_net_switch_pass: ''
+      eco_cnf_core_net_switch_ip: ''
+      eco_cnf_core_net_mlb_addr_list: ''
+      switch_lag_names: ''
+      report_test_case_tag: test_id
+      report_parameter_tag: parameters
+      report_tc_prefix: ibi
+  delegate_to: localhost
+  become: false
+  register: ibi_ibbf_launcher_prepare
+  changed_when: true
+  no_log: true
+
+- name: Require successful launcher preparation
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_launcher_prepare.rc | default(125) | int == 0
+    fail_msg: IBBF launcher preparation did not complete; hardware tests are blocked.
+
+- name: Remove interactive TTY allocation from the launcher
+  ansible.builtin.replace:
+    path: "{{ ibi_ibbf_work_dir }}/eco-gotests-run.sh"
+    regexp: 'podman run -it '
+    replace: 'podman run -i '
+  register: ibi_ibbf_launcher_patch
+
+- name: Require a reachable prepared launcher with TTY removed
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_launcher_patch is not unreachable
+      - ibi_ibbf_launcher_patch is changed
+    fail_msg: >-
+      Cannot configure the IBBF launcher for CI execution.
+      Verify that eco-gotests-run.sh contains 'podman run -it '.
+
+- name: Execute the selected hardware replacement test
+  ansible.builtin.shell:
+    cmd: >-
+      exec ./eco-gotests-run.sh > {{ (ibi_ibbf_private_dir ~ '/runner.log') | quote }} 2>&1
+    chdir: "{{ ibi_ibbf_work_dir }}"
+  async: 11100
+  poll: 30
+  register: ibi_ibbf_run
+  changed_when: true
+  failed_when: false
+  no_log: true
+
+- name: Require a completed hardware test runner
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_run is not unreachable
+      - ibi_ibbf_run.rc | default(125) | int in [0, 1]
+    fail_msg: IBBF runner did not finish with a test exit status of 0 or 1.
+
+- name: Check the hardware report exists before policy recovery
+  ansible.builtin.stat:
+    path: "{{ ibi_ibbf_work_dir }}/report/ztp_suite_test_junit.xml"
+    get_checksum: false
+    get_mime: false
+  register: ibi_ibbf_hardware_report
+
+- name: Require a retained hardware report
+  ansible.builtin.assert:
+    that:
+      - ibi_ibbf_hardware_report is not unreachable
+      - ibi_ibbf_hardware_report.stat.isreg | default(false)
+      - ibi_ibbf_hardware_report.stat.size | default(0) | int > 0
+    fail_msg: IBBF runner did not retain a nonempty hardware JUnit report.

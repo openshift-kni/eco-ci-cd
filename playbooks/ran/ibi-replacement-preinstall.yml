@@ -68,19 +68,16 @@
         that:
           - ibi_preinstall_phase is not defined
           - ibi_replacement_preinstall_phase | default('prepare') in ['prepare', 'run']
-          - ibi_hub_kubeconfig | default('') is match('^/.+')
-          - ibi_seed_cluster | default('') is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+          - ibi_seed_cluster | default('') | trim | length > 0
           - ibi_seed_digest | default('') is match('^sha256:[a-f0-9]{64}$')
           - ibi_git_revision | default('') is match('^[a-f0-9]{40}$')
-          - ibi_git_repo | default('') is match('^https://[a-zA-Z0-9./:_-]+$')
-          - ibi_release_version | default('') is match('^[0-9]+\.[0-9]+$')
-          - ibi_seed_version | default('') is match('^' ~ (ibi_release_version | default('') | regex_escape) ~ '\.[0-9]+([-.][0-9A-Za-z.-]+)?$')
-          - ibi_preinstall_registry | default('') is match('^[a-zA-Z0-9./:_-]+$')
-          - ibi_replacement_host | default('') is match('^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$')
-          - ibi_replacement_mac | default('') is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
-          - ibi_replacement_ip | default('') is match('^[0-9A-Fa-f:.]+$')
-          - ibi_http_subdir | default('') is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
-          - ibi_http_dir is not defined or (ibi_http_dir | regex_replace('/+$', '') | basename) == ibi_http_subdir
+          - ibi_git_repo | default('') is match('^https://')
+          - ibi_release_version | default('') | trim | length > 0
+          - ibi_release_version == ((ibi_seed_version | default('')).split('.')[:2] | join('.'))
+          - ibi_preinstall_registry | default('') | trim | length > 0
+          - ibi_replacement_host | default('') | trim | length > 0
+          - ibi_replacement_mac | default('') | trim | length > 0
+          - ibi_http_subdir | default('') | trim | length > 0
           - >-
             ibi_replacement_preinstall_phase | default('prepare') != 'run' or
             ibi_report_dir | default('') is match('^/.+')
@@ -251,20 +248,20 @@
       changed_when: true
 
     - name: Require only the expected address in the selected IP family
-      ansible.builtin.command:
-        argv:
-          - python3
-          - -c
-          - |
-            import ipaddress
-            import sys
-            expected = ipaddress.ip_address(sys.argv[1])
-            addresses = {ipaddress.ip_address(line.split()[0]) for line in sys.stdin if line.strip()}
-            if addresses != {expected}:
-                raise SystemExit("Replacement DNS does not resolve only to the configured address")
-          - "{{ ibi_replacement_ip }}"
-        stdin: "{{ ibi_replacement_dns.stdout }}"
-      changed_when: false
+      vars:
+        ibi_replacement_address: "{{ ibi_replacement_ip | ansible.utils.ipaddr('address') }}"
+      ansible.builtin.assert:
+        that:
+          - ibi_replacement_ip is string
+          - ibi_replacement_ip is match('^[0-9A-Fa-f:.]+$')
+          - ibi_replacement_address != false
+          - "':' in ibi_replacement_ip or ibi_replacement_ip == ibi_replacement_address"
+          - >-
+            (ibi_replacement_dns.stdout_lines | reject('match', '^\s*$') |
+             map('split') | map('first') | map('ansible.utils.ipaddr', 'address') |
+             unique | list) == [ibi_replacement_address]
+        quiet: true
+        fail_msg: Replacement DNS must resolve only to the configured IPv4 or IPv6 address.
 
     - name: Check the isolated HTTP directory is served
       ansible.builtin.uri:

@@ -70,20 +70,21 @@
           - labels is defined
 
     - name: Fetch hub apps domain
-      ansible.builtin.shell: |
-        oc --kubeconfig {{ hub_clusterconfigs_path }}/auth/kubeconfig \
-          get ingress.config cluster -o jsonpath='{.spec.domain}'
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+        kubeconfig: "{{ hub_clusterconfigs_path }}/auth/kubeconfig"
       register: hub_apps_domain_result
-      changed_when: false
 
     - name: Fetch O2IMS OAuth client secret
-      ansible.builtin.shell: |
-        set -o pipefail
-        oc --kubeconfig {{ hub_clusterconfigs_path }}/auth/kubeconfig \
-          get secret oauth-client-secrets -n oran-o2ims \
-          -o jsonpath='{.data.client-secret}' | base64 -d
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: oauth-client-secrets
+        namespace: oran-o2ims
+        kubeconfig: "{{ hub_clusterconfigs_path }}/auth/kubeconfig"
       register: o2ims_oauth_secret_result
-      changed_when: false
       no_log: true
 
     - name: Ensure test directory does not exist

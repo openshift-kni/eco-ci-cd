@@ -607,6 +607,7 @@
 
     - name: Remove cloud.openshift.com from pull secret to disable Insights
       when: disable_insights | bool
+      no_log: true
       ansible.builtin.set_fact:
         pull_secret: >-
           {{ pull_secret | combine({
@@ -617,6 +618,7 @@
 
     - name: Generate deployment manifests for OpenShift installation
       when: (disconnected | bool) is false
+      no_log: true
       vars:
         single_node_openshift_enabled: true
       ansible.builtin.import_role:
@@ -635,6 +637,7 @@
               strip('-----END CERTIFICATE-----') | regex_replace('\\s+', '\n')}}\n-----END CERTIFICATE-----"
 
         - name: Generate deployment manifests for disconnected OpenShift installation
+          no_log: true
           vars:
             single_node_openshift_enabled: true
             use_local_mirror_registry: true
@@ -721,6 +724,7 @@
               }}
 
     - name: Generate boot ISO for agent-based installer
+      no_log: true
       environment:
         OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY: "{{ disable_image_policy | default(false) }}"
       vars:

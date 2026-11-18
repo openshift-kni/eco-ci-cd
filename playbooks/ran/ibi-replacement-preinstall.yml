@@ -1,0 +1,440 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# -----------------------------------------------------------------------------
+# Playbook Name: Prepare replacement hardware for IBI
+# Description  : Verifies the retained seed image and replacement configuration,
+#                prepares the shared preinstall launcher and checks container DNS
+#                and HTTP access before releasing former seed hardware. The run
+#                phase then removes matching seed resources and executes preinstall.
+#                Preparation alone never deletes hardware resources or runs tests.
+#
+# Prerequisites:
+#   - Inventory selects the seed bastion and provides BMC credentials
+#   - Seed image and Git revision were recorded by seed mirroring
+#   - Seed Argo Applications and ManagedCluster have already been detached
+#   - Matching installer, hub kubeconfig, SSH key and HTTP store exist on bastion
+#
+# Key Tasks:
+#   - Verify the seed digest/version and pinned replacement manifest
+#   - Reuse ibi-preinstall-stage.yml for launcher preparation and execution
+#   - Validate disk identity, container DNS, ISO write access and HTTP serving
+#   - Delete only matching seed resources, then require hardware release
+#   - Retain console, JUnit and execution/collection status through the shared runner
+#
+# Usage:
+#   # Preparation and checks only (also the default):
+#   ansible-playbook ./playbooks/ran/ibi-replacement-preinstall.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py -e @replacement-vars.json
+#
+#   # Full replacement preinstall, including hardware cleanup and OS installation:
+#   ansible-playbook ./playbooks/ran/ibi-replacement-preinstall.yml \
+#     -i ./inventories/ocp-deployment/build-inventory.py -e @replacement-vars.json \
+#     -e ibi_replacement_preinstall_phase=run
+#
+# Required variables:
+#   ibi_hub_kubeconfig       # Seed hub kubeconfig path on bastion
+#   ibi_seed_cluster         # Former seed ClusterInstance name and namespace
+#   ibi_seed_digest          # Verified seed image digest, sha256:<64 hex digits>
+#   ibi_seed_version         # Full seed OCP version
+#   ibi_release_version      # OCP release family used in the Git path, e.g. 4.20
+#   ibi_git_repo             # ZTP GitLab repository URL
+#   ibi_git_revision         # Recorded 40-character Git commit
+#   ibi_preinstall_registry  # Seed registry containing ibu/seed
+#   ibi_replacement_host     # Expected replacement hostname
+#   ibi_replacement_mac      # Expected replacement boot MAC
+#   ibi_replacement_ip       # Expected replacement IPv4 or IPv6 address
+#   ibi_work_dir             # Private launcher directory on bastion
+#   ibi_http_subdir          # Unique HTTP subdirectory for this run
+#   ibi_report_dir           # Controller output directory (required for run)
+#
+# Optional variables:
+#   ibi_replacement_preinstall_phase # prepare (default) or run (full sequence)
+#   ibi_skip_tls_verify             # Registry TLS verification override (default false)
+#   Other ibi-preinstall-stage.yml options apply. Do not set ibi_preinstall_phase:
+#   the imports below select it. --tags setup never releases or installs hardware.
+
+- name: Validate replacement inputs and the retained seed image
+  hosts: bastion
+  gather_facts: false
+  any_errors_fatal: true
+  tags: setup
+  tasks:
+    - name: Require valid replacement inputs
+      ansible.builtin.assert:
+        that:
+          - ibi_preinstall_phase is not defined
+          - ibi_replacement_preinstall_phase | default('prepare') in ['prepare', 'run']
+          - ibi_seed_cluster | default('') | trim | length > 0
+          - ibi_seed_digest | default('') is match('^sha256:[a-f0-9]{64}$')
+          - ibi_git_revision | default('') is match('^[a-f0-9]{40}$')
+          - ibi_git_repo | default('') is match('^https://')
+          - ibi_release_version | default('') | trim | length > 0
+          - ibi_release_version == ((ibi_seed_version | default('')).split('.')[:2] | join('.'))
+          - ibi_preinstall_registry | default('') | trim | length > 0
+          - ibi_replacement_host | default('') | trim | length > 0
+          - ibi_replacement_mac | default('') | trim | length > 0
+          - ibi_http_subdir | default('') | trim | length > 0
+          - >-
+            ibi_replacement_preinstall_phase | default('prepare') != 'run' or
+            ibi_report_dir | default('') is match('^/.+')
+        quiet: true
+        fail_msg: Replacement inputs must identify the pinned seed, configuration and hardware; do not override ibi_preinstall_phase.
+
+    - name: Resolve pinned replacement inputs
+      ansible.builtin.set_fact:
+        ibi_seed_image: "{{ ibi_preinstall_registry }}/ibu/seed@{{ ibi_seed_digest }}"
+        ibi_site_config_url: >-
+          {{ ibi_git_repo | regex_replace('\.git$', '') }}/-/raw/{{ ibi_git_revision }}/{{ ibi_release_version }}/{{ ibi_seed_cluster }}/clusterinstance
+        eco_gotests_image: "{{ eco_gotests_image | default('quay.io/ocp-edge-qe/eco-gotests:latest') }}"
+        # Preserve inventory settings across the setup-only playbook's defaults.
+        ibi_skip_tls_verify: "{{ ibi_skip_tls_verify | default(false) | bool }}"
+        pull_container_image: "{{ pull_container_image | default(true) | bool }}"
+        ibi_test_timeout: "{{ ibi_test_timeout | default('3h') }}"
+        ibi_replacement_validated: false
+        ibi_replacement_released: false
+
+    - name: Inspect the retained seed with temporary registry credentials
+      block:
+        - name: Read the seed hub registry credentials
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: v1
+            kind: Secret
+            namespace: openshift-config
+            name: pull-secret
+          register: ibi_seed_pull_secret
+          no_log: true
+
+        - name: Create a temporary registry authentication file
+          ansible.builtin.tempfile:
+            state: file
+            prefix: ibi-seed-auth.
+          register: ibi_seed_auth_file
+
+        - name: Write private registry credentials
+          ansible.builtin.copy:
+            dest: "{{ ibi_seed_auth_file.path }}"
+            content: "{{ ibi_seed_pull_secret.resources[0].data['.dockerconfigjson'] | b64decode }}"
+            mode: '0600'
+          no_log: true
+          diff: false
+
+        - name: Inspect the pinned seed image
+          ansible.builtin.command:
+            argv:
+              - skopeo
+              - inspect
+              - "--tls-verify={{ (ibi_skip_tls_verify | default(false) | bool) | ternary('false', 'true') }}"
+              - --authfile
+              - "{{ ibi_seed_auth_file.path }}"
+              - "docker://{{ ibi_seed_image }}"
+          register: ibi_seed_metadata
+          changed_when: false
+          no_log: true
+
+        - name: Require the recorded seed digest and OCP version
+          ansible.builtin.assert:
+            that:
+              - (ibi_seed_metadata.stdout | from_json).Digest == ibi_seed_digest
+              - >-
+                ((ibi_seed_metadata.stdout | from_json).Labels['com.openshift.lifecycle-agent.seed_cluster_info'] |
+                 from_json).seed_cluster_ocp_version == ibi_seed_version
+            quiet: true
+            fail_msg: The retained seed image does not match the recorded digest and version.
+          no_log: true
+      always:
+        - name: Remove temporary registry credentials
+          ansible.builtin.file:
+            path: "{{ ibi_seed_auth_file.path }}"
+            state: absent
+          when: ibi_seed_auth_file.path is defined
+
+- name: Prepare the shared preinstall launcher
+  ansible.builtin.import_playbook: ibi-preinstall-stage.yml
+  vars:
+    ibi_preinstall_phase: prepare
+
+- name: Validate replacement configuration and access before hardware cleanup
+  hosts: bastion
+  gather_facts: false
+  any_errors_fatal: true
+  tags: setup
+  tasks:
+    - name: Require the launcher to derive the correct URLs and isolated HTTP subdirectory
+      ansible.builtin.assert:
+        that:
+          - ibi_seed_image == ibi_preinstall_registry ~ '/ibu/seed@' ~ ibi_seed_digest
+          - >-
+            ibi_site_config_url ==
+            (ibi_git_repo | regex_replace('\.git$', '')) ~ '/-/raw/' ~
+            ibi_git_revision ~ '/' ~ ibi_release_version ~ '/' ~
+            ibi_seed_cluster ~ '/clusterinstance'
+          - ibi_cluster_instance_url == ibi_site_config_url ~ '/clusterinstance.yaml'
+          - ibi_config_template_url == ibi_site_config_url ~ '/preinstall-test/image-based-installation-config.yaml'
+          - (ibi_http_dir | regex_replace('/+$', '') | basename) == ibi_http_subdir
+          - (ibi_http_base_url | urlsplit('path') | regex_replace('/+$', '') | basename) == ibi_http_subdir
+        quiet: true
+        fail_msg: Launcher inputs must derive correct URLs from the recorded seed revision and use the isolated HTTP subdirectory.
+
+    - name: Download the pinned replacement ClusterInstance
+      ansible.builtin.uri:
+        url: "{{ ibi_site_config_url }}/clusterinstance.yaml"
+        return_content: true
+        timeout: 60
+      register: ibi_replacement_manifest
+
+    - name: Read the replacement node definition
+      ansible.builtin.set_fact:
+        ibi_replacement_instance: "{{ ibi_replacement_manifest.content | from_yaml }}"
+
+    - name: Require the expected replacement identity and disk format
+      ansible.builtin.assert:
+        that:
+          - ibi_replacement_instance.kind == 'ClusterInstance'
+          - ibi_replacement_instance.spec.nodes | length == 1
+          - ibi_replacement_instance.spec.nodes[0].hostName == ibi_replacement_host
+          - ibi_replacement_instance.spec.nodes[0].bootMACAddress | lower == ibi_replacement_mac | lower
+          - ibi_replacement_instance.spec.nodes[0].rootDeviceHints.wwn is match('^(0x[0-9A-Fa-f]+|eui\.[0-9A-Fa-f]+)$')
+        quiet: true
+        fail_msg: The pinned ClusterInstance must match the replacement hostname, boot MAC and supported disk WWN/EUI.
+
+    - name: Resolve the replacement installation disk path
+      ansible.builtin.set_fact:
+        ibi_replacement_disk: >-
+          {{ '/dev/disk/by-id/' ~ ('nvme-' if ibi_replacement_instance.spec.nodes[0].rootDeviceHints.wwn.startswith('eui.') else 'wwn-') ~
+             ibi_replacement_instance.spec.nodes[0].rootDeviceHints.wwn }}
+
+    # This is a Go template, not a rendered YAML manifest.
+    - name: Download the pinned preinstall configuration template
+      ansible.builtin.uri:
+        url: "{{ ibi_site_config_url }}/preinstall-test/image-based-installation-config.yaml"
+        return_content: true
+        timeout: 60
+      register: ibi_replacement_template
+
+    - name: Require the matching disk and containers partition in the template
+      ansible.builtin.assert:
+        that:
+          - "('installationDisk: ' ~ ibi_replacement_disk) in ibi_replacement_template.content.splitlines()"
+          - "'extraPartitionLabel: varlibcontainers' in ibi_replacement_template.content.splitlines()"
+        quiet: true
+        fail_msg: The preinstall template must select the replacement disk and varlibcontainers partition.
+
+    - name: Check DNS and HTTP-directory writes from the test container
+      ansible.builtin.command:
+        argv:
+          - podman
+          - run
+          - --rm
+          - --pull=never
+          - --net=host
+          - --userns=keep-id:uid=1000,gid=1000
+          - -v
+          - "{{ ibi_http_dir }}:/ibi-http:rw,z"
+          - --entrypoint
+          - /bin/bash
+          - "{{ eco_gotests_image }}"
+          - -c
+          - 'set -eu; printf "%s\n" "$1" > /ibi-http/.write-check; getent "$3" "$2"'
+          - bash
+          - "{{ ibi_http_subdir }}"
+          - "{{ ibi_replacement_host }}"
+          - "{{ 'ahostsv6' if ':' in ibi_replacement_ip else 'ahostsv4' }}"
+      register: ibi_replacement_dns
+      changed_when: true
+
+    - name: Require only the expected address in the selected IP family
+      vars:
+        ibi_replacement_address: "{{ ibi_replacement_ip | ansible.utils.ipaddr('address') }}"
+      ansible.builtin.assert:
+        that:
+          - ibi_replacement_ip is string
+          - ibi_replacement_ip is match('^[0-9A-Fa-f:.]+$')
+          - ibi_replacement_address != false
+          - "':' in ibi_replacement_ip or ibi_replacement_ip == ibi_replacement_address"
+          - >-
+            (ibi_replacement_dns.stdout_lines | reject('match', '^\s*$') |
+             map('split') | map('first') | map('ansible.utils.ipaddr', 'address') |
+             unique | list) == [ibi_replacement_address]
+        quiet: true
+        fail_msg: Replacement DNS must resolve only to the configured IPv4 or IPv6 address.
+
+    - name: Check the isolated HTTP directory is served
+      ansible.builtin.uri:
+        url: "{{ ibi_http_base_url }}/.write-check"
+        return_content: true
+        timeout: 30
+      register: ibi_replacement_http
+
+    - name: Require the container-written HTTP marker
+      ansible.builtin.assert:
+        that:
+          - ibi_replacement_http.content | trim == ibi_http_subdir
+        quiet: true
+        fail_msg: The HTTP server did not return the marker written by the test container.
+
+    - name: Remove the HTTP write-check marker
+      ansible.builtin.file:
+        path: "{{ ibi_http_dir }}/.write-check"
+        state: absent
+
+    - name: Check that seed Applications have been removed
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ ibi_hub_kubeconfig }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: openshift-gitops
+        name: "{{ item }}"
+      loop: [clusters, policies]
+      register: ibi_seed_applications
+
+    - name: Check that the seed ManagedCluster has been removed
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ ibi_hub_kubeconfig }}"
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ ibi_seed_cluster }}"
+      register: ibi_seed_managed_cluster
+
+    - name: Require completed seed detachment
+      ansible.builtin.assert:
+        that:
+          - ibi_seed_applications.results | selectattr('api_found', 'equalto', true) | list | length == 2
+          - ibi_seed_managed_cluster.api_found
+          - ibi_seed_applications.results | map(attribute='resources') | flatten | length == 0
+          - ibi_seed_managed_cluster.resources | length == 0
+        quiet: true
+        fail_msg: Seed detachment is incomplete; refusing hardware cleanup.
+
+    - name: Record successful replacement validation
+      ansible.builtin.set_fact:
+        ibi_replacement_validated: true
+
+- name: Release only the matching former seed hardware
+  hosts: bastion
+  gather_facts: false
+  any_errors_fatal: true
+  tags: run
+  tasks:
+    - name: Release seed hardware after all preparation checks pass
+      when:
+        - ibi_replacement_preinstall_phase | default('prepare') == 'run'
+        - "'setup' not in ansible_run_tags"
+      block:
+        - name: Require successful preparation before deletion
+          ansible.builtin.assert:
+            that:
+              - ibi_replacement_validated | default(false) | bool
+            fail_msg: Replacement preparation must complete before hardware cleanup.
+
+        - name: Read the former seed ClusterInstance
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: siteconfig.open-cluster-management.io/v1alpha1
+            kind: ClusterInstance
+            namespace: "{{ ibi_seed_cluster }}"
+            name: "{{ ibi_seed_cluster }}"
+          register: ibi_old_seed_instance
+
+        - name: Require the seed ClusterInstance API
+          ansible.builtin.assert:
+            that: ibi_old_seed_instance.api_found
+            fail_msg: The seed hub ClusterInstance API is unavailable.
+
+        - name: Require the existing seed instance to match replacement hardware
+          ansible.builtin.assert:
+            that:
+              - ibi_old_seed_instance.resources | length == 1
+              - ibi_old_seed_instance.resources[0].spec.nodes | length == 1
+              - ibi_old_seed_instance.resources[0].spec.nodes[0].hostName == ibi_replacement_host
+              - ibi_old_seed_instance.resources[0].spec.nodes[0].bootMACAddress | lower == ibi_replacement_mac | lower
+            quiet: true
+            fail_msg: The existing seed ClusterInstance does not identify the expected replacement hardware.
+          when: ibi_old_seed_instance.resources | length > 0
+
+        - name: Delete the matching seed ClusterInstance and wait for removal
+          kubernetes.core.k8s:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: siteconfig.open-cluster-management.io/v1alpha1
+            kind: ClusterInstance
+            namespace: "{{ ibi_seed_cluster }}"
+            name: "{{ ibi_seed_cluster }}"
+            state: absent
+            wait: true
+            wait_timeout: 1800
+          when: ibi_old_seed_instance.resources | length > 0
+
+        - name: Read any remaining replacement BareMetalHost
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ ibi_seed_cluster }}"
+            name: "{{ ibi_replacement_host }}"
+          register: ibi_old_seed_host
+
+        - name: Require the seed BareMetalHost API
+          ansible.builtin.assert:
+            that: ibi_old_seed_host.api_found
+            fail_msg: The seed hub BareMetalHost API is unavailable.
+
+        - name: Require an unowned remaining host with the expected boot MAC
+          ansible.builtin.assert:
+            that:
+              - ibi_old_seed_host.resources | length == 1
+              - ibi_old_seed_host.resources[0].spec.bootMACAddress | lower == ibi_replacement_mac | lower
+              - ibi_old_seed_host.resources[0].metadata.ownerReferences | default([]) | length == 0
+            quiet: true
+            fail_msg: Refusing to delete a BareMetalHost with another MAC or an existing owner.
+          when: ibi_old_seed_host.resources | length > 0
+
+        - name: Delete the matching unowned BareMetalHost and wait for removal
+          kubernetes.core.k8s:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ ibi_seed_cluster }}"
+            name: "{{ ibi_replacement_host }}"
+            state: absent
+            wait: true
+            wait_timeout: 1800
+          when: ibi_old_seed_host.resources | length > 0
+
+        - name: Find remaining BareMetalHosts across the seed hub
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ ibi_hub_kubeconfig }}"
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+          register: ibi_seed_remaining_hosts
+
+        - name: Require a successful hardware inventory query
+          ansible.builtin.assert:
+            that: ibi_seed_remaining_hosts.api_found
+            fail_msg: Could not confirm replacement hardware release from the seed hub.
+
+        - name: Require replacement hardware to be unregistered
+          ansible.builtin.assert:
+            that:
+              - ibi_replacement_host not in (ibi_seed_remaining_hosts.resources | map(attribute='metadata.name') | list)
+              - >-
+                ibi_replacement_mac | lower not in
+                (ibi_seed_remaining_hosts.resources | map(attribute='spec.bootMACAddress', default='') | map('lower') | list)
+            quiet: true
+            fail_msg: Replacement hardware is still registered to a BareMetalHost.
+
+        - name: Record completed replacement hardware release
+          ansible.builtin.set_fact:
+            ibi_replacement_released: true
+
+- name: Execute shared preinstall and collect reports after hardware release
+  ansible.builtin.import_playbook: ibi-preinstall-stage.yml
+  vars:
+    ibi_preinstall_phase: run
+  when:
+    - ibi_replacement_preinstall_phase | default('prepare') == 'run'
+    - "'setup' not in ansible_run_tags"
+    - ibi_replacement_released | default(false) | bool

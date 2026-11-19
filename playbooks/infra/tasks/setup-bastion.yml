@@ -7,6 +7,14 @@
   notify:
     - Restart chrony
 
+- name: Allow NTP through firewalld so cluster nodes can sync time from bastion
+  become: true
+  ansible.posix.firewalld:
+    service: ntp
+    permanent: true
+    state: enabled
+    immediate: true
+
 - name: Set up authorized_keys
   become: false
   no_log: true

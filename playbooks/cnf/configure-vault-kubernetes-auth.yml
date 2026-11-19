@@ -1,0 +1,232 @@
+---
+# Opt-in Vault-side setup for the Hub ESO reference. Run only with approval from
+# the Vault administrator. The control node must provide VAULT_TOKEN; for an
+# external Vault, also provide VAULT_K8S_REVIEWER_JWT in its environment.
+# The reviewer identity must already have TokenReview permission on the Hub.
+# For an in-cluster Vault, its pod service account must have that permission.
+# Required vars: vault_addr, vault_kubernetes_host (reachable from Vault),
+# vault_kubernetes_ca_file (PEM on Ansible controller), vault_reviewer_mode.
+# Optional: vault_tls_ca_file (Vault HTTPS CA on bastion). For external mode,
+# provide vault_reviewer_token_rotation_confirmed=true only after arranging
+# reviewer JWT rotation; expiring reviewer tokens break future Vault logins.
+# Never store tokens in inventory, Git, command arguments, or Ansible logs.
+- name: Configure Vault Kubernetes authentication for Hub ESO
+  hosts: bastion
+  gather_facts: false
+  vars:
+    vault_kubernetes_auth_mount: kubernetes
+    vault_eso_policy_name: eso-ztp
+    vault_eso_role_name: external-secrets-operator
+    vault_eso_service_account_name: external-secrets
+    vault_eso_service_account_namespace: external-secrets
+    vault_eso_policy: |
+      path "secret/data/clusters/*" {
+        capabilities = ["read"]
+      }
+  tasks:
+    - name: Validate approved Vault and Hub API settings
+      ansible.builtin.assert:
+        that:
+          - (vault_addr | default('')) is match('^https://')
+          - "'example.com' not in (vault_addr | default(''))"
+          - (vault_kubernetes_host | default('')) is match('^https://')
+          - "'example.com' not in (vault_kubernetes_host | default(''))"
+          - (vault_kubernetes_ca_file | default('')) | length > 0
+          - (vault_reviewer_mode | default('')) in ['external', 'in_cluster']
+          - vault_kubernetes_auth_mount == 'kubernetes'
+          - vault_eso_policy_name == 'eso-ztp'
+          - vault_eso_role_name == 'external-secrets-operator'
+          - vault_eso_service_account_name == 'external-secrets'
+          - vault_eso_service_account_namespace == 'external-secrets'
+          - (lookup('ansible.builtin.env', 'VAULT_TOKEN') | length) > 0
+          - vault_reviewer_mode != 'external' or (lookup('ansible.builtin.env', 'VAULT_K8S_REVIEWER_JWT') | length) > 0
+          - vault_reviewer_mode != 'external' or (vault_reviewer_token_rotation_confirmed | default(false) | bool)
+        fail_msg: >-
+          Provide an approved HTTPS Vault URL, Vault-reachable Hub API URL,
+          Hub API CA file, reviewer mode, and Vault admin token. External Vault
+          also requires a reviewer JWT and an approved rotation process.
+
+    - name: Read Hub API CA from the control node
+      ansible.builtin.set_fact:
+        _vault_hub_api_ca: "{{ lookup('ansible.builtin.file', vault_kubernetes_ca_file) }}"
+        _vault_admin_token: "{{ lookup('ansible.builtin.env', 'VAULT_TOKEN') }}"
+        _vault_reviewer_jwt: "{{ lookup('ansible.builtin.env', 'VAULT_K8S_REVIEWER_JWT') }}"
+      no_log: true
+
+    - name: Require a Hub API CA certificate
+      ansible.builtin.assert:
+        that:
+          - "'-----BEGIN CERTIFICATE-----' in _vault_hub_api_ca"
+        fail_msg: Hub API CA file must contain a PEM certificate.
+
+    - name: Check Vault Kubernetes auth mount
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/sys/auth"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+        return_content: true
+      register: _vault_mounts
+      no_log: true
+
+    - name: Require an unused or Kubernetes-only mount
+      ansible.builtin.assert:
+        that:
+          - >-
+            _vault_mounts.json.data.get(vault_kubernetes_auth_mount ~ '/', {}).get('type', 'kubernetes') == 'kubernetes'
+        fail_msg: Vault auth mount exists with a different type; do not replace it.
+
+    - name: Enable the Kubernetes auth mount if absent
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/sys/auth/{{ vault_kubernetes_auth_mount }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        body_format: json
+        body:
+          type: kubernetes
+          description: Hub ESO Kubernetes authentication
+        status_code: [200, 204]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+      when: vault_kubernetes_auth_mount ~ '/' not in _vault_mounts.json.data
+      no_log: true
+
+    - name: Check existing Kubernetes auth configuration
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/auth/{{ vault_kubernetes_auth_mount }}/config"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        status_code: [200, 404]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+        return_content: true
+      register: _vault_auth_config
+      no_log: true
+
+    - name: Reject an existing auth mount pointed at another Hub
+      ansible.builtin.assert:
+        that:
+          - >-
+            _vault_auth_config.status == 404 or
+            (_vault_auth_config.json.data.kubernetes_host | default('')) in ['', vault_kubernetes_host]
+        fail_msg: Vault Kubernetes auth already points to another API; require a separate mount.
+
+    - name: Configure Vault token review against the Hub API
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/auth/{{ vault_kubernetes_auth_mount }}/config"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        body_format: json
+        body: >-
+          {{ {'kubernetes_host': vault_kubernetes_host,
+              'kubernetes_ca_cert': _vault_hub_api_ca}
+             | combine({'token_reviewer_jwt': _vault_reviewer_jwt}
+                       if vault_reviewer_mode == 'external' else {}) }}
+        status_code: [200, 204]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+      when: >-
+        _vault_auth_config.status == 404 or
+        (_vault_auth_config.json.data.kubernetes_host | default('')) == ''
+      no_log: true
+
+    - name: Check existing ESO Vault policy
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/sys/policies/acl/{{ vault_eso_policy_name }}"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        status_code: [200, 404]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+        return_content: true
+      register: _vault_existing_policy
+      no_log: true
+
+    - name: Reject a conflicting ESO Vault policy
+      ansible.builtin.assert:
+        that:
+          - >-
+            _vault_existing_policy.status == 404 or
+            (_vault_existing_policy.json.data.policy | regex_replace('\\s+', ''))
+            == (vault_eso_policy | regex_replace('\\s+', ''))
+        fail_msg: Existing ESO policy differs; do not overwrite it automatically.
+
+    - name: Create the read-only ZTP policy
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/sys/policies/acl/{{ vault_eso_policy_name }}"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        body_format: json
+        body:
+          policy: "{{ vault_eso_policy }}"
+        status_code: [200, 204]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+      when: _vault_existing_policy.status == 404
+      no_log: true
+
+    - name: Check existing ESO Kubernetes auth role
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/auth/{{ vault_kubernetes_auth_mount }}/role/{{ vault_eso_role_name }}"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        status_code: [200, 404]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+        return_content: true
+      register: _vault_existing_role
+      no_log: true
+
+    - name: Refuse to replace a role bound to different identities
+      ansible.builtin.assert:
+        that:
+          - >-
+            _vault_existing_role.status == 404 or
+            (_vault_existing_role.json.data.bound_service_account_names | sort)
+            == [vault_eso_service_account_name]
+          - >-
+            _vault_existing_role.status == 404 or
+            (_vault_existing_role.json.data.bound_service_account_namespaces | sort)
+            == [vault_eso_service_account_namespace]
+          - >-
+            _vault_existing_role.status == 404 or
+            (_vault_existing_role.json.data.token_policies | default(_vault_existing_role.json.data.policies | default([])) | sort)
+            == [vault_eso_policy_name]
+          - >-
+            _vault_existing_role.status == 404 or
+            (_vault_existing_role.json.data.token_ttl | default(0) | int) == 3600
+        fail_msg: Existing role differs from the ESO service account or policy; do not overwrite it.
+
+    - name: Bind ESO service account to the ZTP policy
+      ansible.builtin.uri:
+        url: "{{ vault_addr.rstrip('/') }}/v1/auth/{{ vault_kubernetes_auth_mount }}/role/{{ vault_eso_role_name }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ _vault_admin_token }}"
+        body_format: json
+        body:
+          bound_service_account_names: ["{{ vault_eso_service_account_name }}"]
+          bound_service_account_namespaces: ["{{ vault_eso_service_account_namespace }}"]
+          token_policies: ["{{ vault_eso_policy_name }}"]
+          token_ttl: 3600
+        status_code: [200, 204]
+        ca_path: "{{ vault_tls_ca_file | default(omit) }}"
+        validate_certs: true
+      when: _vault_existing_role.status == 404
+      no_log: true
+
+    - name: Report Vault-side prerequisites without credentials
+      ansible.builtin.debug:
+        msg: >-
+          Vault Kubernetes auth is configured for ESO at
+          {{ vault_kubernetes_auth_mount }}/. Verify Vault can perform Hub API
+          TokenReview, then deploy the Hub ClusterSecretStore and test a
+          disposable ExternalSecret. No Vault token was saved in the cluster.

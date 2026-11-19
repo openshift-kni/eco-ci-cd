@@ -273,6 +273,51 @@ class MainTest(unittest.TestCase):
         self.run_main("no-such-suite")  # must not raise
         self.assertEqual(list((self.base / "out" / "junit").iterdir()), [])
 
+    def test_oran_feature_subsuite_artifact_names(self):
+        suites = {
+            "oran-pre-provision": "pre_provision_suite_test_junit.xml",
+            "oran-provision": "provision_suite_test_junit.xml",
+        }
+        for suite, junit_name in suites.items():
+            # With the production prefix, these reports are
+            # /tmp/eco_gotests_<suite>/report.
+            report = self.base / f"eco_gotests_{suite}" / "report"
+            report.mkdir(parents=True)
+            (report / junit_name).write_text(JUNIT_XML, encoding="utf-8")
+            (report / "report_testrun.xml").write_text(
+                '<testsuites name="polarion-old"/>\n', encoding="utf-8"
+            )
+            (report / "events.log").write_text("events\n", encoding="utf-8")
+
+        self.run_main(" ".join(suites))
+
+        out = self.base / "out"
+        for suite, junit_name in suites.items():
+            with self.subTest(suite=suite):
+                gathered = out / "junit" / f"{suite}_{junit_name}"
+                self.assertTrue(gathered.is_file())
+                self.assertIn(
+                    f'testsuites name="{suite}"',
+                    gathered.read_text(encoding="utf-8"),
+                )
+                self.assertTrue(
+                    (out / "reports" / "junit" / f"{suite}_suite_test_polarion.xml").is_file()
+                )
+                self.assertTrue(
+                    (out / "reports" / "polarion" / f"{suite}_suite_test.xml").is_file()
+                )
+                staged = out / "artifacts" / f"junit_eco_gotests_{suite}"
+                self.assertTrue((staged / junit_name).is_file())
+                self.assertTrue((staged / f"{suite}_k8sreporter.zip").is_file())
+                self.assertEqual(
+                    sorted(path.name for path in staged.iterdir()),
+                    [
+                        f"{suite}_k8sreporter.zip",
+                        junit_name,
+                        "report_testrun.xml",
+                    ],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

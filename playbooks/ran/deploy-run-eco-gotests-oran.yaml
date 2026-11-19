@@ -12,7 +12,7 @@
 # Usage:
 #   ansible-playbook ./playbooks/ran/deploy-run-eco-gotests-oran.yaml \
 #     -i ./inventories/ocp-deployment/build-inventory.py \
-#     --extra-vars "features=oran labels=pre-provision eco_gotest_dir=/tmp/eco_gotests_oran-pre-provision" \
+#     --extra-vars "features=oran/pre-provision labels='!no-container' eco_gotest_dir=/tmp/eco_gotests_oran-pre-provision" \
 #     --extra-vars "hub_clusterconfigs_path=/home/telcov10n/project/generated/kni-qe-129" \
 #     --extra-vars "mirror_registry=disconnected.registry.local:5000" \
 #     --extra-vars "additional_test_env_variables='...'"
@@ -21,6 +21,10 @@
 #   hub_clusterconfigs_path   Path to hub cluster configs dir (contains auth/kubeconfig)
 #   mirror_registry           Disconnected registry address (must-gather image mirrored here)
 #   eco_gotest_dir            Per-feature directory for the generated run script and reports
+#   features                  Direct eco-gotests feature path, one per invocation
+#                             (e.g. oran/pre-provision)
+#   labels                    Global Ginkgo label filter applied to every feature;
+#                             not an O-RAN phase selector
 #   o2ims_must_gather_image_source
 #                           Source must-gather image. Default:
 #                           quay.io/openshift-kni/oran-o2ims-operator-must-gather:latest
@@ -68,6 +72,8 @@
           - eco_gotest_kubeconfig is defined
           - features is defined
           - labels is defined
+          - features is string
+          - "'/' in features"
 
     - name: Fetch hub apps domain
       ansible.builtin.shell: |

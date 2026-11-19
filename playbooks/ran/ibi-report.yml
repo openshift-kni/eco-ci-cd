@@ -1,0 +1,286 @@
+---
+## Disclaimer:
+# This playbook is not officially supported and comes with no guarantees.
+# Test thoroughly in your environment before deploying to production.
+#
+# Collect current-run IBI JUnit reports and upload one Report Portal launch.
+# Uses the unchanged upload-report.yaml with the same two XML sets as PTP:
+# labelled suites for Report Portal and separately named raw JUnit copies.
+# The existing Polarion upload runs first, followed by Report Portal.
+#
+# Inventory: ibi_report_seed and bastion (target), with their saved inventory vars.
+# Inputs: ibi_report_shared_dir, ibi_report_output_dir, ibi_report_work_dir,
+#         ibi_report_version, ibi_report_launch_name, ibi_report_build_id,
+#         ibi_report_hub_kubeconfig (on the target bastion).
+# Export SHARED_DIR to the shared directory when running from a laptop, too;
+# the shared uploader uses it to identify report sources on the controller.
+# The work directory must be private and fresh. Sources are never modified.
+# Missing stage pointers mean disabled/not reached. A registered stage with
+# missing expected reports blocks upload; completed failed tests remain reportable.
+# Outputs: reporting-status.json, reportportal-url.txt,
+#          and <shared>/ibi-reportportal-url when the uploader returns a launch URL.
+
+- name: Prepare IBI report collection
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ibi_report_stages:
+      - name: seedgen
+        host: ibi_report_seed
+        path: '^/tmp/eco_gotests/report$'
+      - name: preinstall
+        host: bastion
+        path: '^/tmp/eco_gotests_ibi_preinstall/ibi-preinstall\.[A-Za-z0-9]+/report$'
+      - name: ibi
+        host: bastion
+        path: '^/tmp/eco_gotests_ibi_deploymenttypes/ibi-deploymenttypes\.[A-Za-z0-9]+/report$'
+      - name: preinstall_replacement
+        host: ibi_report_seed
+        path: '^/tmp/eco_gotests_ibi_preinstall/ibi-replacement-preinstall\.[A-Za-z0-9]+/report$'
+      - name: ibbf
+        host: bastion
+        path: '^/tmp/eco_gotests_ibi_ibbf/ibi-ibbf\.[A-Za-z0-9]+/report$'
+  tasks:
+    - name: Require controller paths and release family
+      ansible.builtin.assert:
+        that:
+          - ibi_report_shared_dir is match('^/.+')
+          - ibi_report_output_dir is match('^/.+')
+          - ibi_report_work_dir is match('^/.+')
+          - ibi_report_version is match('^[0-9]+\.[0-9]+$')
+
+    - name: Inspect public output directory
+      ansible.builtin.stat:
+        path: "{{ ibi_report_output_dir }}"
+      register: ibi_report_output
+
+    - name: Create public output directory without changing existing permissions
+      ansible.builtin.file:
+        path: "{{ ibi_report_output_dir }}"
+        state: directory
+        mode: '0700'
+      when: not ibi_report_output.stat.exists
+
+    - name: Require a directory for public output
+      ansible.builtin.assert:
+        that: not ibi_report_output.stat.exists or ibi_report_output.stat.isdir
+
+    - name: Create private collection directories
+      ansible.builtin.file:
+        path: "{{ ibi_report_work_dir }}/{{ item }}"
+        state: directory
+        mode: '0700'
+      loop: [raw, results, junit]
+
+    - name: Remove stale upload confirmations
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ibi_report_shared_dir }}/ibi-reportportal-url"
+        - "{{ ibi_report_output_dir }}/reportportal-url.txt"
+
+    - name: Initialize report collection summary
+      ansible.builtin.set_fact:
+        ibi_report_summary: {stages: {}, upload: not attempted}
+        ibi_report_manifest: []
+        ibi_report_ready: false
+
+    - name: Register stages that published a report directory
+      ansible.builtin.add_host:
+        name: "ibi_report_{{ item.name }}"
+        groups: ibi_report_collectors
+        ansible_connection: local
+        ibi_report_stage: "{{ item }}"
+        ibi_report_source: "{{ lookup('ansible.builtin.file', ibi_report_shared_dir ~ '/ibi-rp-' ~ item.name ~ '-dir') | trim }}"
+      loop: "{{ ibi_report_stages }}"
+      when: query('ansible.builtin.fileglob', ibi_report_shared_dir ~ '/ibi-rp-' ~ item.name ~ '-dir') | length > 0
+      no_log: true
+
+- name: Collect one raw suite per registered stage
+  hosts: ibi_report_collectors
+  gather_facts: false
+  tasks:
+    - name: Collect stage reports without exposing bastion inventory
+      no_log: true
+      ignore_unreachable: true
+      block:
+        - name: Require the current stage report path
+          ansible.builtin.assert:
+            that: ibi_report_source is match(ibi_report_stage.path)
+
+        - name: Find raw Ginkgo JUnit report
+          ansible.builtin.find:
+            paths: "{{ ibi_report_source }}"
+            patterns: '*_suite_test_junit.xml'
+            recurse: false
+          delegate_to: "{{ ibi_report_stage.host }}"
+          register: ibi_report_found
+
+        - name: Require exactly one raw suite report
+          ansible.builtin.assert:
+            that:
+              - not (ibi_report_found.unreachable | default(false))
+              - ibi_report_found.files | default([]) | length == 1
+
+        - name: Fetch raw suite without changing its contents
+          ansible.builtin.fetch:
+            src: "{{ ibi_report_found.files[0].path }}"
+            dest: "{{ ibi_report_work_dir }}/raw/{{ ibi_report_stage.name }}/"
+            flat: true
+          delegate_to: "{{ ibi_report_stage.host }}"
+          register: ibi_report_fetch
+
+        - name: Require successful suite transfer
+          ansible.builtin.assert:
+            that: not (ibi_report_fetch.unreachable | default(false))
+
+        - name: Register the fetched raw suite
+          ansible.builtin.set_fact:
+            ibi_report_files:
+              - suite: "{{ ibi_report_stage.name }}"
+                source: "{{ ibi_report_work_dir }}/raw/{{ ibi_report_stage.name }}/{{ ibi_report_found.files[0].path | basename }}"
+
+        - name: Read whether the IBBF policy gate executed
+          ansible.builtin.set_fact:
+            ibi_report_policy: "{{ (lookup('ansible.builtin.file', ibi_report_shared_dir ~ '/ibi-ibbf-status.json') | from_json)['policy'] is not none }}"
+          when: ibi_report_stage.name == 'ibbf'
+
+        - name: Fetch the policy result when the gate executed
+          ansible.builtin.fetch:
+            src: "{{ ibi_report_source }}/junit_ibbf_policy_gate.xml"
+            dest: "{{ ibi_report_work_dir }}/raw/ibbf/"
+            flat: true
+          delegate_to: "{{ ibi_report_stage.host }}"
+          register: ibi_report_policy_fetch
+          when: ibi_report_policy | default(false)
+
+        - name: Require successful policy report transfer
+          ansible.builtin.assert:
+            that: not (ibi_report_policy_fetch.unreachable | default(false))
+          when: ibi_report_policy | default(false)
+
+        - name: Register the independent policy report
+          ansible.builtin.set_fact:
+            ibi_report_files: "{{ ibi_report_files + [{'suite': 'ibbf', 'source': ibi_report_work_dir ~ '/raw/ibbf/junit_ibbf_policy_gate.xml'}] }}"
+          when: ibi_report_policy | default(false)
+
+        - name: Record successful stage collection
+          ansible.builtin.set_fact:
+            ibi_report_collected: true
+      rescue:
+        - name: Record a collection failure and retain other stage reports
+          ansible.builtin.set_fact:
+            ibi_report_collected: false
+
+- name: Prepare the Report Portal bundle
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Summarize all registered stages
+      ansible.builtin.set_fact:
+        ibi_report_summary: >-
+          {{ ibi_report_summary | combine({'stages': {hostvars[item].ibi_report_stage.name:
+             ('collected' if hostvars[item].ibi_report_collected | default(false) else 'collection failed')}}, recursive=true) }}
+        ibi_report_manifest: "{{ ibi_report_manifest + (hostvars[item].ibi_report_files | default([])) }}"
+      loop: "{{ groups['ibi_report_collectors'] | default([]) }}"
+
+    - name: Prepare the collected bundle for the shared uploader
+      when: groups['ibi_report_collectors'] | default([]) | length > 0
+      block:
+        - name: Require complete collection before any upload
+          ansible.builtin.assert:
+            that: "'collection failed' not in ibi_report_summary.stages.values()"
+            fail_msg: A registered stage could not be collected. No upload was attempted.
+
+        - name: Copy suites into the Report Portal input directory
+          ansible.builtin.copy:
+            src: "{{ item.source }}"
+            dest: "{{ ibi_report_work_dir }}/results/{{ item.suite }}-{{ item.source | basename }}"
+            mode: '0600'
+          loop: "{{ ibi_report_manifest }}"
+
+        - name: Prefix suite names with their IBI stage
+          ansible.builtin.replace:
+            path: "{{ ibi_report_work_dir }}/results/{{ item.suite }}-{{ item.source | basename }}"
+            regexp: '(<testsuite\b[^>]*\bname=")([^"]*)(")'
+            replace: '\1[{{ item.suite }}] \2\3'
+          loop: "{{ ibi_report_manifest }}"
+
+        - name: Provide separately named raw JUnit copies like PTP
+          ansible.builtin.copy:
+            src: "{{ item.source }}"
+            dest: "{{ ibi_report_work_dir }}/junit/raw-{{ item.suite }}-{{ item.source | basename }}"
+            mode: '0600'
+          loop: "{{ ibi_report_manifest }}"
+
+        - name: Configure the existing shared uploader
+          ansible.builtin.add_host:
+            name: bastion
+            kubeconfig: "{{ ibi_report_hub_kubeconfig }}"
+            upload_to_report_portal: true
+            processed_report_dir: "{{ ibi_report_work_dir }}/results"
+            junit_report_dir: "{{ ibi_report_work_dir }}/junit"
+            reporter_template_name: "{{ ibi_report_launch_name }}-{{ ibi_report_version }}"
+            reporter_launch_name: "{{ ibi_report_launch_name }}"
+            report_portal_url_filename: .ibi-reportportal-url
+            reports_portal_attributes: >-
+              ci:prow;ocp_version:{{ lookup('ansible.builtin.file', ibi_report_shared_dir ~ '/ibi-seed-version') | trim }};build_id:{{ ibi_report_build_id }}
+          no_log: true
+
+        - name: Record a prepared bundle
+          ansible.builtin.set_fact:
+            ibi_report_prepared: true
+      always:
+        - name: Save collection status before upload
+          ansible.builtin.copy:
+            content: "{{ ibi_report_summary | combine({'bundle_prepared': ibi_report_prepared | default(false)}) | to_nice_json }}\n"
+            dest: "{{ ibi_report_output_dir }}/reporting-status.json"
+            mode: '0644'
+
+    - name: Allow upload only after bundle preparation and status publication
+      ansible.builtin.set_fact:
+        ibi_report_ready: true
+      when: ibi_report_prepared | default(false)
+
+- name: Upload through the shared reporting playbook
+  ansible.builtin.import_playbook: ../upload-report.yaml
+  when: hostvars['localhost'].ibi_report_ready | default(false)
+
+- name: Publish the IBI reporting outcome
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Record upload outcome or a run with no registered stages
+      ansible.builtin.set_fact:
+        ibi_report_summary: >-
+          {{ ibi_report_summary | combine({'upload':
+              ('completed' if hostvars['bastion'].report_portal_url | default('') is match('^https://[^/]+/')
+               else 'completion unconfirmed')}) if ibi_report_ready else
+             ibi_report_summary | combine({'upload': 'skipped: no test stage registered a report directory'}) }}
+
+    - name: Save reporting summary
+      ansible.builtin.copy:
+        content: "{{ ibi_report_summary | to_nice_json }}\n"
+        dest: "{{ ibi_report_output_dir }}/reporting-status.json"
+        mode: '0644'
+
+    - name: Publish the returned launch link
+      ansible.builtin.copy:
+        content: "{{ hostvars['bastion'].report_portal_url }}\n"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - "{{ ibi_report_output_dir }}/reportportal-url.txt"
+        - "{{ ibi_report_shared_dir }}/ibi-reportportal-url"
+      when: ibi_report_summary.upload == 'completed'
+
+    - name: Require a launch URL after publishing diagnostics
+      ansible.builtin.assert:
+        that:
+          - ibi_report_summary.upload == 'completed'
+        fail_msg: Reporting did not return a launch URL; inspect reporting-status.json before retrying.
+      when: ibi_report_ready

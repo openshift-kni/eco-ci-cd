@@ -6,8 +6,8 @@ phase_migrate() {
 
     log_nrop_status "migrate-start"
 
-    if [[ "${OCP_FROM_MINOR}" -lt 18 ]]; then
-        echo "[INFO] Step 9: Adding custom SELinux annotation to worker nodeGroup (upgrading from 4.${OCP_FROM_MINOR}, pre-4.18)"
+    if [[ "${OCP_FROM_MAJOR}" -eq 4 && "${OCP_FROM_MINOR}" -lt 18 ]]; then
+        echo "[INFO] Step 9: Adding custom SELinux annotation to worker nodeGroup (upgrading from ${OCP_FROM_MAJOR}.${OCP_FROM_MINOR}, pre-4.18)"
         cat <<EOF > "${ARTIFACTS_DIR}/nrop-cr-migrate.yaml"
 apiVersion: nodetopology.openshift.io/v1
 kind: NUMAResourcesOperator
@@ -27,7 +27,7 @@ EOF
         oc apply -f "${ARTIFACTS_DIR}/nrop-cr-migrate.yaml"
         assert_nrop_selinux_annotation
     else
-        echo "[INFO] Step 9: Skipping SELinux annotation (source 4.${OCP_FROM_MINOR} and target share the same built-in SELinux policy)"
+        echo "[INFO] Step 9: Skipping SELinux annotation (source ${OCP_FROM_MAJOR}.${OCP_FROM_MINOR} and target share the same built-in SELinux policy)"
     fi
 
     echo "[INFO] Step 10: Removing pause-reconciliation annotation from NROP CR"

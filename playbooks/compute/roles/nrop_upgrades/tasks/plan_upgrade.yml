@@ -98,6 +98,7 @@
     nrop_env_from: "{{ upgrade_env.split('-')[0] }}"
     nrop_env_to: "{{ upgrade_env.split('-')[1] }}"
     target_ocp_version: "{{ to_version_key | default('') }}"
+    ocp_from_major: "{{ cluster_ocp_version.split('.')[0] }}"
     ocp_from_minor: "{{ cluster_ocp_version.split('.')[1] }}"
     nrop_worker_mcp: "{{ nrop_canary_profile_worker_pool if upgrade_type == 'canary' else 'worker' }}"
     install_nrop_version: "{{ from_version_key }}"

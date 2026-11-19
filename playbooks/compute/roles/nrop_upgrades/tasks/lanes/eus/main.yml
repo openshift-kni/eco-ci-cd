@@ -36,6 +36,10 @@
 - name: Verify the EUS baseline
   ansible.builtin.include_tasks: verify_eus_canary_baseline.yml
 
+- name: Deploy the persistent workload before the EUS upgrade
+  ansible.builtin.include_tasks: persistent_workload_deploy.yml
+  when: verify_persistent_workload | bool
+
 - name: Copy EUS script to the bastion
   ansible.builtin.copy:
     src: "{{ role_path }}/scripts/nrop-eus-upgrade.sh"
@@ -48,6 +52,7 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
     OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MAJOR: "{{ ocp_from_major }}"
     OCP_FROM_MINOR: "{{ ocp_from_minor }}"
     ARTIFACTS_DIR: "{{ artifacts_folder }}"
   changed_when: true
@@ -80,6 +85,7 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
     OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MAJOR: "{{ ocp_from_major }}"
     OCP_FROM_MINOR: "{{ ocp_from_minor }}"
     ARTIFACTS_DIR: "{{ artifacts_folder }}"
   changed_when: true
@@ -100,3 +106,22 @@
     - cluster_ocp_version == '4.20'
     - target_ocp_version == '4.22'
     - apply_perf_profile | bool
+
+- name: Verify the persistent workload after the EUS upgrade
+  ansible.builtin.include_tasks: persistent_workload_verify.yml
+  when: verify_persistent_workload | bool
+
+- name: Remove the persistent workload namespace created by this run
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+    delete_options:
+      preconditions:
+        uid: "{{ nrop_persistent_namespace.result.metadata.uid }}"
+  when:
+    - verify_persistent_workload | bool
+    - nrop_persistent_namespace.result.metadata.uid is defined

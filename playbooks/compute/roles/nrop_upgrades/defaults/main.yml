@@ -8,6 +8,7 @@ apply_perf_profile: true
 run_e2e_tests: false
 topology_manager_scope: pod
 verify_deployment: false
+verify_persistent_workload: true
 canary_node_count: "1"
 canary_cleanup: true
 custom_ocp_images: ""

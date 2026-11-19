@@ -1,0 +1,18 @@
+---
+- name: Read worker nodes for persistent workload reboot history
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - node-role.kubernetes.io/worker
+  register: nrop_persistent_workers
+
+- name: Collect worker boot history
+  ansible.builtin.command:
+    argv: [oc, debug, "node/{{ item }}", --, chroot, /host, journalctl, --list-boots, --no-pager]
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  loop: "{{ nrop_persistent_workers.resources | map(attribute='metadata.name') | list }}"
+  register: nrop_persistent_boot_history
+  changed_when: false
+  failed_when: false

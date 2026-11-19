@@ -230,6 +230,20 @@
         name: "{{ vm_name }}"
         state: running
 
+    - name: Eject virtual-media
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        state: stopped
+        action: eject-media
+        media: cdrom
+
+    - name: Set VM to auto-start
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        state: running
+        action: autostart
+      when: hostvars['bastion'].autostart is defined and hostvars['bastion'].autostart == true
+
 - name: Set ssh certificate
   hosts: localhost
   gather_facts: false

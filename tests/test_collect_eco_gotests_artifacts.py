@@ -75,8 +75,7 @@ class CollectionTest(unittest.TestCase):
         out = {
             "bastion_junit": self.base / "out" / "junit",
             "k8s_reporter": self.base / "out" / "k8s",
-            "report_junit": self.base / "out" / "reports" / "junit",
-            "report_polarion": self.base / "out" / "reports" / "polarion",
+            "report_portal": self.base / "out" / "reports" / "polarion",
             "artifacts": self.base / "out" / "artifacts",
         }
         for path in out.values():
@@ -185,14 +184,14 @@ class CollectionTest(unittest.TestCase):
         out = self.make_out_dirs()
 
         self.script.prepare_report_files(
-            "oran-provision", str(report_dir),
-            str(out["report_junit"]), str(out["report_polarion"])
+            "oran-provision", str(report_dir), str(out["report_portal"])
         )
 
-        polarion = out["report_junit"] / "oran-provision_suite_test_polarion.xml"
-        self.assertIn('testsuites name="oran-provision"', polarion.read_text(encoding="utf-8"))
-        ginkgo = out["report_polarion"] / "oran-provision_suite_test.xml"
+        ginkgo = out["report_portal"] / "oran-provision_suite_test.xml"
         self.assertIn('testsuites name="oran-provision"', ginkgo.read_text(encoding="utf-8"))
+        self.assertFalse(
+            (out["report_portal"] / "oran-provision_suite_test_polarion.xml").exists()
+        )
 
     def test_prepare_report_files_uses_single_ginkgo_destination(self):
         # With several *suite_test_junit.xml matches, only the first is used
@@ -203,13 +202,12 @@ class CollectionTest(unittest.TestCase):
         out = self.make_out_dirs()
 
         self.script.prepare_report_files(
-            "oran-provision", str(report_dir),
-            str(out["report_junit"]), str(out["report_polarion"])
+            "oran-provision", str(report_dir), str(out["report_portal"])
         )
 
-        produced = list(out["report_polarion"].glob("*.xml"))
+        produced = list(out["report_portal"].glob("*.xml"))
         self.assertEqual(
-            produced, [out["report_polarion"] / "oran-provision_suite_test.xml"]
+            produced, [out["report_portal"] / "oran-provision_suite_test.xml"]
         )
 
 
@@ -228,8 +226,7 @@ class MainTest(unittest.TestCase):
             "--eco-gotest-dir-prefix", str(self.base / "eco_gotests_"),
             "--junit-dir", str(out / "junit"),
             "--k8s-reporter-dir", str(out / "k8s"),
-            "--report-junit-dir", str(out / "reports" / "junit"),
-            "--report-polarion-dir", str(out / "reports" / "polarion"),
+            "--report-portal-dir", str(out / "reports" / "polarion"),
             "--artifacts-dir", str(out / "artifacts"),
         ]
         with mock.patch.object(sys, "argv", argv):
@@ -262,8 +259,8 @@ class MainTest(unittest.TestCase):
         self.assertTrue((out / "junit" / "good_good_suite_test_junit.xml").exists())
         self.assertFalse((out / "junit" / "stale.xml").exists())
         self.assertTrue((out / "k8s" / "good_k8sreporter.zip").exists())
-        self.assertTrue((out / "reports" / "junit" / "good_suite_test_polarion.xml").exists())
         self.assertTrue((out / "reports" / "polarion" / "good_suite_test.xml").exists())
+        self.assertFalse((out / "reports" / "junit").exists())
         staged = out / "artifacts" / "junit_eco_gotests_good"
         self.assertTrue((staged / "good_suite_test_junit.xml").exists())
         self.assertTrue((staged / "report_testrun.xml").exists())

@@ -1,0 +1,32 @@
+---
+- name: Check the original NROP mirror before restoring it
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ImageDigestMirrorSet
+    name: fbc-images-resolvable-integration-test-idms
+  register: ocp_sigstore_current_mirror
+
+- name: Refuse to overwrite a changed or deleting NROP mirror
+  ansible.builtin.assert:
+    that:
+      - ocp_sigstore_current_mirror.resources | length <= 1
+      - >-
+        ocp_sigstore_current_mirror.resources | length == 0 or
+        (ocp_sigstore_current_mirror.resources[0].metadata.uid == ocp_sigstore_original_mirror.metadata.uid and
+         ocp_sigstore_current_mirror.resources[0].metadata.deletionTimestamp | default('') == '')
+    fail_msg: The original NROP mirror changed or is still being deleted; it was not overwritten.
+
+- name: Restore the original NROP mirror without overwriting an existing resource
+  ansible.builtin.command:
+    argv: [oc, create, -f, '-']
+    stdin: >-
+      {{ (ocp_sigstore_original_mirror | dict2items | rejectattr('key', 'in', ['metadata', 'status']) | items2dict)
+         | combine({'metadata': (ocp_sigstore_original_mirror.metadata | dict2items
+             | rejectattr('key', 'in', ['uid', 'resourceVersion', 'generation', 'creationTimestamp',
+                                        'deletionTimestamp', 'deletionGracePeriodSeconds', 'managedFields', 'selfLink'])
+             | items2dict)}) | to_json }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  changed_when: true
+  when: ocp_sigstore_current_mirror.resources | length == 0

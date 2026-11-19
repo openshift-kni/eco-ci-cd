@@ -4,9 +4,16 @@
 set -euo pipefail
 
 PHASE="${1:?Usage: nrop-eus-upgrade.sh <setup|unpause>}"
+if [[ "${PHASE}" == "unpause" ]]; then
+    : "${OCP_FROM_MAJOR:?OCP_FROM_MAJOR is required}"
+    : "${OCP_FROM_MINOR:?OCP_FROM_MINOR is required}"
+    if [[ ! "${OCP_FROM_MAJOR}" =~ ^(0|[1-9][0-9]*)$ || ! "${OCP_FROM_MINOR}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "[ERROR] OCP_FROM_MAJOR and OCP_FROM_MINOR must be decimal integers without leading zeros." >&2
+        exit 1
+    fi
+fi
 NROP_MCP_TARGET="${NROP_MCP_TARGET:-worker}"
 OCP_TARGET_VERSION="${OCP_TARGET_VERSION:-}"
-OCP_FROM_MINOR="${OCP_FROM_MINOR:-0}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${WORKSPACE:-/tmp}/artifacts}"
 SELINUX_KEY="config.node.openshift-kni.io/selinux-policy"
 
@@ -173,16 +180,16 @@ phase_setup() {
 
 phase_unpause() {
     echo "[INFO] === EUS UNPAUSE WORKERS ==="
-    if [[ "${OCP_FROM_MINOR}" -lt 18 ]]; then
-        echo "[INFO] Source minor ${OCP_FROM_MINOR} is below 18. Setting the custom SELinux policy before workers move."
+    if [[ "${OCP_FROM_MAJOR}" -eq 4 && "${OCP_FROM_MINOR}" -lt 18 ]]; then
+        echo "[INFO] Source ${OCP_FROM_MAJOR}.${OCP_FROM_MINOR} is below 4.18. Setting the custom SELinux policy before workers move."
         patch_selinux add
     else
-        echo "[INFO] Source minor ${OCP_FROM_MINOR} uses the built-in SELinux policy. Skipping the annotation."
+        echo "[INFO] Source ${OCP_FROM_MAJOR}.${OCP_FROM_MINOR} uses the built-in SELinux policy. Skipping the annotation."
     fi
     resume_nrop_reconciliation
     set_worker_paused false
     wait_for_worker_mcp
-    if [[ "${OCP_FROM_MINOR}" -lt 18 ]]; then
+    if [[ "${OCP_FROM_MAJOR}" -eq 4 && "${OCP_FROM_MINOR}" -lt 18 ]]; then
         patch_selinux remove
     fi
     oc get mcp -o wide

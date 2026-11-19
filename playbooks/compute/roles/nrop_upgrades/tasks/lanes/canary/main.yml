@@ -27,6 +27,10 @@
 - name: Prepare and verify the canary baseline
   ansible.builtin.include_tasks: verify_eus_canary_baseline.yml
 
+- name: Deploy the persistent workload before the canary upgrade
+  ansible.builtin.include_tasks: persistent_workload_deploy.yml
+  when: verify_persistent_workload | bool
+
 - name: Prepare the canary pool's PerformanceProfile
   ansible.builtin.include_tasks: lanes/canary/prepare_canary_upgrade_pool.yml
   when: apply_perf_profile | bool
@@ -47,6 +51,7 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
     OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MAJOR: "{{ ocp_from_major }}"
     OCP_FROM_MINOR: "{{ ocp_from_minor }}"
     CANARY_NODE_COUNT: "{{ canary_node_count }}"
     NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
@@ -88,6 +93,7 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
     OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MAJOR: "{{ ocp_from_major }}"
     OCP_FROM_MINOR: "{{ ocp_from_minor }}"
     CANARY_NODE_COUNT: "{{ canary_node_count }}"
     NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
@@ -105,6 +111,7 @@
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
     OCP_TARGET_VERSION: "{{ target_ocp_version }}"
+    OCP_FROM_MAJOR: "{{ ocp_from_major }}"
     OCP_FROM_MINOR: "{{ ocp_from_minor }}"
     CANARY_NODE_COUNT: "{{ canary_node_count }}"
     NROP_MCP_TARGET: "{{ nrop_worker_mcp }}"
@@ -146,3 +153,22 @@
     nrop_canary_smoke_phase: post
     nrop_canary_smoke_pool: worker
   when: canary_cleanup | bool
+
+- name: Verify the persistent workload after the canary upgrade
+  ansible.builtin.include_tasks: persistent_workload_verify.yml
+  when: verify_persistent_workload | bool
+
+- name: Remove the persistent workload namespace created by this run
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+    delete_options:
+      preconditions:
+        uid: "{{ nrop_persistent_namespace.result.metadata.uid }}"
+  when:
+    - verify_persistent_workload | bool
+    - nrop_persistent_namespace.result.metadata.uid is defined

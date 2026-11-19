@@ -6,6 +6,15 @@
 set -ex
 
 PHASE="${1:?Usage: nrop-canary-skip-upgrade.sh <setup|migrate|cleanup|normalize>}"
+# The SELinux policy changed at 4.18; migration and cleanup need the source version.
+if [[ "${PHASE}" == "migrate" || "${PHASE}" == "cleanup" ]]; then
+    : "${OCP_FROM_MAJOR:?OCP_FROM_MAJOR is required}"
+    : "${OCP_FROM_MINOR:?OCP_FROM_MINOR is required}"
+    if [[ ! "${OCP_FROM_MAJOR}" =~ ^(0|[1-9][0-9]*)$ || ! "${OCP_FROM_MINOR}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "[ERROR] OCP_FROM_MAJOR and OCP_FROM_MINOR must be decimal integers without leading zeros." >&2
+        exit 1
+    fi
+fi
 NROP_MCP_TARGET="${NROP_MCP_TARGET:-worker}"
 UPGRADE_MCP_NAME="${UPGRADE_MCP_NAME:-${NROP_MCP_TARGET}-upgrade}"
 MANAGED_CANARY_PROFILE="${MANAGED_CANARY_PROFILE:-}"
@@ -15,10 +24,6 @@ TOPOLOGY_MANAGER_SCOPE="${TOPOLOGY_MANAGER_SCOPE:-pod}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${WORKSPACE:-/tmp}/artifacts}"
 mkdir -p "${ARTIFACTS_DIR}"
 CANARY_NODE_COUNT="${CANARY_NODE_COUNT:-0}"
-# Source OCP minor version — used to decide whether the SELinux annotation is needed.
-# The SELinux policy changed at 4.18: upgrades from pre-4.18 require the custom annotation;
-# upgrades from 4.18+ (e.g., 4.18->4.20, 4.20->4.22) share the same built-in policy and skip it.
-OCP_FROM_MINOR="${OCP_FROM_MINOR:-0}"
 
 collect_debug_logs() {
     echo "[INFO] === Collecting debug logs ==="
@@ -502,7 +507,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/nrop-canary-migrate.sh"
 phase_cleanup() {
     echo "[INFO] === CANARY CLEANUP PHASE ==="
 
-    if [[ "${OCP_FROM_MINOR}" -lt 18 ]]; then
+    if [[ "${OCP_FROM_MAJOR}" -eq 4 && "${OCP_FROM_MINOR}" -lt 18 ]]; then
         echo "[INFO] Step 13: Removing custom SELinux annotation from NROP CR worker nodeGroup (was required for pre-4.18 source)"
         cat <<EOF > "${ARTIFACTS_DIR}/nrop-cr-cleanup-selinux.yaml"
 apiVersion: nodetopology.openshift.io/v1
@@ -529,7 +534,7 @@ EOF
         fi
         echo "[VERIFY] SELinux annotation removed from NROP CR worker nodeGroup"
     else
-        echo "[INFO] Step 13: Skipping SELinux annotation removal (not added for upgrades from 4.${OCP_FROM_MINOR}+)"
+        echo "[INFO] Step 13: Skipping SELinux annotation removal (not added for source ${OCP_FROM_MAJOR}.${OCP_FROM_MINOR})"
     fi
 
     echo "[INFO] Step 14: Moving all nodes back to ${NROP_MCP_TARGET} MCP"

@@ -1,0 +1,148 @@
+---
+- name: Check that the persistent deployment is available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    name: nrop-smoke-persistent
+  register: nrop_persistent_deployment
+  until: >-
+    nrop_persistent_deployment.resources | length == 1 and
+    (nrop_persistent_deployment.resources[0].status.readyReplicas | default(0) | int >= 1) and
+    (nrop_persistent_deployment.resources[0].status.conditions | default([])
+     | selectattr('type', 'equalto', 'Available') | selectattr('status', 'equalto', 'True') | list | length > 0)
+  retries: 24
+  delay: 5
+
+- name: Read the persistent workload pod after the upgrade
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    label_selectors: [app=nrop-smoke-persistent]
+  register: nrop_persistent_current_pods
+  until: >-
+    nrop_persistent_current_pods.resources | length > 0 and
+    (nrop_persistent_current_pods.resources | selectattr('status.phase', 'defined')
+     | selectattr('status.phase', 'equalto', 'Running') | list | length > 0)
+  retries: 24
+  delay: 5
+
+- name: Record the running persistent workload pod
+  ansible.builtin.set_fact:
+    nrop_persistent_current_pod: >-
+      {{ nrop_persistent_current_pods.resources | selectattr('status.phase', 'defined')
+         | selectattr('status.phase', 'equalto', 'Running') | first }}
+
+- name: Verify the persistent pod scheduler
+  ansible.builtin.assert:
+    that:
+      - nrop_persistent_current_pod.spec.schedulerName == 'topo-aware-scheduler'
+      - nrop_persistent_current_pod.spec.nodeName | default('') | length > 0
+    fail_msg: The persistent workload is not running on a topology-aware scheduled node.
+
+- name: Read the persistent pod node topology
+  kubernetes.core.k8s_info:
+    api_version: topology.node.k8s.io/v1alpha2
+    kind: NodeResourceTopology
+    name: "{{ nrop_persistent_current_pod.spec.nodeName }}"
+  register: nrop_persistent_nrt
+
+- name: Require node topology for the persistent workload
+  ansible.builtin.assert:
+    that:
+      - nrop_persistent_nrt.resources | length > 0
+    fail_msg: The persistent workload node has no NodeResourceTopology object.
+
+- name: Read persistent workload ReplicaSet events
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Event
+    namespace: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    field_selectors: [involvedObject.kind=ReplicaSet, reason=SuccessfulCreate]
+  register: nrop_persistent_events
+  failed_when: false
+
+- name: Collect worker boot history after the upgrade
+  ansible.builtin.include_tasks: persistent_workload_boots.yml
+
+- name: Build the worker reboot summary
+  ansible.builtin.set_fact:
+    nrop_persistent_reboot_summary: >-
+      {{ (nrop_persistent_reboot_summary | default({})) | combine({item.item: {
+          'baseline_boot_count': (nrop_persistent_baseline_boots | default({})).get(item.item),
+          'current_boot_count': (item.stdout_lines | default([]) | length) if item.rc | default(1) == 0 else none,
+          'reboots_during_pipeline': ((item.stdout_lines | default([]) | length) - nrop_persistent_baseline_boots[item.item])
+            if item.rc | default(1) == 0 and (nrop_persistent_baseline_boots | default({})).get(item.item) is not none else none,
+          'boots': item.stdout_lines | default([]) if item.rc | default(1) == 0 else []
+      }}) }}
+  loop: "{{ nrop_persistent_boot_history.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Build the persistent workload survival report
+  ansible.builtin.set_fact:
+    nrop_persistent_survival_report: >-
+      {{ {
+          'pod': {
+            'baseline_uid': nrop_persistent_initial_pod.metadata.uid,
+            'baseline_node': nrop_persistent_initial_pod.spec.nodeName,
+            'current_uid': nrop_persistent_current_pod.metadata.uid,
+            'current_node': nrop_persistent_current_pod.spec.nodeName,
+            'rescheduled': nrop_persistent_current_pod.metadata.uid != nrop_persistent_initial_pod.metadata.uid,
+            'node_changed': nrop_persistent_current_pod.spec.nodeName != nrop_persistent_initial_pod.spec.nodeName,
+            'phase': nrop_persistent_current_pod.status.phase,
+            'restarts': (nrop_persistent_current_pod.status.containerStatuses | default([]) | map(attribute='restartCount') | sum),
+            'scheduler': nrop_persistent_current_pod.spec.schedulerName
+          },
+          'reschedule_count': ([(nrop_persistent_events.resources | default([]) | length) - 1, 0] | max),
+          'reboot_summary': nrop_persistent_reboot_summary | default({}),
+          'timestamp': now(utc=true).isoformat()
+      } }}
+
+- name: Save the persistent workload survival report
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/smoke-persistent-pod-survival.json"
+    mode: '0644'
+    content: "{{ nrop_persistent_survival_report | to_nice_json }}"
+  become: true
+
+- name: Save the worker reboot history
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/smoke-reboot-history.json"
+    mode: '0644'
+    content: "{{ nrop_persistent_reboot_summary | default({}) | to_nice_json }}"
+  become: true
+
+- name: Save the persistent workload survival report as text
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/smoke-persistent-pod-survival.txt"
+    mode: '0644'
+    content: |
+      Persistent GU Pod Survival Report
+      Baseline UID: {{ nrop_persistent_survival_report.pod.baseline_uid }}
+      Current UID: {{ nrop_persistent_survival_report.pod.current_uid }}
+      Baseline node: {{ nrop_persistent_survival_report.pod.baseline_node }}
+      Current node: {{ nrop_persistent_survival_report.pod.current_node }}
+      Rescheduled: {{ nrop_persistent_survival_report.pod.rescheduled }}
+      Node changed: {{ nrop_persistent_survival_report.pod.node_changed }}
+      Phase: {{ nrop_persistent_survival_report.pod.phase }}
+      Scheduler: {{ nrop_persistent_survival_report.pod.scheduler }}
+      Restarts: {{ nrop_persistent_survival_report.pod.restarts }}
+      Reschedule events: {{ nrop_persistent_survival_report.reschedule_count }}
+      RESULT: PASS
+  become: true
+
+- name: Save the worker reboot history as text
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/smoke-reboot-history.txt"
+    mode: '0644'
+    content: |
+      Worker Node Reboot Summary
+      {% for node, info in (nrop_persistent_reboot_summary | default({})).items() %}
+      {{ node }}: {{ info.reboots_during_pipeline if info.reboots_during_pipeline is not none else 'unavailable' }} reboot(s)
+      {% for boot in info.boots %}
+        {{ boot }}
+      {% endfor %}
+      {% endfor %}
+  become: true

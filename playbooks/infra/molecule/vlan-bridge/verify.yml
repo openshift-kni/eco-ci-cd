@@ -1,0 +1,55 @@
+---
+- name: Verify the guest bridge and original parent
+  hosts: hypervisor
+  gather_facts: false
+  tasks:
+    - name: Read the VLAN interface
+      ansible.builtin.command:
+        argv: [ip, -j, -d, link, show, dev, testuplink.418]
+      register: vlan_link
+      changed_when: false
+
+    - name: Read the existing parent interface
+      ansible.builtin.command:
+        argv: [ip, -j, link, show, dev, testuplink]
+      register: parent_link
+      changed_when: false
+
+    - name: Check that the VLAN joins the new bridge without moving its parent
+      ansible.builtin.assert:
+        that:
+          - (vlan_link.stdout | from_json | first).master == 'br-vlan418'
+          - (vlan_link.stdout | from_json | first).link == 'testuplink'
+          - (vlan_link.stdout | from_json | first).linkinfo.info_data.id | int == 418
+          - (parent_link.stdout | from_json | first).master == 'br-existing'
+
+    - name: Check both new NetworkManager connections are active
+      ansible.builtin.command:
+        argv: [nmcli, -g, GENERAL.STATE, connection, show, "{{ item }}"]
+      loop:
+        - br-vlan418
+        - testuplink.418
+      register: connection_states
+      changed_when: false
+
+    - name: Assert both connections are activated
+      ansible.builtin.assert:
+        that: connection_states.results | map(attribute='stdout') | select('match', '^activated') | list | length == 2
+
+    - name: Read bridge IPv4 method
+      ansible.builtin.command:
+        argv: [nmcli, -g, ipv4.method, connection, show, br-vlan418]
+      register: bridge_ipv4_method
+      changed_when: false
+
+    - name: Read bridge IPv6 method
+      ansible.builtin.command:
+        argv: [nmcli, -g, ipv6.method, connection, show, br-vlan418]
+      register: bridge_ipv6_method
+      changed_when: false
+
+    - name: Verify that the hypervisor bridge has no IP configuration
+      ansible.builtin.assert:
+        that:
+          - bridge_ipv4_method.stdout == 'disabled'
+          - bridge_ipv6_method.stdout == 'disabled'

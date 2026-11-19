@@ -1,0 +1,121 @@
+---
+- name: Create an isolated local libvirt VM for the bridge test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    vm_name: molecule-vlan-bridge
+    work_dir: "{{ molecule_ephemeral_directory }}"
+    disk_path: /tmp/opencode/molecule-vlan-bridge.qcow2
+    user_data_path: /tmp/opencode/molecule-vlan-bridge-user-data
+    key_path: "{{ work_dir }}/id_ed25519"
+    cloud_image: "{{ lookup('env', 'MOLECULE_BRIDGE_IMAGE') }}"
+  tasks:
+    - name: Require an existing cloud image and an active libvirt default network
+      ansible.builtin.assert:
+        that:
+          - cloud_image | length > 0
+          - cloud_image is file
+        fail_msg: Set MOLECULE_BRIDGE_IMAGE to a local qcow2 cloud image with NetworkManager.
+
+    - name: Inspect libvirt default network
+      ansible.builtin.command:
+        argv: [virsh, net-info, default]
+      register: libvirt_network
+      changed_when: false
+
+    - name: Require a running libvirt NAT network
+      ansible.builtin.assert:
+        that: "'Active:         yes' in libvirt_network.stdout"
+
+    - name: Check for a VM with the test name
+      ansible.builtin.command:
+        argv: [virsh, dominfo, "{{ vm_name }}"]
+      register: existing_vm
+      failed_when: false
+      changed_when: false
+
+    - name: Never overwrite an existing VM
+      ansible.builtin.assert:
+        that:
+          - existing_vm.rc != 0
+          - disk_path is not file
+          - user_data_path is not file
+
+    - name: Generate a disposable SSH key
+      ansible.builtin.command:
+        argv: [ssh-keygen, -q, -t, ed25519, -N, '', -f, "{{ key_path }}"]
+      args:
+        creates: "{{ key_path }}"
+
+    - name: Create an overlay instead of modifying the cloud image
+      ansible.builtin.command:
+        argv: [qemu-img, create, -f, qcow2, -F, qcow2, -b, "{{ cloud_image }}", "{{ disk_path }}", 10G]
+      args:
+        creates: "{{ disk_path }}"
+
+    - name: Create cloud-init user data for a passwordless test account
+      ansible.builtin.copy:
+        dest: "{{ user_data_path }}"
+        mode: '0600'
+        content: |
+          #cloud-config
+          users:
+            - name: molecule
+              groups: wheel
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - {{ lookup('file', key_path ~ '.pub') }}
+
+    - name: Boot the local libvirt test VM
+      ansible.builtin.command:
+        argv:
+          - virt-install
+          - --name
+          - "{{ vm_name }}"
+          - --memory
+          - '2048'
+          - --vcpus
+          - '2'
+          - --disk
+          - "path={{ disk_path }},format=qcow2"
+          - --network
+          - network=default
+          - --os-variant
+          - detect=on,require=off
+          - --cloud-init
+          - "user-data={{ user_data_path }}"
+          - --import
+          - --graphics
+          - none
+          - --noautoconsole
+          - --wait=0
+      changed_when: true
+
+    - name: Wait for libvirt to report the guest DHCP address
+      ansible.builtin.command:
+        argv: [virsh, domifaddr, "{{ vm_name }}", --source, lease]
+      register: vm_address
+      until: vm_address.stdout | regex_search('([0-9]{1,3}[.]){3}[0-9]{1,3}/[0-9]+') is not none
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Record the guest address
+      ansible.builtin.set_fact:
+        guest_ip: "{{ (vm_address.stdout | regex_search('([0-9]{1,3}[.]){3}[0-9]{1,3}/[0-9]+')).split('/')[0] }}"
+
+    - name: Wait for guest SSH
+      ansible.builtin.wait_for:
+        host: "{{ guest_ip }}"
+        port: 22
+        timeout: 180
+
+    - name: Write Molecule's dynamic instance inventory
+      ansible.builtin.copy:
+        dest: "{{ molecule_instance_config }}"
+        mode: '0600'
+        content: >-
+          {{ [{'instance': 'hypervisor', 'address': guest_ip, 'user': 'molecule',
+               'port': 22, 'identity_file': key_path}] | to_json }}

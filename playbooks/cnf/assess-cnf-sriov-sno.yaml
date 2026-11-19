@@ -13,8 +13,10 @@
 # - ens7f0np0 and ens7f3np3 are reported with totalvfs greater than zero.
 # - Existing SR-IOV node policy names are reported without changing them.
 #
-# This is specific to the current kni-qe-136 SNO hardware. The Jenkins child
-# separately checks the NIC MAC addresses, carrier state, and management routes.
+# This targets two Intel E810-XXV 25 GbE test ports (ens7f0np0 and ens7f3np3)
+# on a single-node host; eno12399np0 is the excluded management port. The
+# separate assess-sno-node-network.yaml playbook checks NIC MAC addresses,
+# carrier state, and management routes for the Jenkins child.
 # A positive totalvfs value establishes reported device capability only; it
 # does not select a VF count, policy mode, resource name, or confirm available
 # VF capacity. Approve those values before adding an apply-mode playbook.

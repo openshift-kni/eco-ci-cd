@@ -5,7 +5,7 @@ Handles local operations:
   - Gather JUnit XMLs to a unified directory for telcov10n-verify-junit-reports
     (testsuite names renamed to the suite name in the copies)
   - Zip k8sreporter artifacts (excluding XML files)
-  - Prepare report dirs for telcov10n-functional-report
+  - Prepare the Report Portal input directory for telcov10n-functional-report
   - Stage junit_eco_gotests_<suite>/ dirs (report XMLs, the renamed JUnit copy
     and the k8sreporter zip) for the caller to fetch via SCP
 
@@ -89,28 +89,18 @@ def create_k8sreporter_zip(suite, report_dir, k8s_reporter_dir):
     info("Created %s (%d files)", zip_path, len(files))
 
 
-def prepare_report_files(suite, report_dir, report_junit_dir, report_polarion_dir):
-    """Copy Polarion XML and Ginkgo JUnit to report dirs with renamed testsuites.
+def prepare_report_files(suite, report_dir, report_portal_dir):
+    """Copy the Ginkgo JUnit report to the Report Portal input directory.
 
-    Dir names are crossed with their content (matches the upstream
-    telcov10n-functional-report conventions):
-      report_junit_dir/    → JUNIT_REPORT_PATH (Polarion report_testrun XMLs)
-      report_polarion_dir/ → POLARION_REPORT_PATH (Ginkgo JUnit XMLs)
+    Only the raw Ginkgo JUnit report is uploaded now; the Polarion
+    report_testrun converter input is no longer produced.
     """
-    polarion_src = join(report_dir, "report_testrun.xml")
-    if isfile(polarion_src):
-        write_xml_with_renamed_testsuites(
-            polarion_src,
-            join(report_junit_dir, f"{suite}_suite_test_polarion.xml"),
-            suite,
-        )
-
     # Each suite produces a single *suite_test_junit.xml; take the first match.
     ginkgo_matches = glob(join(report_dir, "*suite_test_junit.xml"))
     if ginkgo_matches:
         write_xml_with_renamed_testsuites(
             ginkgo_matches[0],
-            join(report_polarion_dir, f"{suite}_suite_test.xml"),
+            join(report_portal_dir, f"{suite}_suite_test.xml"),
             suite,
         )
 
@@ -157,10 +147,14 @@ def parse_arguments():
                         help="Versioned k8sreporter directory (e.g. /tmp/k8sreporter-5.0.1)")
     parser.add_argument("--eco-gotest-dir-prefix", default="/tmp/eco_gotests_",
                         help="Bastion path prefix for suite directories")
-    parser.add_argument("--report-junit-dir", default="/tmp/test_reports/junit",
-                        help="Bastion dir for Polarion report_testrun XMLs (JUNIT_REPORT_PATH)")
-    parser.add_argument("--report-polarion-dir", default="/tmp/test_reports/polarion",
-                        help="Bastion dir for ReportPortal Ginkgo JUnit XMLs (POLARION_REPORT_PATH)")
+    parser.add_argument("--report-portal-dir", "--report-polarion-dir",
+                        dest="report_portal_dir", default="/tmp/test_reports/polarion",
+                        help="Bastion dir for Report Portal Ginkgo JUnit XMLs "
+                             "(the default path is the legacy one consumed by the "
+                             "reporting step)")
+    # Accepted for compatibility with older callers; Polarion reporting is gone.
+    parser.add_argument("--report-junit-dir", default=None,
+                        help="Deprecated and ignored; Polarion reporting was removed")
     parser.add_argument("--artifacts-dir", default="/tmp/eco_gotests_artifacts",
                         help="Bastion dir where junit_eco_gotests_<suite>/ dirs are staged "
                              "for the caller to fetch")
@@ -174,8 +168,7 @@ def main():
     reset_directories(
         args.junit_dir,
         args.k8s_reporter_dir,
-        args.report_polarion_dir,
-        args.report_junit_dir,
+        args.report_portal_dir,
         args.artifacts_dir,
     )
 
@@ -190,9 +183,7 @@ def main():
         try:
             rename_and_gather_junit_xmls(suite, report_dir, args.junit_dir)
             create_k8sreporter_zip(suite, report_dir, args.k8s_reporter_dir)
-            prepare_report_files(
-                suite, report_dir, args.report_junit_dir, args.report_polarion_dir
-            )
+            prepare_report_files(suite, report_dir, args.report_portal_dir)
             stage_suite_artifacts(
                 suite, report_dir, args.junit_dir, args.k8s_reporter_dir, args.artifacts_dir
             )

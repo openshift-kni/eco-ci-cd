@@ -246,6 +246,10 @@
   vars:
     eco_gotest_base_dir: "{{ eco_gotest_base_dir | default('/tmp/eco_gotests') }}"
     bastion_report_dir: "{{ ptp_report_dir | default('/tmp/test_reports') }}"
+    # One report set: the Ginkgo suite JUnit XMLs. The reporting step uploads
+    # every file here with rpu (processed_report_dir) and the JUnit
+    # verification step verifies the same files (its JUNIT_REPORT_DIR default).
+    report_dir: "{{ bastion_report_dir }}/junit"
     ptp_cycles:
       - { index: 0, name: "BC-OC" }
       - { index: 1, name: "OC2port" }
@@ -258,23 +262,18 @@
         path: "{{ bastion_report_dir }}"
         state: absent
 
-    - name: Create polarion and junit directories
+    - name: Create the report directory
       ansible.builtin.file:
-        path: "{{ bastion_report_dir }}/{{ item }}"
+        path: "{{ report_dir }}"
         state: directory
         mode: "0755"
-      loop:
-        - polarion
-        - junit
 
-    - name: Prepare ReportPortal results (and discard Polarion reports)
+    - name: Prepare PTP suite reports
       ansible.builtin.shell: |
         src="{{ eco_gotest_base_dir }}_{{ item.index }}/report/ptp_suite_test_junit.xml"
-        rp_dst="{{ bastion_report_dir }}/polarion/testrun_ptp_{{ item.index }}.xml"
-        dummy_dst="{{ bastion_report_dir }}/junit/ptp_cycle_{{ item.index }}.xml"
+        dst="{{ report_dir }}/ptp_cycle_{{ item.index }}_suite_test.xml"
         if [ -f "${src}" ]; then
-          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" "${src}" > "${rp_dst}"
-          cp "${src}" "${dummy_dst}"
+          sed "s/testsuite name=\"[^\"]*\"/testsuite name=\"{{ item.name }}\"/g" "${src}" > "${dst}"
         fi
       loop: "{{ ptp_cycles }}"
       changed_when: false

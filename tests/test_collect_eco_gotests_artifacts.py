@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for scripts/collect-eco-gotests-artifacts.py.
 
-Covers testsuite renaming, JUnit gathering, k8sreporter zip exclusions,
-report file preparation, and the per-suite error isolation in main().
+Covers testsuite renaming, the single shared report directory, k8sreporter
+zip exclusions, and the per-suite error isolation in main().
 """
 
 import importlib.util
@@ -73,49 +73,53 @@ class CollectionTest(unittest.TestCase):
 
     def make_out_dirs(self):
         out = {
-            "bastion_junit": self.base / "out" / "junit",
+            "report": self.base / "out" / "junit",
             "k8s_reporter": self.base / "out" / "k8s",
-            "report_junit": self.base / "out" / "reports" / "junit",
-            "report_polarion": self.base / "out" / "reports" / "polarion",
             "artifacts": self.base / "out" / "artifacts",
         }
         for path in out.values():
             path.mkdir(parents=True, exist_ok=True)
         return out
 
-    def test_rename_and_gather_junit_xmls(self):
+    def test_prepare_report_files_writes_one_renamed_copy(self):
         report_dir = self.suite_report_dir()
         junit = report_dir / "oran_suite_test_junit.xml"
         junit.write_text(JUNIT_XML, encoding="utf-8")
-        (report_dir / "other_junit_report.xml").write_text(
-            '<testsuite name="other"/>\n', encoding="utf-8"
+        (report_dir / "report_testrun.xml").write_text(
+            '<testsuites name="polarion-old"/>\n', encoding="utf-8"
         )
-        gathered = self.make_out_dirs()["bastion_junit"]
+        report_out = self.make_out_dirs()["report"]
 
-        self.script.rename_and_gather_junit_xmls(
-            "oran-provision", str(report_dir), str(gathered)
+        self.script.prepare_report_files(
+            "oran-provision", str(report_dir), str(report_out)
         )
 
-        # Originals are left untouched; gathered copies carry the suite name.
+        # Originals are left untouched; the one published copy carries the
+        # suite name and the lossy report_testrun aggregate is not copied.
         self.assertEqual(junit.read_text(encoding="utf-8"), JUNIT_XML)
-        copy = gathered / "oran-provision_oran_suite_test_junit.xml"
-        self.assertIn('testsuites name="oran-provision"', copy.read_text(encoding="utf-8"))
-        other = gathered / "oran-provision_other_junit_report.xml"
-        self.assertIn('testsuite name="oran-provision"', other.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [path.name for path in report_out.iterdir()],
+            ["oran-provision_suite_test.xml"],
+        )
+        published = (report_out / "oran-provision_suite_test.xml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('testsuites name="oran-provision"', published)
+        self.assertIn('testsuite name="oran-provision"', published)
 
-    def test_rename_preserves_crlf_line_endings(self):
+    def test_prepare_report_files_preserves_crlf_line_endings(self):
         report_dir = self.suite_report_dir()
         junit = report_dir / "oran_suite_test_junit.xml"
         original = JUNIT_XML.replace("\n", "\r\n").encode("utf-8")
         junit.write_bytes(original)
-        gathered = self.make_out_dirs()["bastion_junit"]
+        report_out = self.make_out_dirs()["report"]
 
-        self.script.rename_and_gather_junit_xmls(
-            "oran-provision", str(report_dir), str(gathered)
+        self.script.prepare_report_files(
+            "oran-provision", str(report_dir), str(report_out)
         )
 
         self.assertEqual(junit.read_bytes(), original)
-        copy = gathered / "oran-provision_oran_suite_test_junit.xml"
+        copy = report_out / "oran-provision_suite_test.xml"
         self.assertIn(b"\r\n", copy.read_bytes())
 
     def test_create_k8sreporter_zip_excludes_xml_only(self):
@@ -152,23 +156,26 @@ class CollectionTest(unittest.TestCase):
         (report_dir / "events.log").write_text("events\n", encoding="utf-8")
         out = self.make_out_dirs()
 
-        self.script.rename_and_gather_junit_xmls(
-            "oran-provision", str(report_dir), str(out["bastion_junit"])
+        self.script.prepare_report_files(
+            "oran-provision", str(report_dir), str(out["report"])
         )
         self.script.create_k8sreporter_zip(
             "oran-provision", str(report_dir), str(out["k8s_reporter"])
         )
         self.script.stage_suite_artifacts(
-            "oran-provision", str(report_dir), str(out["bastion_junit"]),
+            "oran-provision", str(report_dir), str(out["report"]),
             str(out["k8s_reporter"]), str(out["artifacts"]),
         )
 
         suite_dir = out["artifacts"] / "junit_eco_gotests_oran-provision"
-        # JUnit copy is renamed, keeps its original file name; report_testrun
-        # is untouched; the zip is included and logs are not.
-        junit = (suite_dir / "oran_suite_test_junit.xml").read_text(encoding="utf-8")
-        self.assertIn('testsuites name="oran-provision"', junit)
-        self.assertNotIn("old-top", junit)
+        # The published copy is renamed, the raw report is kept, report_testrun
+        # is untouched, the zip is included and logs are not.
+        published = (suite_dir / "oran-provision_suite_test.xml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('testsuites name="oran-provision"', published)
+        self.assertNotIn("old-top", published)
+        self.assertTrue((suite_dir / "oran_suite_test_junit.xml").exists())
         self.assertIn(
             'name="pol-original"',
             (suite_dir / "report_testrun.xml").read_text(encoding="utf-8"),
@@ -176,23 +183,18 @@ class CollectionTest(unittest.TestCase):
         self.assertTrue((suite_dir / "oran-provision_k8sreporter.zip").exists())
         self.assertFalse(list(suite_dir.glob("*.log")))
 
-    def test_prepare_report_files(self):
+    def test_prepare_report_files_skips_missing_ginkgo_report(self):
         report_dir = self.suite_report_dir()
         (report_dir / "report_testrun.xml").write_text(
             '<testsuites name="polarion-old"/>\n', encoding="utf-8"
         )
-        (report_dir / "oran_suite_test_junit.xml").write_text(JUNIT_XML, encoding="utf-8")
         out = self.make_out_dirs()
 
         self.script.prepare_report_files(
-            "oran-provision", str(report_dir),
-            str(out["report_junit"]), str(out["report_polarion"])
+            "oran-provision", str(report_dir), str(out["report"])
         )
 
-        polarion = out["report_junit"] / "oran-provision_suite_test_polarion.xml"
-        self.assertIn('testsuites name="oran-provision"', polarion.read_text(encoding="utf-8"))
-        ginkgo = out["report_polarion"] / "oran-provision_suite_test.xml"
-        self.assertIn('testsuites name="oran-provision"', ginkgo.read_text(encoding="utf-8"))
+        self.assertEqual(list(out["report"].iterdir()), [])
 
     def test_prepare_report_files_uses_single_ginkgo_destination(self):
         # With several *suite_test_junit.xml matches, only the first is used
@@ -203,13 +205,12 @@ class CollectionTest(unittest.TestCase):
         out = self.make_out_dirs()
 
         self.script.prepare_report_files(
-            "oran-provision", str(report_dir),
-            str(out["report_junit"]), str(out["report_polarion"])
+            "oran-provision", str(report_dir), str(out["report"])
         )
 
-        produced = list(out["report_polarion"].glob("*.xml"))
+        produced = list(out["report"].glob("*.xml"))
         self.assertEqual(
-            produced, [out["report_polarion"] / "oran-provision_suite_test.xml"]
+            produced, [out["report"] / "oran-provision_suite_test.xml"]
         )
 
 
@@ -228,8 +229,6 @@ class MainTest(unittest.TestCase):
             "--eco-gotest-dir-prefix", str(self.base / "eco_gotests_"),
             "--junit-dir", str(out / "junit"),
             "--k8s-reporter-dir", str(out / "k8s"),
-            "--report-junit-dir", str(out / "reports" / "junit"),
-            "--report-polarion-dir", str(out / "reports" / "polarion"),
             "--artifacts-dir", str(out / "artifacts"),
         ]
         with mock.patch.object(sys, "argv", argv):
@@ -259,15 +258,93 @@ class MainTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
 
         out = self.base / "out"
-        self.assertTrue((out / "junit" / "good_good_suite_test_junit.xml").exists())
+        self.assertTrue((out / "junit" / "good_suite_test.xml").exists())
         self.assertFalse((out / "junit" / "stale.xml").exists())
         self.assertTrue((out / "k8s" / "good_k8sreporter.zip").exists())
-        self.assertTrue((out / "reports" / "junit" / "good_suite_test_polarion.xml").exists())
-        self.assertTrue((out / "reports" / "polarion" / "good_suite_test.xml").exists())
+        self.assertFalse((out / "reports").exists())
         staged = out / "artifacts" / "junit_eco_gotests_good"
+        self.assertTrue((staged / "good_suite_test.xml").exists())
         self.assertTrue((staged / "good_suite_test_junit.xml").exists())
         self.assertTrue((staged / "report_testrun.xml").exists())
         self.assertTrue((staged / "good_k8sreporter.zip").exists())
+
+    def test_deprecated_report_junit_dir_warns(self):
+        out = self.base / "out"
+
+        with self.assertLogs(level="WARNING") as logs:
+            with mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "collect-eco-gotests-artifacts.py",
+                    "--suites", "no-such-suite",
+                    "--eco-gotest-dir-prefix", str(self.base / "eco_gotests_"),
+                    "--junit-dir", str(out / "junit"),
+                    "--k8s-reporter-dir", str(out / "k8s"),
+                    "--artifacts-dir", str(out / "artifacts"),
+                    "--report-junit-dir", str(out / "old-junit"),
+                ],
+            ):
+                self.script.main()
+
+        self.assertTrue(any("ignored" in message for message in logs.output))
+
+    def test_deprecated_report_portal_dir_warns(self):
+        out = self.base / "out"
+
+        with self.assertLogs(level="WARNING") as logs:
+            with mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "collect-eco-gotests-artifacts.py",
+                    "--suites", "no-such-suite",
+                    "--eco-gotest-dir-prefix", str(self.base / "eco_gotests_"),
+                    "--junit-dir", str(out / "junit"),
+                    "--k8s-reporter-dir", str(out / "k8s"),
+                    "--artifacts-dir", str(out / "artifacts"),
+                    "--report-portal-dir", str(out / "reports" / "polarion"),
+                ],
+            ):
+                self.script.main()
+
+        self.assertTrue(any("ignored" in message for message in logs.output))
+
+    def test_oran_label_runs_publish_distinct_reports(self):
+        # O-RAN runs the same eco-gotests feature several times with different
+        # label filters, so every run writes an identically named
+        # oran_suite_test_junit.xml into its own report dir.
+        features = (
+            "oran-pre-provision",
+            "oran-provision",
+            "oran-post-provision",
+            "oran-metal3-day2",
+        )
+        for feature in features:
+            report_dir = self.base / f"eco_gotests_{feature}" / "report"
+            report_dir.mkdir(parents=True)
+            (report_dir / "oran_suite_test_junit.xml").write_text(
+                JUNIT_XML, encoding="utf-8"
+            )
+
+        self.run_main(" ".join(features))
+
+        out = self.base / "out" / "junit"
+        self.assertEqual(
+            sorted(path.name for path in out.iterdir()),
+            sorted(f"{feature}_suite_test.xml" for feature in features),
+        )
+        for feature in features:
+            content = (out / f"{feature}_suite_test.xml").read_text(encoding="utf-8")
+            self.assertIn(f'testsuites name="{feature}"', content)
+            self.assertIn(f'testsuite name="{feature}"', content)
+
+    def test_duplicate_suite_names_are_rejected(self):
+        with self.assertLogs(level="ERROR") as logs:
+            with self.assertRaises(SystemExit) as ctx:
+                self.run_main("oran-provision oran-provision")
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertTrue(any("Duplicate suite names" in m for m in logs.output))
 
     def test_missing_report_dir_is_skipped(self):
         self.run_main("no-such-suite")  # must not raise

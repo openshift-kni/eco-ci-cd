@@ -208,6 +208,10 @@
           loop: "{{ ibi_report_manifest }}"
 
         - name: Configure the existing shared uploader
+          # The imported upload play targets hosts: bastion. add_host registers
+          # that name in bastions so the play runs even when this reporting
+          # flow has no real bastion inventory entry, while carrying the
+          # local output paths and hub kubeconfig to the uploader.
           ansible.builtin.add_host:
             name: bastion
             groups: bastions

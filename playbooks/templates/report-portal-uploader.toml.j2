@@ -14,7 +14,8 @@ description = {{ report_portal_launch_description | to_json }}
 
 [processing]
 property_filter = ["polarion-.*"]
-exclude_patterns = []
+# report_testrun.xml is a lossy Polarion aggregate of the same specs.
+exclude_patterns = ["*report_testrun*"]
 
 [output]
 launch_url_file = {{ report_portal_launch_url_file | to_json }}

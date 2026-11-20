@@ -11,9 +11,9 @@
 #
 # The previous cnf-polarion + Data Router pathway is gone: Data Router was shut
 # down, so Polarion reporting is no longer attempted and only Report Portal
-# uploads happen here. `processed_report_dir` is the Report Portal input set;
-# the old `junit_report_dir` (Polarion converter input) is accepted for
-# compatibility but ignored.
+# uploads happen here. `processed_report_dir` is the single report set: the
+# suite JUnit XMLs, which are also what the JUnit verification step reads. The
+# old `junit_report_dir` argument is accepted for compatibility but ignored.
 #
 # Requirements:
 # - OpenShift cluster
@@ -25,6 +25,13 @@
 # selfservice/telcov10n-ci/ansible/ansible_group_bastions:
 #   report_portal_url   Report Portal base URL (bare host or https:// URL)
 #   report_portal_key   Report Portal API token
+#
+# Every release caller that imports this playbook must ensure those two values
+# are present in group_vars/bastions before the reporting post-step runs. This
+# applies to telcov10n-functional-report, telcov10n-functional-cnf-ran-report,
+# telcov10n-functional-cnf-ran-ibu-report, cnf-network/cnf-reporter, and
+# cnf-compute/nto/reporter. A reporting run with upload_to_report_portal=true
+# fails the play if either credential is missing.
 #
 # Usage:
 # Run this playbook using Ansible:
@@ -46,22 +53,29 @@
 # report_portal_url                     Report Portal base URL. Defaults to the bastion group variable.
 # report_portal_key                     Report Portal API token. Defaults to the bastion group variable.
 # report_portal_project                 Report Portal project. Default: ecosystem-qe
-# report_portal_uploader_image          report-portal-uploader image. Default: quay.io/rh-ee-klaskosk/report-portal-uploader
-# report_portal_uploader_tag            report-portal-uploader image tag. Default: latest
+# report_portal_uploader_image          report-portal-uploader image reference. Default is the digest-pinned
+#                                       quay.io/rh-ee-klaskosk/report-portal-uploader image below.
+# report_portal_uploader_tag            Optional tag appended when the image reference is not digest-pinned.
 # reporter_template_name                Template/launch description for the report. Example: "Cluster ipv6 report"
 # reporter_launch_name                  Report Portal launch name. Defaults to reporter_template_name without a trailing -X.Y.
 # reports_portal_attributes             Semicolon separated key:value pairs added as launch attributes.
 # report_portal_url_filename            Filename (under /tmp) for the launch URL. Default: .reportportal_url
 # reports_directory                     Bastion working directory for the uploader. Default: /tmp/report-portal-upload
-# report_portal_keep_work_dir           Keep the uploader work directory for debugging. Default: false
+# report_portal_keep_work_dir           Keep the uploader work directory for debugging. Default: false.
+#                                       WARNING: this leaves REPORTPORTAL_TOKEN in rpu.env on the bastion.
 
 - name: Upload reports to Report Portal
   hosts: bastion
   gather_facts: false
   force_handlers: true
   vars:
-    report_portal_uploader_image: quay.io/rh-ee-klaskosk/report-portal-uploader
-    report_portal_uploader_tag: latest
+    report_portal_uploader_image: quay.io/rh-ee-klaskosk/report-portal-uploader@sha256:8e8ce6cccafb9b5a91e10751b82cd30ecdaddc1aab9c42622307526d76f206e1
+    report_portal_uploader_tag: ""
+    report_portal_uploader_reference: >-
+      {{ report_portal_uploader_image
+         ~ (':' ~ report_portal_uploader_tag
+            if report_portal_uploader_tag | default('', true) | length > 0 and
+               '@' not in report_portal_uploader_image else '') }}
     report_portal_project: ecosystem-qe
     report_portal_reports_dir: "{{ processed_report_dir | default('') }}"
     report_portal_work_dir: "{{ reports_directory | default('/tmp/report-portal-upload') }}"
@@ -86,11 +100,13 @@
           report_portal_url and report_portal_key must come from the bastion
           group variables, and processed_report_dir must point at the prepared
           JUnit reports.
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Remove the previous Report Portal launch URL file
       ansible.builtin.file:
         path: "/tmp/{{ report_portal_launch_url_name }}"
         state: absent
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Gather cluster network information
       register: cluster_info
@@ -100,21 +116,25 @@
         api: operator.openshift.io/v1
         kind: Network
         name: cluster
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Set the Report Portal launch description
       ansible.builtin.set_fact:
         report_portal_launch_description: >-
           OCP {{ cluster_info.resources[0].status.version }} -
           {{ reporter_template_name | default(report_portal_launch_name, true) }}
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Initialize Report Portal launch attributes
       ansible.builtin.set_fact:
         report_portal_attributes: {}
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Add the cluster version attribute
       ansible.builtin.set_fact:
         report_portal_attributes: >-
           {{ report_portal_attributes | combine({'ocp_version': cluster_info.resources[0].status.version}) }}
+      when: upload_to_report_portal | default(true) | bool
 
     - name: Add attributes collected from metrics
       ansible.builtin.set_fact:
@@ -123,7 +143,9 @@
                item.split(':', 1)[0] | trim: item.split(':', 1)[1] | trim
              }) }}
       loop: "{{ reports_portal_attributes | default('') | split(';') | reject('equalto', '') | list }}"
-      when: item is search(':')
+      when:
+        - upload_to_report_portal | default(true) | bool
+        - item is search(':')
 
     - name: Remove the previous uploader work directory
       ansible.builtin.file:
@@ -199,16 +221,19 @@
         - upload_to_report_portal | default(true) | bool
         - report_portal_ca_bundle.stat.exists | default(false)
 
+    # Go reads every file under /etc/pki/tls/certs, so the runner trust bundle
+    # is mounted there as its own file and the image's public roots stay intact.
     - name: Set the Report Portal upload command
       ansible.builtin.set_fact:
         report_portal_upload_command: >-
           timeout 600 podman run --rm --pull=always --user 0
+          --security-opt label=disable
           --env-file {{ (report_portal_work_dir ~ '/rpu.env') | quote }}
-          -v {{ (report_portal_work_dir ~ ':/work:Z') | quote }}
+          -v {{ (report_portal_work_dir ~ ':/work') | quote }}
           {% if report_portal_ca_bundle.stat.exists | default(false) -%}
-          -v {{ (report_portal_work_dir ~ '/runner-ca-bundle.pem:/etc/pki/tls/certs/runner-ca-bundle.pem:ro,Z') | quote }}
+          -v {{ (report_portal_work_dir ~ '/runner-ca-bundle.pem:/etc/pki/tls/certs/runner-ca-bundle.pem:ro') | quote }}
           {%- endif %}
-          {{ (report_portal_uploader_image ~ ':' ~ report_portal_uploader_tag) | quote }}
+          {{ report_portal_uploader_reference | quote }}
           --http-timeout 2m upload --config /work/rpu.toml --json
       when: upload_to_report_portal | default(true) | bool
 
@@ -217,19 +242,9 @@
         cmd: "{{ report_portal_upload_command }}"
         chdir: "{{ report_portal_work_dir }}"
       register: report_portal_upload
-      changed_when: true
-      failed_when: false
+      changed_when: report_portal_upload.rc == 0
+      failed_when: report_portal_upload.rc != 0
       when: upload_to_report_portal | default(true) | bool
-
-    - name: Report a Report Portal upload failure
-      ansible.builtin.debug:
-        msg: >-
-          Report Portal upload failed with exit code {{ report_portal_upload.rc }}:
-          {{ report_portal_upload.stderr | default('') }}
-      when:
-        - upload_to_report_portal | default(true) | bool
-        - report_portal_upload is defined
-        - report_portal_upload.rc != 0
 
     - name: Check for the Report Portal launch URL file
       ansible.builtin.stat:
@@ -262,14 +277,6 @@
     - name: Display the Report Portal launch URL
       ansible.builtin.debug:
         msg: "Report Portal URL: {{ report_portal_launch_url }}"
-
-    - name: Remove the uploader work directory
-      ansible.builtin.file:
-        path: "{{ report_portal_work_dir }}"
-        state: absent
-      when:
-        - upload_to_report_portal | default(true) | bool
-        - not (report_portal_keep_work_dir | default(false) | bool)
 
   handlers:
     - name: Remove Report Portal uploader work directory

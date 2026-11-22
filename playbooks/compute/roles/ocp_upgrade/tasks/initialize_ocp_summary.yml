@@ -1,0 +1,40 @@
+---
+- name: Read the starting OCP version
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: ocp_upgrade_summary_start_cv
+
+- name: Require a readable ClusterVersion
+  ansible.builtin.assert:
+    that:
+      - ocp_upgrade_summary_start_cv.resources | length == 1
+    fail_msg: Unable to determine the last completed starting OCP version.
+
+- name: Find completed OCP versions
+  ansible.builtin.set_fact:
+    ocp_upgrade_completed_versions: >-
+      {{ ocp_upgrade_summary_start_cv.resources[0].status.history | default([])
+         | selectattr('state', 'equalto', 'Completed')
+         | selectattr('version', 'defined')
+         | map(attribute='version')
+         | reject('equalto', '')
+         | list }}
+
+- name: Require a completed starting OCP version
+  ansible.builtin.assert:
+    that:
+      - ocp_upgrade_completed_versions | length > 0
+    fail_msg: Unable to determine the last completed starting OCP version.
+
+- name: Record the starting OCP version
+  ansible.builtin.set_fact:
+    ocp_upgrade_summary_start_version: "{{ ocp_upgrade_completed_versions | first }}"
+
+- name: Write the initial OCP upgrade summary
+  ansible.builtin.include_tasks: write_ocp_summary.yml
+  vars:
+    ocp_upgrade_summary_initial_version: "{{ ocp_upgrade_summary_start_version }}"
+    ocp_upgrade_summary_latest_version: "{{ ocp_upgrade_summary_start_version }}"

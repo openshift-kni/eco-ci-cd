@@ -16,9 +16,9 @@ ocp_upgrade_channel: stable-4.21 # required for all modes; used to query the gra
 
 Choose one option:
 
-1. **Cincinnati graph (default):** Set only the required settings. The role selects the highest target z-stream with an edge from the current release on `ocp_upgrade_channel`. It fails if no edge is found. Conditional edges may still be rejected by the cluster.
+1. **Cincinnati graph (default):** Set only the required settings. The role selects the highest target z-stream with an edge from the current release on `ocp_upgrade_channel`. It fails if no edge is found. When the graph provides a digest, the role checks the selected tag against it without pinning the upgrade command. Conditional edges may still be rejected by the cluster.
 2. **Latest accepted stable:** Set `ocp_hop_use_latest_stable: true`. This selects the latest accepted stable z-stream for `ocp_hop_target` from the release stream; it does not check for a graph edge.
-3. **Specific release image:** Set `ocp_hop_image: <release-image>`. The role checks that the image matches `ocp_hop_target` and pins it by digest. If registry authentication is required, set `ocp_upgrade_pull_secret` to the pull secret JSON.
+3. **Specific release image:** Set `ocp_hop_image: <release-image>`. The role validates the image and uses the supplied reference for the upgrade. If registry authentication is required, set `ocp_upgrade_pull_secret` to the pull secret JSON.
 
 Do not set `ocp_hop_image` together with `ocp_hop_use_latest_stable`. Automatic graph and stable-stream selection targets amd64.
 
@@ -43,4 +43,9 @@ Save the required settings and chosen options in `upgrade-vars.yml`, then run fr
 ansible-playbook -i inventory playbooks/compute/ocp-upgrade.yml -e @upgrade-vars.yml
 ```
 
-The role waits for completion and writes a summary such as `ocp-upgrade-hop-4-21.json` in `artifacts_folder`.
+The role waits for completion and writes a summary such as `ocp-upgrade-hop-4-21.json` in `artifacts_folder`. The release image field contains a tag when available and is empty for digest-only references.
+
+Multi-hop callers can first include `initialize_ocp_summary.yml` from this role,
+then pass `ocp_upgrade_summary_initial_version: "{{ ocp_upgrade_summary_start_version }}"`
+to each hop. The role updates `ocp-upgrades.yaml` after every completed hop;
+the per-hop JSON files are still written.

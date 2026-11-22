@@ -40,32 +40,23 @@
 
     - name: Wait for OCP hop to finish
       ansible.builtin.include_tasks: wait_cvo_progressing.yml
+
+    - name: Write OCP hop summary artifact
+      ansible.builtin.copy:
+        dest: "{{ artifacts_folder }}/ocp-upgrade-hop-{{ ocp_hop_target | replace('.', '-') }}.json"
+        mode: "0644"
+        content: "{{ hop_summary | to_nice_json }}"
+      become: true
+      vars:
+        hop_summary:
+          channel: "{{ ocp_upgrade_channel }}"
+          hop_target: "{{ ocp_hop_target }}"
+          desired_version_before: "{{ ocp_upgrade_cv.resources[0].status.desired.version }}"
+          release_image: "{{ ocp_upgrade_target_image if '@sha256:' not in ocp_upgrade_target_image else '' }}"
+          desired_version_after: "{{ ocp_upgrade_target_version }}"
   always:
     - name: Restore the temporary NROP mirror
       ansible.builtin.include_tasks: restore_sigstore_mirror.yml
       when:
         - ocp_hop_target == '4.21'
         - ocp_sigstore_mirror_removal_attempted | default(false) | bool
-
-- name: Get cluster version after hop
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ kubeconfig }}"
-    api_version: config.openshift.io/v1
-    kind: ClusterVersion
-    name: version
-  register: ocp_upgrade_cv_after
-
-- name: Write OCP hop summary artifact
-  ansible.builtin.copy:
-    dest: "{{ artifacts_folder }}/ocp-upgrade-hop-{{ ocp_hop_target | replace('.', '-') }}.json"
-    mode: "0644"
-    content: "{{ hop_summary | to_nice_json }}"
-  become: true
-  vars:
-    hop_summary:
-      channel: "{{ ocp_upgrade_channel }}"
-      hop_target: "{{ ocp_hop_target }}"
-      desired_version_before: "{{ ocp_upgrade_cv.resources[0].status.desired.version }}"
-      release_image: "{{ ocp_upgrade_target_image }}"
-      desired_version_after: "{{ ocp_upgrade_cv_after.resources[0].status.desired.version | default('') }}"
-      desired_image_after: "{{ ocp_upgrade_cv_after.resources[0].status.desired.image | default('') }}"

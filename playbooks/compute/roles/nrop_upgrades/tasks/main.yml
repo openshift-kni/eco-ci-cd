@@ -10,25 +10,11 @@
     mode: "0755"
   become: true
 
-- name: Record lane run metadata
-  ansible.builtin.copy:
-    dest: "{{ artifacts_folder }}/nrop-upgrades-lane-{{ upgrade_type }}.json"
-    mode: "0644"
-    content: "{{ lane_record | to_nice_json }}"
-  become: true
-  vars:
-    lane_record:
-      upgrade_type: "{{ upgrade_type }}"
-      upgrade_env: "{{ upgrade_env }}"
-      from_ocp_version: "{{ from_ocp_version }}"
-      to_ocp_version: "{{ to_ocp_version }}"
-      cluster_ocp_version: "{{ cluster_ocp_version }}"
-      target_ocp_version: "{{ target_ocp_version }}"
-      install_nrop_version: "{{ install_nrop_version }}"
-      nrop_env_from: "{{ nrop_env_from }}"
-      nrop_env_to: "{{ nrop_env_to }}"
-      ocp_upgrade_hops: "{{ ocp_upgrade_hops }}"
-      ocp_control_plane_hops: "{{ ocp_control_plane_hops }}"
+- name: Initialize the OCP upgrade summary for NROP upgrades with OCP upgrades
+  ansible.builtin.include_role:
+    name: ocp_upgrade
+    tasks_from: initialize_ocp_summary.yml
+  when: upgrade_type in ['minor-long', 'range', 'canary', 'eus']
 
 - name: Run lane-specific upgrade path
   ansible.builtin.include_tasks: "lanes/{{ upgrade_type }}/main.yml"

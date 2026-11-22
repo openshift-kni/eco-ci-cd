@@ -11,6 +11,7 @@
     ocp_upgrade_force: true
     ocp_upgrade_pull_secret: "{{ pull_secret_string | default('') | b64decode }}"
     ocp_upgrade_require_accepted: true
+    ocp_upgrade_summary_initial_version: "{{ ocp_upgrade_summary_start_version }}"
     ocp_hop_then: >-
       {{ target_ocp_version if upgrade_type in ['eus', 'canary'] and nrop_hop_version != target_ocp_version
          and (ocp_hop_images[target_ocp_version] | default('') | length == 0) else '' }}

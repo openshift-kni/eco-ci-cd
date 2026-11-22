@@ -1,0 +1,11 @@
+---
+- name: Save initial and latest completed OCP versions
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/ocp-upgrades.yaml"
+    mode: "0644"
+    content: "{{ ocp_upgrade_summary | to_nice_yaml }}"
+  become: true
+  vars:
+    ocp_upgrade_summary:
+      initial_version: "{{ ocp_upgrade_summary_initial_version }}"
+      latest_completed_version: "{{ ocp_upgrade_summary_latest_version }}"

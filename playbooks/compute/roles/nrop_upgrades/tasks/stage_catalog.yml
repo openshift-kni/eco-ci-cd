@@ -242,7 +242,6 @@
                 delete_options:
                   preconditions:
                     uid: "{{ nrop_stage_temp_current.resources[0].metadata.uid }}"
-                    resourceVersion: "{{ nrop_stage_temp_current.resources[0].metadata.resourceVersion }}"
               when: nrop_stage_temp_current.resources | length == 1
       always:
         - name: Remove temporary NROP catalog authentication

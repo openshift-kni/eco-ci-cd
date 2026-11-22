@@ -10,8 +10,7 @@ BASE = 'https://openshift-release.apps.ci.l2s4.p1.openshiftapps.com/api/v1/relea
 
 
 def check(image):
-    # Release-controller records identify tagged pullspecs, not arbitrary
-    # digest references. Internally pinned images are handled by the role.
+    # Release-controller records identify tagged pullspecs.
     if '@' in image:
         raise ValueError('use the tagged release-controller pullspec to verify Accepted phase')
     tagged = image

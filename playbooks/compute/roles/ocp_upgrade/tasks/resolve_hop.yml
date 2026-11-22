@@ -21,7 +21,7 @@
       - "{{ ocp_hop_then | default('') }}"
   environment:
     KUBECONFIG: "{{ kubeconfig }}"
-    OCP_CINCINNATI_INCLUDE_TAG: "{{ 'true' if ocp_upgrade_require_accepted | default(false) | bool else 'false' }}"
+    OCP_CINCINNATI_INCLUDE_TAG: "true"
   register: ocp_upgrade_hop_pullspec
   changed_when: false
   when:
@@ -52,11 +52,20 @@
   ansible.builtin.include_tasks: validate_image.yml
   when: ocp_hop_image | default('') | length > 0
 
+- name: Reset graph validation
+  ansible.builtin.set_fact:
+    ocp_graph_validate_needed: false
+
 - name: Determine whether the graph-selected image needs validation
   ansible.builtin.set_fact:
-    ocp_graph_validate_needed: >-
-      {{ (ocp_upgrade_require_accepted | default(false) | bool) and not (ocp_hop_use_latest_stable | bool)
-         and (ocp_hop_image | default('') | length == 0) }}
+    ocp_graph_validate_needed: true
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length == 0
+    - >-
+      (ocp_upgrade_require_accepted | default(false) | bool) or
+      (ocp_upgrade_hop_pullspec.stdout_lines | default([]) | length > 1 and
+       ocp_upgrade_hop_pullspec.stdout_lines[1] is search('@sha256:[0-9a-f]{64}$'))
 
 - name: Validate the graph-selected release image
   ansible.builtin.include_tasks: validate_image.yml
@@ -64,23 +73,60 @@
     ocp_hop_image: "{{ ocp_upgrade_hop_pullspec.stdout_lines[0] }}"
   when: ocp_graph_validate_needed | bool
 
-- name: Require the Accepted release digest to match the graph payload
+- name: Require the selected release digest to match the graph payload
   ansible.builtin.assert:
     that:
       - (ocp_upgrade_hop_pullspec.stdout_lines[1] | regex_search('@sha256:[0-9a-f]{64}$')) ==
         (ocp_validated_image | regex_search('@sha256:[0-9a-f]{64}$'))
-    fail_msg: The Accepted release digest does not match the Cincinnati graph payload.
+    fail_msg: The selected release digest does not match the Cincinnati graph payload.
   when:
     - ocp_graph_validate_needed | bool
     - ocp_upgrade_hop_pullspec.stdout_lines | length > 1
     - ocp_upgrade_hop_pullspec.stdout_lines[1] is search('@sha256:[0-9a-f]{64}$')
 
-- name: Select OCP hop image
+- name: Select the latest stable OCP release
   ansible.builtin.set_fact:
-    ocp_upgrade_target_image: >-
-      {{ ocp_latest_stable_image if ocp_hop_use_latest_stable | bool
-         else (ocp_validated_image if ocp_hop_image | default('') | length > 0 or ocp_upgrade_require_accepted | default(false) | bool
-               else (ocp_upgrade_hop_pullspec.stdout | trim)) }}
+    ocp_upgrade_target_image: "{{ ocp_latest_stable_image }}"
+    ocp_upgrade_target_version: "{{ ocp_latest_stable_version }}"
+    ocp_upgrade_expected_digest: >-
+      {{ ocp_latest_stable_image | regex_search('@sha256:[0-9a-f]{64}$') | default('', true) }}
+  when: ocp_hop_use_latest_stable | bool
+
+- name: Select the explicitly requested OCP release
+  ansible.builtin.set_fact:
+    ocp_upgrade_target_image: "{{ ocp_hop_image }}"
+    ocp_upgrade_target_version: "{{ (ocp_release_info.stdout | from_json).metadata.version }}"
+    ocp_upgrade_expected_digest: >-
+      {{ ocp_validated_image | regex_search('@sha256:[0-9a-f]{64}$') | default('', true) }}
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length > 0
+
+- name: Select the Cincinnati OCP release
+  ansible.builtin.set_fact:
+    ocp_upgrade_target_image: "{{ ocp_upgrade_hop_pullspec.stdout_lines[0] | trim }}"
+    ocp_upgrade_target_version: >-
+      {{ ocp_upgrade_hop_pullspec.stdout_lines[0].split(':')[-1] | regex_replace('-x86_64$', '') }}
+    ocp_upgrade_expected_digest: >-
+      {{ ocp_upgrade_hop_pullspec.stdout_lines[1]
+         | default(ocp_upgrade_hop_pullspec.stdout_lines[0])
+         | regex_search('@sha256:[0-9a-f]{64}$')
+         | default('', true) }}
+  when:
+    - not (ocp_hop_use_latest_stable | bool)
+    - ocp_hop_image | default('') | length == 0
+
+- name: Require the selected OCP version
+  ansible.builtin.assert:
+    that:
+      - ocp_upgrade_target_version is match('^' ~ (ocp_hop_target | regex_escape) ~ '[.][0-9]+([+-].*)?$')
+    fail_msg: "Unable to determine the selected OCP {{ ocp_hop_target }} release version."
+
+- name: Use the validated Cincinnati digest for CVO comparisons
+  ansible.builtin.set_fact:
+    ocp_upgrade_expected_digest: >-
+      {{ ocp_validated_image | regex_search('@sha256:[0-9a-f]{64}$') | default('', true) }}
+  when: ocp_graph_validate_needed | bool
 
 - name: Warn that the OCP hop uses force
   ansible.builtin.debug:

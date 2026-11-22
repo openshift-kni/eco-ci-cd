@@ -1,0 +1,65 @@
+---
+# Includes in a loop are expanded before their tasks run, so guard each attempt.
+- name: Check and remove the temporary NROP CatalogSource
+  when: not nrop_stage_temp_cleanup_complete | bool
+  block:
+    - name: Read subscriptions before temporary catalog cleanup
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+      register: nrop_stage_temp_subscriptions
+
+    - name: Read the temporary NROP CatalogSource
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        name: "{{ nrop_stage_temp_catalog }}"
+      register: nrop_stage_temp_current
+
+    - name: Require the temporary catalog to remain unused and owned
+      ansible.builtin.assert:
+        that:
+          - nrop_stage_temp_current.resources | length <= 1
+          - >-
+            nrop_stage_temp_current.resources | length == 0 or
+            (nrop_stage_temp_current.resources[0].metadata.uid == nrop_stage_temp_created.result.metadata.uid and
+             nrop_stage_temp_current.resources[0].metadata.labels['nrop-ci.openshift.io/temporary-catalog'] | default('') == 'true')
+          - >-
+            nrop_stage_temp_subscriptions.resources | selectattr('spec.source', 'defined')
+            | selectattr('spec.source', 'equalto', nrop_stage_temp_catalog)
+            | selectattr('spec.sourceNamespace', 'defined')
+            | selectattr('spec.sourceNamespace', 'equalto', 'openshift-marketplace') | list | length == 0
+        fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} changed or is in use; it was not removed."
+
+    - name: Remove only the temporary NROP CatalogSource
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        name: "{{ nrop_stage_temp_catalog }}"
+        state: absent
+        wait: true
+        wait_timeout: 300
+        delete_options:
+          preconditions:
+            uid: "{{ nrop_stage_temp_current.resources[0].metadata.uid }}"
+            resourceVersion: "{{ nrop_stage_temp_current.resources[0].metadata.resourceVersion }}"
+      when: nrop_stage_temp_current.resources | length == 1
+      register: nrop_stage_temp_delete
+      ignore_errors: true
+
+    - name: Fail on temporary catalog deletion errors other than conflicts
+      ansible.builtin.fail:
+        msg: "Failed to delete temporary CatalogSource {{ nrop_stage_temp_catalog }}: {{ nrop_stage_temp_delete.msg | default('unknown error') }}"
+      when:
+        - nrop_stage_temp_delete is failed
+        - nrop_stage_temp_delete.reason | default('') != 'Conflict'
+
+    - name: Record completed temporary catalog cleanup
+      ansible.builtin.set_fact:
+        nrop_stage_temp_cleanup_complete: true
+      when: nrop_stage_temp_current.resources | length == 0 or nrop_stage_temp_delete is succeeded

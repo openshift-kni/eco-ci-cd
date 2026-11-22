@@ -198,52 +198,20 @@
         - name: Remove the temporary NROP CatalogSource
           when: nrop_stage_temp_created.result.metadata.uid is defined
           block:
-            - name: Read the temporary NROP CatalogSource
-              kubernetes.core.k8s_info:
-                kubeconfig: "{{ kubeconfig }}"
-                api_version: operators.coreos.com/v1alpha1
-                kind: CatalogSource
-                namespace: openshift-marketplace
-                name: "{{ nrop_stage_temp_catalog }}"
-              register: nrop_stage_temp_current
+            - name: Initialize temporary catalog cleanup
+              ansible.builtin.set_fact:
+                nrop_stage_temp_cleanup_complete: false
 
-            - name: Read subscriptions before temporary catalog cleanup
-              kubernetes.core.k8s_info:
-                kubeconfig: "{{ kubeconfig }}"
-                api_version: operators.coreos.com/v1alpha1
-                kind: Subscription
-              register: nrop_stage_temp_subscriptions
+            - name: Retry temporary catalog cleanup on conflict
+              ansible.builtin.include_tasks: cleanup_stage_catalog_attempt.yml
+              loop: "{{ range(1, 6) | list }}"
+              loop_control:
+                loop_var: nrop_stage_temp_cleanup_attempt
 
-            - name: Require the temporary catalog to remain unused and owned
+            - name: Require temporary catalog cleanup to complete
               ansible.builtin.assert:
-                that:
-                  - nrop_stage_temp_current.resources | length <= 1
-                  - >-
-                    nrop_stage_temp_current.resources | length == 0 or
-                    (nrop_stage_temp_current.resources[0].metadata.uid == nrop_stage_temp_created.result.metadata.uid and
-                     nrop_stage_temp_current.resources[0].metadata.labels['nrop-ci.openshift.io/temporary-catalog'] | default('') == 'true')
-                  - >-
-                    nrop_stage_temp_subscriptions.resources | selectattr('spec.source', 'defined')
-                    | selectattr('spec.source', 'equalto', nrop_stage_temp_catalog)
-                    | selectattr('spec.sourceNamespace', 'defined')
-                    | selectattr('spec.sourceNamespace', 'equalto', 'openshift-marketplace') | list | length == 0
-                fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} changed or is in use; it was not removed."
-
-            - name: Remove only the temporary NROP CatalogSource
-              kubernetes.core.k8s:
-                kubeconfig: "{{ kubeconfig }}"
-                api_version: operators.coreos.com/v1alpha1
-                kind: CatalogSource
-                namespace: openshift-marketplace
-                name: "{{ nrop_stage_temp_catalog }}"
-                state: absent
-                wait: true
-                wait_timeout: 300
-                delete_options:
-                  preconditions:
-                    uid: "{{ nrop_stage_temp_current.resources[0].metadata.uid }}"
-                    resourceVersion: "{{ nrop_stage_temp_current.resources[0].metadata.resourceVersion }}"
-              when: nrop_stage_temp_current.resources | length == 1
+                that: nrop_stage_temp_cleanup_complete | bool
+                fail_msg: "Temporary CatalogSource {{ nrop_stage_temp_catalog }} could not be removed after five conflicts."
       always:
         - name: Remove temporary NROP catalog authentication
           ansible.builtin.file:

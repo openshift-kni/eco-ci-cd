@@ -1,0 +1,146 @@
+---
+- name: Deploy NROP Operator Stage
+  hosts: bastion
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+  vars:
+    catalog_source_name: numaresources-operator-catalog
+    catalog_display_name: numaresources operator catalog
+    nrop_operator_namespace: openshift-numaresources
+  tasks:
+    - name: Get Cluster Version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: cluster_version
+
+    - name: Print Cluster Version
+      ansible.builtin.debug:
+        msg: >-
+          Cluster Version:
+          {{ cluster_version.resources[0].status.desired.version }}
+
+    - name: Split Cluster Version into Major and Minor
+      ansible.builtin.set_fact:
+        cluster_version_major: >-
+          {{
+            cluster_version.resources[0].status.desired.version.split('.')[0]
+          }}
+        cluster_version_minor: >-
+          {{
+            cluster_version.resources[0].status.desired.version.split('.')[1]
+          }}
+
+    - name: Set OCP version
+      ansible.builtin.set_fact:
+        stage_op_ocp_version: >-
+          {{ cluster_version_major }}.{{ cluster_version_minor }}
+
+    - name: Deploy IDMS Operator Stage
+      when: stage_op_ocp_version is version('4.14', '>=')
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: ImageDigestMirrorSet
+          metadata:
+            name: fbc-images-resolvable-integration-test-idms
+          spec:
+            imageDigestMirrors:
+              - mirrors:
+                  - registry.stage.redhat.io/openshift4/numaresources-rhel9-operator
+                source:
+                  registry.redhat.io/openshift4/numaresources-rhel9-operator
+              - mirrors:
+                  - registry.stage.redhat.io/openshift5/numaresources-rhel9-operator
+                source:
+                  registry.redhat.io/openshift5/numaresources-rhel9-operator
+              - mirrors:
+                  - registry.stage.redhat.io/openshift4/numaresources-operator-bundle
+                source:
+                  registry.redhat.io/openshift4/numaresources-operator-bundle
+              - mirrors:
+                  - registry.stage.redhat.io/openshift5/numaresources-operator-bundle
+                source:
+                  registry.redhat.io/openshift5/numaresources-operator-bundle
+
+    # Use ICSP below OCP 4.14, matching the operator deployment role.
+    - name: Deploy ICSP Operator Stage
+      when: stage_op_ocp_version is version('4.14', '<')
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operator.openshift.io/v1alpha1
+          kind: ImageContentSourcePolicy
+          metadata:
+            name: fbc-images-resolvable-integration-test-icsp
+          spec:
+            repositoryDigestMirrors:
+              - mirrors:
+                  - registry.stage.redhat.io/openshift4/numaresources-rhel9-operator
+                source:
+                  registry.redhat.io/openshift4/numaresources-rhel9-operator
+              - mirrors:
+                  - registry.stage.redhat.io/openshift5/numaresources-rhel9-operator
+                source:
+                  registry.redhat.io/openshift5/numaresources-rhel9-operator
+              - mirrors:
+                  - registry.stage.redhat.io/openshift4/numaresources-operator-bundle
+                source:
+                  registry.redhat.io/openshift4/numaresources-operator-bundle
+              - mirrors:
+                  - registry.stage.redhat.io/openshift5/numaresources-operator-bundle
+                source:
+                  registry.redhat.io/openshift5/numaresources-operator-bundle
+
+    - name: Set index image for NROP Operator
+      ansible.builtin.set_fact:
+        nrop_operator_index_image: "quay.io/redhat-user-workloads/\
+          telco-5g-tenant/numaresources-operator-fbc-\
+          {{ cluster_version_major }}-{{ cluster_version_minor }}:latest"
+
+    - name: Deploy CatalogSource for NROP Operator
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: CatalogSource
+          metadata:
+            name: "{{ catalog_source_name }}"
+            namespace: openshift-marketplace
+          spec:
+            sourceType: grpc
+            publisher: grpc
+            displayName: "{{ catalog_display_name }}"
+            image: "{{ nrop_operator_index_image }}"
+
+    - name: Wait for CatalogSource to be ready
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        name: "{{ catalog_source_name }}"
+        namespace: openshift-marketplace
+      register: catalog_source
+      until: >-
+        catalog_source.resources | length > 0 and
+        catalog_source.resources[0].status.connectionState.lastObservedState
+        | default('') == 'READY'
+      retries: 30
+      delay: 10
+
+    - name: Install Operators
+      ansible.builtin.include_role:
+        name: ocp_operator_deployment
+      vars:
+        ocp_operator_deployment_version: >-
+          {{ cluster_version_major }}.{{ cluster_version_minor }}
+        ocp_operator_deployment_operators:
+          - name: "numaresources-operator"
+            nsname: "{{ nrop_operator_namespace }}"
+            catalog: "{{ catalog_source_name }}"
+            channel: "{{ cluster_version_major }}.{{ cluster_version_minor }}"

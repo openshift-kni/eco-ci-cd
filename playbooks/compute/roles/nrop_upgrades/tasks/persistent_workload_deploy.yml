@@ -1,0 +1,101 @@
+---
+- name: Reset persistent workload reboot data
+  ansible.builtin.set_fact:
+    nrop_persistent_baseline_boots: {}
+    nrop_persistent_reboot_summary: {}
+
+- name: Create a unique namespace for the persistent workload
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        generateName: nrop-persistent-
+        labels:
+          nrop-ci.openshift.io/persistent-managed: 'true'
+  register: nrop_persistent_namespace
+
+- name: Require the created persistent workload namespace identity
+  ansible.builtin.assert:
+    that:
+      - nrop_persistent_namespace.result.metadata.name | default('') | length > 0
+      - nrop_persistent_namespace.result.metadata.uid | default('') | length > 0
+    fail_msg: The persistent workload namespace has no name or UID.
+
+- name: Create the persistent Guaranteed workload
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nrop-smoke-persistent
+        namespace: "{{ nrop_persistent_namespace.result.metadata.name }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: nrop-smoke-persistent}
+        template:
+          metadata:
+            labels: {app: nrop-smoke-persistent}
+          spec:
+            schedulerName: topo-aware-scheduler
+            terminationGracePeriodSeconds: 0
+            containers:
+              - name: pause
+                image: quay.io/openshift-kni/pause:test-ci
+                command: [/pause]
+                resources:
+                  requests: {cpu: '2', memory: 256Mi}
+                  limits: {cpu: '2', memory: 256Mi}
+
+- name: Wait for the persistent workload pod before the upgrade
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ nrop_persistent_namespace.result.metadata.name }}"
+    label_selectors: [app=nrop-smoke-persistent]
+  register: nrop_persistent_initial_pods
+  until: >-
+    nrop_persistent_initial_pods.resources | length > 0 and
+    (nrop_persistent_initial_pods.resources | selectattr('status.phase', 'defined')
+     | selectattr('status.phase', 'equalto', 'Running') | list | length > 0)
+  retries: 24
+  delay: 5
+
+- name: Record the persistent workload pod before the upgrade
+  ansible.builtin.set_fact:
+    nrop_persistent_initial_pod: >-
+      {{ nrop_persistent_initial_pods.resources | selectattr('status.phase', 'defined')
+         | selectattr('status.phase', 'equalto', 'Running') | first }}
+
+- name: Collect the baseline worker boot history
+  ansible.builtin.include_tasks: persistent_workload_boots.yml
+
+- name: Build the baseline worker boot counts
+  ansible.builtin.set_fact:
+    nrop_persistent_baseline_boots: >-
+      {{ (nrop_persistent_baseline_boots | default({}))
+         | combine({item.item: ((item.stdout_lines | default([]) | length) if item.rc | default(1) == 0 else none)}) }}
+  loop: "{{ nrop_persistent_boot_history.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Save the persistent workload baseline
+  ansible.builtin.copy:
+    dest: "{{ artifacts_folder }}/smoke-persistent-pod-baseline.json"
+    mode: '0644'
+    content: "{{ nrop_persistent_baseline | to_nice_json }}"
+  become: true
+  vars:
+    nrop_persistent_baseline:
+      pod:
+        uid: "{{ nrop_persistent_initial_pod.metadata.uid }}"
+        name: "{{ nrop_persistent_initial_pod.metadata.name }}"
+        node: "{{ nrop_persistent_initial_pod.spec.nodeName }}"
+        scheduler: "{{ nrop_persistent_initial_pod.spec.schedulerName }}"
+        phase: "{{ nrop_persistent_initial_pod.status.phase }}"
+        created: "{{ nrop_persistent_initial_pod.metadata.creationTimestamp }}"
+      boot_counts: "{{ nrop_persistent_baseline_boots | default({}) }}"
+      timestamp: "{{ now(utc=true).isoformat() }}"

@@ -1,0 +1,102 @@
+---
+- name: Reset temporary mirror state for this hop
+  ansible.builtin.set_fact:
+    ocp_sigstore_mirror_removal_attempted: false
+    ocp_sigstore_original_mirror: {}
+
+- name: Require a readable source version for the 4.21 hop
+  ansible.builtin.assert:
+    that:
+      - ocp_upgrade_cv.resources | default([]) | length == 1
+      - ocp_upgrade_cv.resources[0].status.desired.version | default('') | length > 0
+    fail_msg: Cannot determine the source version for the 4.21 Sigstore acknowledgement.
+
+- name: Prepare Sigstore for an OCP 4.20 to 4.21 hop
+  when: ocp_upgrade_cv.resources[0].status.desired.version is match('^4[.]20[.]')
+  block:
+    - name: Read the admin acknowledgements
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: ConfigMap
+        namespace: openshift-config
+        name: admin-acks
+      register: ocp_sigstore_admin_acks
+
+    - name: Require the admin acknowledgements ConfigMap
+      ansible.builtin.assert:
+        that:
+          - ocp_sigstore_admin_acks.resources | length == 1
+        fail_msg: The openshift-config/admin-acks ConfigMap is unavailable.
+
+    - name: Acknowledge the 4.21 Sigstore requirement
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            namespace: openshift-config
+            name: admin-acks
+          data:
+            ack-4.20-sigstore-in-4.21: 'true'
+      when: ocp_sigstore_admin_acks.resources[0].data['ack-4.20-sigstore-in-4.21'] | default('') != 'true'
+
+    - name: Read the cnf-pipeline2 NROP mirror
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: ImageDigestMirrorSet
+        name: fbc-images-resolvable-integration-test-idms
+      register: ocp_sigstore_legacy_mirror
+
+    - name: Prepare to temporarily remove the cnf-pipeline2 NROP mirror
+      when: ocp_sigstore_legacy_mirror.resources | length == 1
+      block:
+        - name: Require the expected NROP-only mirror sources
+          ansible.builtin.assert:
+            that:
+              - ocp_sigstore_legacy_mirror.resources[0].metadata.uid | default('') | length > 0
+              - ocp_sigstore_legacy_mirror.resources[0].metadata.resourceVersion | default('') | length > 0
+              - ocp_sigstore_legacy_mirror.resources[0].spec.imageDigestMirrors | default([]) | length > 0
+              - >-
+                ocp_sigstore_legacy_mirror.resources[0].spec.imageDigestMirrors | map(attribute='source') | list
+                | difference(['registry.redhat.io/openshift4/numaresources-rhel9-operator',
+                              'registry.redhat.io/openshift4/numaresources-operator-bundle']) | length == 0
+            fail_msg: The cnf-pipeline2 mirror has unexpected sources and will not be removed.
+
+        - name: Save the original NROP mirror for restoration
+          ansible.builtin.set_fact:
+            ocp_sigstore_original_mirror: "{{ ocp_sigstore_legacy_mirror.resources[0] }}"
+            ocp_sigstore_mirror_removal_attempted: true
+
+        - name: Temporarily remove the cnf-pipeline2 NROP mirror
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            api_version: config.openshift.io/v1
+            kind: ImageDigestMirrorSet
+            name: fbc-images-resolvable-integration-test-idms
+            state: absent
+            wait: true
+            wait_timeout: 120
+            delete_options:
+              preconditions:
+                uid: "{{ ocp_sigstore_original_mirror.metadata.uid }}"
+                resourceVersion: "{{ ocp_sigstore_original_mirror.metadata.resourceVersion }}"
+
+    - name: Wait for the 4.21 upgradeability gate to clear
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: ocp_sigstore_cv
+      until: >-
+        ocp_sigstore_cv.resources | length == 1 and
+        (ocp_sigstore_cv.resources[0].status.conditions | default([])
+         | selectattr('type', 'equalto', 'Upgradeable')
+         | rejectattr('status', 'equalto', 'True') | list | length == 0)
+      retries: 30
+      delay: 10

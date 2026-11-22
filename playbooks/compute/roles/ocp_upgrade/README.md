@@ -24,6 +24,10 @@ Do not set `ocp_hop_image` together with `ocp_hop_use_latest_stable`. Automatic 
 
 For an EUS/canary installation, `python3 scripts/resolve-cincinnati-edge.py eus-install --from 4.20 --to 4.22` selects a graph-compatible source image. The script is under this role's `scripts/` directory.
 
+### OCP 4.20 to 4.21 Sigstore acknowledgement
+
+For a 4.20 to 4.21 hop, the role sets `ack-4.20-sigstore-in-4.21` and waits for the Upgradeable condition to clear, following cnf-pipeline2. If its `fbc-images-resolvable-integration-test-idms` NROP mirror exists, the role saves and temporarily removes it, then restores its original definition after the hop or a handled failure. Other mirrors are not removed. The acknowledgement does not verify release signatures; ensure any OCP release-image mirrors contain the required signatures. `ocp_upgrade_force` can still bypass release-verification safeguards.
+
 ## Optional settings
 
 - `ocp_hop_then`: In graph mode, select an upgrade that also has a graph edge to this next major.minor, for example `"4.22"`. This does not perform the next upgrade.

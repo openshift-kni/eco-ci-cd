@@ -6,11 +6,18 @@ This repository contains automated test reports from Telco KPIs verification job
 {# ------------------------------------------------------------------ #}
 {# Build sorted unique minor versions (numeric, newest first)          #}
 {# ------------------------------------------------------------------ #}
-{% set unique_minors_raw = report_metadata_list | map(attribute='ocp_minor') | unique | list %}
+{% set unique_minors_raw = report_metadata_list | map(attribute='ocp_minor', default='N/A') | unique | list %}
 {% set ns_minors = namespace(keyed=[], links=[]) %}
 {% for m in unique_minors_raw %}
-{%   set _parts = m.split('.') %}
-{%   set _vkey = _parts[0] | int * 1000 + _parts[1] | int %}
+{# Guard against non-numeric versions ("N/A", "", "Unreachable"): indexing a
+   split list past its end raised AnsibleUndefinedVariable and aborted the
+   whole README publication, blocking every spoke's report. #}
+{%   if m is match('^[0-9]+\.[0-9]+') %}
+{%     set _parts = m.split('.') %}
+{%     set _vkey = (_parts[0] | int) * 1000 + (_parts[1] | int) %}
+{%   else %}
+{%     set _vkey = -1 %}
+{%   endif %}
 {%   set _ = ns_minors.keyed.append({'ver': m, 'key': _vkey}) %}
 {% endfor %}
 {% for item in ns_minors.keyed | sort(attribute='key', reverse=True) %}

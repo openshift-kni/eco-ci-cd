@@ -18,6 +18,9 @@
       ansible.builtin.set_fact:
         node_info: "{{ node_info_content.content | b64decode | from_json }}"
 
+    # Prefer the version captured by collect-node-info (top-level ocp_version,
+    # e.g. "5.0.2"). Fall back to the legacy cluster_version key, then to N/A.
+    # Log enrichment (enrich_cluster_info_from_logs.yml) may override this.
     - name: Extract cluster information
       ansible.builtin.set_fact:
         report_data: >-
@@ -25,7 +28,11 @@
             report_data | combine({
               'cluster_info': {
                 'cluster': spoke_cluster,
-                'sw_version': 'N/A',
+                'sw_version': (
+                  node_info.ocp_version
+                  if (node_info.ocp_version | default('N/A')) is match('^[0-9]+\.[0-9]+')
+                  else (node_info.cluster_version | default('N/A'))
+                ),
                 'kernel_version': node_info.kernel_version | default('N/A'),
                 'power_mode': 'N/A',
                 'bios_version': node_info.bios_version | default('N/A'),

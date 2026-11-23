@@ -356,8 +356,8 @@
 {{ duration_breakdown_table(result.duration_breakdown) }}
 
 
-**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
-**Suite time**: {{ result.suite_time }}
+**Passed**: {{ result.passed | default('N/A') }} | **Failed**: {{ result.failed | default('N/A') }} | **Skipped**: {{ result.skipped | default('N/A') }}
+**Suite time**: {{ result.suite_time | default('N/A') }}
 
 {% if result.scenarios is defined and result.scenarios | length > 0 %}
 
@@ -422,7 +422,7 @@ All infra pod components below 0.005 CPU threshold.
 {% endif %}
 {% endif %}
 
-{{ non_passing_tests_detail(result.test_cases, 'cpu_util') }}
+{{ non_passing_tests_detail(result.test_cases | default([]), 'cpu_util') }}
 
 {% elif result.test_type == 'reboot' and result.reboot_count is defined %}
 
@@ -436,8 +436,8 @@ All infra pod components below 0.005 CPU threshold.
 {{ duration_breakdown_table(result.duration_breakdown) }}
 
 
-**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }} | **Skipped**: {{ result.skipped }}
-**Reboot count**: {{ result.reboot_count }}
+**Passed**: {{ result.passed | default('N/A') }} | **Failed**: {{ result.failed | default('N/A') }} | **Skipped**: {{ result.skipped | default('N/A') }}
+**Reboot count**: {{ result.reboot_count | default('N/A') }}
 
 {% if result.soft_reboot_iterations is defined and result.soft_reboot_iterations | length > 0 %}
 
@@ -524,7 +524,7 @@ All infra pod components below 0.005 CPU threshold.
 
 {% endif %}
 
-{{ non_passing_tests_detail(result.test_cases, 'reboot') }}
+{{ non_passing_tests_detail(result.test_cases | default([]), 'reboot') }}
 
 ### Log excerpt
 
@@ -664,7 +664,7 @@ including all deployment phases from GitOps sync to workload readiness.
 ## {{ '✅ **PASS**' if result.status == 'PASS' else '❌ **FAIL**' }} - BIOS Validation Result
 {{ test_criteria_note("All BIOS settings match expected profile values") }}
 
-**Passed**: {{ result.passed }} | **Failed**: {{ result.failed }}
+**Passed**: {{ result.passed | default('N/A') }} | **Failed**: {{ result.failed | default('N/A') }}
 {% if result.bios_profile_url is defined and result.bios_profile_url %}
 **Profile**: [{{ result.bios_profile_url | basename }}]({{ result.bios_profile_url }})
 {% endif %}

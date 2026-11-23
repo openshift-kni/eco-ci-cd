@@ -233,7 +233,11 @@
               'status': 'N/A',
               'key_metric': 'No results',
               'duration': 'N/A',
+              'passed': 'N/A',
+              'failed': 'N/A',
+              'skipped': 'N/A',
               'reboot_count': 'N/A',
+              'test_cases': [],
               'raw_log_excerpt': 'No JUnit XML results found'
             }
           })

@@ -10,7 +10,7 @@
   "operators": [
 {% set valid_operators = [] %}
 {% for op_name, op_data in lockdown_metadata_operators.items() %}
-{% if op_data.bundle %}
+{% if op_data.bundle | default('') or (op_data.bundle is not defined and op_data.fbc | default('')) %}
 {% set _ = valid_operators.append(op_data) %}
 {% endif %}
 {% endfor %}
@@ -21,7 +21,9 @@
       "nsname": "{{ op_data.nsname }}",
       "channel": "{{ op_data.channel }}"{% if op_data.default_channel is defined and op_data.default_channel %},
       "default_channel": "{{ op_data.default_channel }}"{% endif %},
+{% if op_data.bundle is defined and op_data.bundle %}
       "bundle": "{{ op_data.bundle }}",
+{% endif %}
       "fbc": "{{ op_data.fbc }}"
     }{% if not loop.last %},{% endif %}
 

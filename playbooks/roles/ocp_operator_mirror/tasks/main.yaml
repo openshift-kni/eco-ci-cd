@@ -20,11 +20,9 @@
   ansible.builtin.assert:
     that:
       - (ocp_operator_mirror_fbc_image_base | default('')) | length > 0
-      - (ocp_operator_mirror_art_images_share | default('')) | length > 0
     fail_msg: >-
       Missing required variables:
-      ocp_operator_mirror_fbc_image_base,
-      ocp_operator_mirror_art_images_share
+      ocp_operator_mirror_fbc_image_base
 
 - name: Disable default OperatorHub sources
   when: ocp_operator_mirror_disable_default_sources | bool

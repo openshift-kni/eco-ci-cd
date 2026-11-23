@@ -1,40 +1,160 @@
-- name: Resolve catalog paths for FBC operators and build image pairs
-  ansible.builtin.include_tasks: mirror_from_fbc.yaml
-  loop: "{{ ocp_operator_mirror_operators_fbc }}"
-  loop_control:
-    loop_var: operator
+---
+- name: Mirror FBC catalogs with temporary stage registry routing
+  block:
+    - name: Ensure registry configuration directory exists
+      become: true
+      ansible.builtin.file:
+        path: /etc/containers/registries.conf.d
+        state: directory
+        mode: '0755'
 
-- name: Mirror images with skopeo
-  ansible.builtin.command: >-
-    skopeo copy --authfile "{{ ocp_operator_mirror_pull_secret_path }}" --all --src-tls-verify=false --dest-tls-verify=false
-    docker://{{ image.src }} docker://{{ image.dst }}
-  loop: "{{ image_pairs | unique }}"
-  loop_control:
-    loop_var: image
-    label: "{{ image.src }} -> {{ image.dst }}"
-  register: mirror_cmd
-  retries: 3
-  delay: 3
-  until: mirror_cmd.rc == 0
-  changed_when: true
+    - name: Route production image references to the stage registry
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/containers/registries.conf.d/{{ ocp_operator_mirror_registries_conf_file }}
+        mode: '0644'
+        content: |
+          # Temporary routing for ART/FBC mirroring only.
+          [[registry]]
+          prefix = ""
+          location = "registry.redhat.io"
+          [[registry.mirror]]
+          location = "registry.stage.redhat.io"
 
-- name: Mirror sigstore .sig artifacts for bundle images (OCP 4.21+ workaround)
-  when: (ocp_operator_mirror_version.split('.')[0] | int >= 5) or (ocp_operator_mirror_version.split('.')[1] | int >= 21)
-  vars:
-    _digest: "{{ image.src | regex_search('@(sha256:[0-9a-f]{64})', '\\1') | first | replace(':', '-') }}"
-    _src_repo: "{{ image.src | regex_replace('@.*', '') }}"
-    _dst_repo: "{{ image.dst | regex_replace('@.*', '') }}"
-  ansible.builtin.command: >-
-    {{ ansible_user_dir }}/.local/bin/oc image mirror
-    --insecure=true
-    -a {{ ocp_operator_mirror_pull_secret_path }}
-    "{{ _src_repo }}:{{ _digest }}.sig"
-    "{{ _dst_repo }}:{{ _digest }}.sig"
-  loop: "{{ image_pairs | unique | selectattr('src', 'search', '@sha256:') | list }}"
-  loop_control:
-    loop_var: image
-    label: "{{ image.src }} -> {{ image.dst }}"
-  register: _bundle_sig_mirror_result
-  changed_when: _bundle_sig_mirror_result.rc == 0
-  failed_when: false
-  ignore_errors: true
+    - name: Initialize FBC configuration
+      ansible.builtin.set_fact:
+        fbc_catalogs: []
+        fbc_catalog_targets: []
+        fbc_workspace: "{{ ocp_operator_mirror_workspace_path }}/fbc"
+
+    - name: Collect FBC catalogs
+      ansible.builtin.include_tasks: mirror_from_fbc.yaml
+      loop: "{{ ocp_operator_mirror_operators_fbc }}"
+      loop_control:
+        loop_var: operator
+        label: "{{ operator.catalog }}"
+
+    - name: Remove previous FBC workspace
+      ansible.builtin.file:
+        path: "{{ fbc_workspace }}"
+        state: absent
+
+    - name: Create FBC workspace
+      ansible.builtin.file:
+        path: "{{ fbc_workspace }}"
+        state: directory
+        mode: '0755'
+
+    - name: Write FBC ImageSetConfiguration
+      ansible.builtin.copy:
+        dest: "{{ fbc_workspace }}/ImageSetConfiguration.yaml"
+        content: "{{ {'apiVersion': 'mirror.openshift.io/v2alpha1', 'kind': 'ImageSetConfiguration', 'mirror': {'operators': fbc_catalogs}} | to_nice_yaml }}"
+        mode: '0644'
+
+    - name: Get oc-mirror version
+      ansible.builtin.command: oc-mirror version
+      register: oc_mirror_version_output
+      changed_when: false
+
+    - name: Parse oc-mirror version
+      ansible.builtin.set_fact:
+        oc_mirror_version: "{{ oc_mirror_version_output.stdout | regex_search('([0-9]+\\.[0-9]+)', '\\1') | first }}"
+
+    # The flag was introduced in 4.20 and ensures sigstore attachments are
+    # mirrored if present.
+    - name: Set signature flag based on oc-mirror version
+      ansible.builtin.set_fact:
+        oc_mirror_signature_flag: "{{ '--remove-signatures=false' if (oc_mirror_version is version('4.20', '>=')) else '' }}"
+
+    - name: Mirror FBC catalog and signatures with oc-mirror v2 # noqa: command-instead-of-shell
+      ansible.builtin.shell: >-
+        env -u REGISTRY_AUTH_FILE oc-mirror
+        --v2 {{ oc_mirror_signature_flag }}
+        --authfile {{ ocp_operator_mirror_pull_secret_path | quote }}
+        --config {{ (fbc_workspace ~ '/ImageSetConfiguration.yaml') | quote }}
+        --workspace {{ ('file://' ~ fbc_workspace) | quote }}
+        {{ ' --dry-run ' if ocp_operator_mirror_oc_mirror_dry_run | default(false) | bool else '' }}
+        {{ ('docker://' ~ ocp_operator_mirror_registry_url) | quote }}
+      args:
+        chdir: "{{ fbc_workspace }}"
+      register: fbc_mirror_result
+      retries: 3
+      delay: 30
+      until: fbc_mirror_result.rc == 0
+      changed_when: true
+
+    - name: Copy FBC catalogs to requested destinations
+      when:
+        - not (ocp_operator_mirror_oc_mirror_dry_run | default(false) | bool)
+        - item.image != item.target_image
+      ansible.builtin.command: >-
+        env -u REGISTRY_AUTH_FILE skopeo copy --all --retry-times 3
+        --authfile {{ ocp_operator_mirror_pull_secret_path | quote }}
+        {{ ('docker://' ~ item.image) | quote }}
+        {{ ('docker://' ~ item.target_image) | quote }}
+      loop: "{{ fbc_catalog_targets | unique(attribute='image') | list }}"
+      loop_control:
+        label: "{{ item.target_image }}"
+      changed_when: true
+
+    - name: Find generated FBC cluster resources
+      ansible.builtin.find:
+        paths: "{{ fbc_workspace }}/{{ ocp_operator_mirror_working_dir_path }}"
+        patterns:
+          - 'cs*.yaml'
+          - 'idms*.yaml'
+          - 'itms*.yaml'
+        file_type: file
+      register: fbc_mirror_manifests
+
+    - name: Verify oc-mirror generated cluster resources
+      ansible.builtin.assert:
+        that:
+          - fbc_mirror_manifests.matched > 0
+          - fbc_mirror_manifests.files | selectattr('path', 'search', '/cs[^/]*\.yaml$') | list | length == fbc_catalogs | length
+        fail_msg: "Expected a CatalogSource for each FBC catalog and mirror manifests in {{ fbc_workspace }}"
+
+    - name: Read generated FBC cluster resources
+      ansible.builtin.slurp:
+        src: "{{ manifest.path }}"
+      loop: "{{ fbc_mirror_manifests.files }}"
+      loop_control:
+        loop_var: manifest
+      register: fbc_cluster_resources
+
+    # oc-mirror reuses names such as idms-operator-0 across separate runs. Keep
+    # the target-derived CatalogSource name, but make mirror-set names
+    # content-addressed so separate FBC runs can coexist.
+    - name: Apply generated FBC cluster resources
+      when: not (ocp_operator_mirror_skip_manifest_apply | bool)
+      vars:
+        resource: "{{ manifest.content | b64decode | from_yaml }}"
+        mirror_set_kinds:
+          - ImageDigestMirrorSet
+          - ImageTagMirrorSet
+        mirror_set_hash: >-
+          {{ (resource.spec | default({}) | to_nice_json(sort_keys=True)
+              | hash('sha256'))[:7] }}
+        resource_name: >-
+          {{ (fbc_catalog_targets | selectattr('image', 'equalto', resource.spec.image) | map(attribute='name') | first)
+             if resource.kind == 'CatalogSource'
+             else (resource.metadata.name ~ '-fbc-' ~ mirror_set_hash
+                   if resource.kind in mirror_set_kinds
+                   else resource.metadata.name) }}
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+        state: present
+        definition: "{{ resource | combine({'metadata': {'name': resource_name}}, recursive=True) }}"
+      loop: "{{ fbc_cluster_resources.results }}"
+      loop_control:
+        loop_var: manifest
+        label: "{{ resource_name }}"
+      notify:
+        - Cleanup ocp_operator_mirror artifacts
+
+  always:
+    - name: Remove temporary stage registry routing
+      become: true
+      ansible.builtin.file:
+        path: /etc/containers/registries.conf.d/{{ ocp_operator_mirror_registries_conf_file }}
+        state: absent

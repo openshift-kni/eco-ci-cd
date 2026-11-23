@@ -22,6 +22,28 @@
       - "Report action: {{ report_action | default('update') | upper }}"
       - "{{ 'Creating NEW report (environment changed)' if report_action == 'new' else 'Updating EXISTING report (environment stable)' }}"
 
+# Failed/aborted builds skip the final cleanup and can leave multi-GB clones
+# in /tmp. Prune anything older than 6h (concurrent builds are minutes old).
+- name: Find stale report work directories
+  ansible.builtin.find:
+    paths: /tmp
+    patterns:
+      - "gitea-publish-*"
+      - "report-repo-verify-*"
+      - "report-freshness-check-*"
+    file_type: directory
+    age: 6h
+  register: _stale_work_dirs
+  changed_when: false
+
+- name: Remove stale report work directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _stale_work_dirs.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 - name: Remove pre-existing temporary work directory if exists
   ansible.builtin.file:
     path: "{{ git_work_dir }}"
@@ -40,21 +62,56 @@
       - "Cloninig branch: {{ report_repo_branch }}"
       - "=========================================="
 
-- name: Clone repository
-  ansible.builtin.git:
-    repo: "{{ gitea_repo_http_url }}"
-    dest: "{{ git_work_dir }}"
-    version: "{{ report_repo_branch }}"
-    force: true
-    depth: 1
-    single_branch: true
+# The branch tip is several GB of report logs (hundreds of MB even packed), so
+# a regular clone downloads every blob. Publishing only reads the report index
+# sidecars and the README; everything else is written locally or removed/added
+# via the index. A partial + sparse clone keeps the transfer to a few hundred KB.
+- name: Clone repository (partial and sparse)
+  ansible.builtin.command:
+    argv:
+      - git
+      - clone
+      - --depth=1
+      - --single-branch
+      - --branch={{ report_repo_branch }}
+      - --filter=blob:none
+      - --sparse
+      - "{{ gitea_repo_http_url }}"
+      - "{{ git_work_dir }}"
   environment:
     GIT_TERMINAL_PROMPT: "0"
   no_log: "{{ ansible_verbosity < 3 }}"
+  changed_when: true
+
+- name: Check out only report indexes and README (sparse)
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ git_work_dir }}"
+      - sparse-checkout
+      - set
+      - --no-cone
+      - /README.md
+      - /reports/README.md
+      - /reports/*/*/report-index.json
+  changed_when: true
 
 - name: Handle report update (remove existing report for today)
   when: report_action | default('update') == 'update'
   block:
+    # Sparse checkout keeps today's artifacts off-disk, so drop the old report
+    # directory from the index directly (this run replaces it).
+    - name: Remove today's report from the git index
+      ansible.builtin.shell: |
+        set -o pipefail
+        git ls-files -z -- '{{ _reports_dir | relpath(git_work_dir) }}/{{ report_dir_name }}/{{ spoke_cluster }}' \
+          | git update-index --force-remove -z --stdin
+      args:
+        chdir: "{{ git_work_dir }}"
+        executable: /bin/bash
+      changed_when: true
+
     - name: Check if today's report directory exists
       ansible.builtin.stat:
         path: "{{ _reports_dir }}/{{ report_dir_name }}/{{ spoke_cluster }}"
@@ -263,7 +320,7 @@
   changed_when: false
 
 - name: Add report files to git  # noqa: command-instead-of-module
-  ansible.builtin.command: git add -A -- {{ _reports_dir | relpath(git_work_dir) }}
+  ansible.builtin.command: git add -A --sparse -- {{ _reports_dir | relpath(git_work_dir) }}
   args:
     chdir: "{{ git_work_dir }}"
   changed_when: false

@@ -69,21 +69,25 @@
     gitea_repo_web_url: "{{ report_repo_url | regex_replace('\\.git$', '') }}"
     gitea_admin_email: "{{ report_repo_user | default('telco-kpis-automation', true) }}@telco-kpis-ci.redhat.com"
 
+# Reachability + auth check only needs the ref advertisement. Cloning here
+# downloaded the whole report tree (hundreds of MB) and could take tens of
+# minutes on links with poor bulk throughput, looking like a hang.
 - name: Verify production repository is accessible
-  ansible.builtin.git:
-    repo: "{{ gitea_repo_http_url }}"
-    dest: "/tmp/report-repo-verify-{{ ansible_date_time.epoch }}"
-    version: "{{ report_repo_branch }}"
-    depth: 1
+  ansible.builtin.command:
+    argv:
+      - timeout
+      - "60"
+      - git
+      - ls-remote
+      - --heads
+      - "{{ gitea_repo_http_url }}"
+      - "{{ report_repo_branch }}"
   register: _repo_verify
+  changed_when: false
+  failed_when: _repo_verify.rc != 0 or _repo_verify.stdout | trim | length == 0
   environment:
     GIT_TERMINAL_PROMPT: "0"
   no_log: "{{ ansible_verbosity < 3 }}"
-
-- name: Cleanup verification clone
-  ansible.builtin.file:
-    path: "/tmp/report-repo-verify-{{ ansible_date_time.epoch }}"
-    state: absent
 
 - name: Display production repository verification
   ansible.builtin.debug:

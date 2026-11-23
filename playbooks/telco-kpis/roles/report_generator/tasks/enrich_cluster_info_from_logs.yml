@@ -2,10 +2,14 @@
 # Enrich cluster info with OCP version and power mode from test logs (ranmetrics)
 # These are exported in tests like OSLAT, CYCLICTEST, PTP
 
-- name: Find first test log with ranmetrics
+# Only consider logs that actually exported the ranmetrics line. Test runs that
+# time out (e.g. oslat/cyclictest) end before emitting it, so blindly taking
+# find's first result could yield an incomplete log and an "N/A" version.
+- name: Find test logs containing ranmetrics
   ansible.builtin.find:
     paths: "{{ shared_artifact_dir }}"
     patterns: "podman-run.log"
+    contains: 'RAN_METRICS_SW_VERSION="'
     recurse: true
   register: podman_logs
 

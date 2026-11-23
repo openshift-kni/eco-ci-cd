@@ -170,6 +170,7 @@
         report_repo_token: "{{ git_repo_token }}"
         kpi_targets_token: "{{ git_repo_token }}"
       when: git_repo_token | default('') | length > 0
+      no_log: true
 
     - name: Determine report publishing configuration
       ansible.builtin.set_fact:
@@ -232,24 +233,35 @@
         - name: Set freshness check clone directory
           ansible.builtin.set_fact:
             gitea_clone_dir: "/tmp/report-freshness-check-{{ spoke_cluster }}-{{ ansible_date_time.epoch }}"
+            # Works without a working tree (metadata-only clone); a plain
+            # wildcard pathspec does not match when nothing is checked out.
+            _gitea_spoke_pathspec: ":(glob){{ 'reports/' if _report_publish_mode | default('prod') != 'dev-bastion' else '' }}*/{{ spoke_cluster }}/**"
 
-        - name: Clone report repository to check last report timestamp
-          ansible.builtin.git:
-            repo: "{{ _freshness_repo_url }}"
-            dest: "{{ gitea_clone_dir }}"
-            version: "{{ _freshness_branch }}"
-            depth: 10
-            single_branch: true
+        # Metadata-only clone: the freshness check only needs commit history
+        # for the spoke's report path, not file contents.
+        - name: Clone report repository metadata to check last report timestamp
+          ansible.builtin.command:
+            argv:
+              - git
+              - clone
+              - --depth=10
+              - --single-branch
+              - --branch={{ _freshness_branch }}
+              - --filter=blob:none
+              - --no-checkout
+              - "{{ _freshness_repo_url }}"
+              - "{{ gitea_clone_dir }}"
           failed_when: false
           register: gitea_clone_result
           environment:
             GIT_TERMINAL_PROMPT: "0"
           no_log: "{{ ansible_verbosity < 3 }}"
+          changed_when: true
 
         - name: Get last commit timestamp for this spoke's reports
           ansible.builtin.shell: |
             cd {{ gitea_clone_dir }}
-            git log --format='%ai' -1 -- reports/*/{{ spoke_cluster }}/ 2>/dev/null || echo ""
+            git log --format='%ai' -1 -- '{{ _gitea_spoke_pathspec }}' 2>/dev/null || echo ""
           register: last_report_commit_time
           changed_when: false
           when: gitea_clone_result.failed is not defined or not gitea_clone_result.failed
@@ -308,13 +320,36 @@
           changed_when: false
           when: last_report_utc_ts.stdout is defined and last_report_utc_ts.stdout | length > 0
 
+        # The freshness URL may embed credentials (://user:secret@host). Mask the
+        # secret before printing it: keep a short prefix/suffix for debugging,
+        # and fully mask anything too short to mask partially. URLs without
+        # credentials are left untouched.
+        - name: Redact credentials in report repository URL for display
+          vars:
+            _url: "{{ _freshness_repo_url | default('(not configured)') }}"
+            _user_prefix: "{{ (_url | regex_search('(.*://[^:/@]+:)[^@]+@(.*)', '\\1') | default([], true) | first) | default('', true) }}"
+            _secret: "{{ (_url | regex_search('://[^:/@]+:([^@]+)@', '\\1') | default([], true) | first) | default('', true) }}"
+            _host_suffix: "{{ (_url | regex_search('(.*://[^:/@]+:)[^@]+@(.*)', '\\2') | default([], true) | first) | default('', true) }}"
+          ansible.builtin.set_fact:
+            _freshness_repo_url_display: >-
+              {{
+                _url
+                if _secret | length == 0
+                else (
+                  _user_prefix
+                  ~ ((_secret[:3] ~ '..' ~ _secret[-2:]) if _secret | length >= 20 else '***')
+                  ~ '@' ~ _host_suffix
+                )
+              }}
+          when: test_freshness_check is defined
+
         - name: Display test freshness analysis
           ansible.builtin.debug:
             msg:
               - "==========================================="
               - "Test Freshness Check"
               - "==========================================="
-              - "Report repository: {{ _freshness_repo_url | default('(not configured)') }}"
+              - "Report repository: {{ _freshness_repo_url_display | default('(not configured)') }}"
               - "Last report generated: {{ last_report_commit_time.stdout | default('Never', true) }}"
               - "Last report UTC timestamp: {{ last_report_utc_ts.stdout | default('N/A', true) }}"
               - >-

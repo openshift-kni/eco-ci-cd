@@ -34,10 +34,17 @@
       ansible.builtin.set_fact:
         _tkdp_node_info: "{{ _tkdp_node_info_content['content'] | b64decode | from_json }}"
 
+    # collect-node-info writes ocp_version / arch / cpu_type /
+    # microcode_version; the legacy names are kept as fallbacks.
     - name: Build cluster_info from node-info
       ansible.builtin.set_fact:
         _tkdp_cluster_info:
-          sw_version: "{{ _tkdp_node_info.cluster_version | default('') }}"
+          sw_version: >-
+            {{
+              _tkdp_node_info.ocp_version
+              if (_tkdp_node_info.ocp_version | default('N/A')) is match('^[0-9]+\.[0-9]+')
+              else (_tkdp_node_info.cluster_version | default(''))
+            }}
           hub_version: "{{ _tkdp_node_info.hub_version | default('') }}"
           kernel_version: "{{ _tkdp_node_info.kernel_version | default('') }}"
           tuned_profile: "{{ _tkdp_node_info.tuned_profile | default('') }}"
@@ -45,11 +52,11 @@
     - name: Build hardware_info from node-info
       ansible.builtin.set_fact:
         _tkdp_hardware_info:
-          cpu_model: "{{ _tkdp_node_info.cpu_model | default('') }}"
-          cpu_type: "{{ _tkdp_node_info.cpu_family | default(_tkdp_node_info.cpu_model | default('')) }}"
-          architecture: "{{ _tkdp_node_info.architecture | default('x86_64') }}"
+          cpu_model: "{{ _tkdp_node_info.cpu_type | default(_tkdp_node_info.cpu_model | default('')) }}"
+          cpu_type: "{{ _tkdp_node_info.cpu_type | default(_tkdp_node_info.cpu_family | default('')) }}"
+          architecture: "{{ _tkdp_node_info.arch | default(_tkdp_node_info.architecture | default('x86_64')) }}"
           bios_version: "{{ _tkdp_node_info.bios_version | default('') }}"
-          microcode: "{{ _tkdp_node_info.microcode | default('') }}"
+          microcode: "{{ _tkdp_node_info.microcode_version | default(_tkdp_node_info.microcode | default('')) }}"
 
 - name: Use empty metadata when node-info not available
   when: not _tkdp_node_info_stat.stat.exists

@@ -1,0 +1,9 @@
+apiVersion: operator.openshift.io/v1alpha1
+kind: ImageContentSourcePolicy
+metadata:
+  name: stage-idmp
+spec:
+  repositoryDigestMirrors:
+  - mirrors:
+    - {{ stage_catalog_index_image.split('/')[0] }}
+    source: registry.redhat.io

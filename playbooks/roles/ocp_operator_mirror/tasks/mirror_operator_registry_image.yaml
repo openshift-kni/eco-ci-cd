@@ -80,6 +80,7 @@
       ignore_errors: true
 
 - name: Ensure IDMS for ocp-v4.0-art-dev is present
+  when: ocp_operator_mirror_version is version('4.14', '>=')
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
@@ -93,3 +94,19 @@
           - source: "{{ operator_registry_repo }}"
             mirrors:
               - "{{ operator_registry_mirror_repo }}"
+
+- name: Ensure ICSP for ocp-v4.0-art-dev is present
+  when: ocp_operator_mirror_version is version('4.14', '<')
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: ImageContentSourcePolicy
+      metadata:
+        name: ocp-art-mirror
+      spec:
+        repositoryDigestMirrors:
+          - mirrors:
+              - "{{ operator_registry_mirror_repo }}"
+            source: "{{ operator_registry_repo }}"

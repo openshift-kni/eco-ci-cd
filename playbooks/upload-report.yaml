@@ -75,7 +75,7 @@
   gather_facts: false
   force_handlers: true
   vars:
-    report_portal_uploader_image: quay.io/rh-ee-klaskosk/report-portal-uploader@sha256:8e8ce6cccafb9b5a91e10751b82cd30ecdaddc1aab9c42622307526d76f206e1
+    report_portal_uploader_image: quay.io/rh-ee-klaskosk/report-portal-uploader@sha256:b0df397be511f7c975c9a8ab955d0bd93dab5bf1992a938786fa372e54ac1bb4
     report_portal_uploader_tag: ""
     report_portal_uploader_reference: >-
       {{ report_portal_uploader_image

@@ -360,6 +360,7 @@
         - git
         - java
         - podman
+        - java-21-openjdk
 
     - name: Install and update CA
       when: install_ca_cert | default('true') | bool

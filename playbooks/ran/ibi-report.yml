@@ -19,6 +19,10 @@
 # missing expected reports blocks upload; completed failed tests remain reportable.
 # Outputs: reporting-status.json, reportportal-url.txt,
 #          and <shared>/ibi-reportportal-url when the uploader returns a launch URL.
+# Raw uploader output is retained on the target bastion in a private
+# /tmp/ibi-report-diagnostics.* directory, outside shared uploader cleanup.
+# Only timing, masked command status, request IDs and the private file path
+# are published in reporting-status.json; raw output may contain credentials.
 
 - name: Prepare IBI report collection
   hosts: localhost
@@ -253,7 +257,63 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    ibi_report_upload_result: "{{ hostvars['bastion'].report_portal_result | default({}) }}"
+    ibi_report_request_id_pattern: '(?im)^Request:[ \t]*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[ \t]*\r?$'
   tasks:
+    - name: Create a private directory for retained upload diagnostics
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: ibi-report-diagnostics.
+      delegate_to: bastion
+      register: ibi_report_diagnostic_dir
+      when:
+        - ibi_report_ready
+        - ibi_report_upload_result | length > 0
+        - not (ibi_report_upload_result.skipped | default(false))
+      # Diagnostic failures must not prevent publication of the upload outcome.
+      ignore_errors: true
+      ignore_unreachable: true
+      no_log: true
+
+    - name: Retain raw uploader output outside shared uploader cleanup
+      ansible.builtin.copy:
+        content: >-
+          {{ ibi_report_upload_result | dict2items |
+             selectattr('key', 'in', ['stdout', 'stderr', 'rc', 'delta', 'start', 'end', 'failed', 'skipped']) |
+             items2dict | to_nice_json }}
+        dest: "{{ ibi_report_diagnostic_dir.path }}/upload-result.json"
+        mode: '0600'
+      delegate_to: bastion
+      register: ibi_report_diagnostic_copy
+      when: ibi_report_diagnostic_dir.path is defined
+      ignore_errors: true
+      ignore_unreachable: true
+      diff: false
+      no_log: true
+
+    - name: Record upload timing and request IDs without publishing raw output
+      ansible.builtin.set_fact:
+        ibi_report_summary: >-
+          {{ ibi_report_summary | combine({'uploader': {
+            'result_available': ibi_report_upload_result | length > 0,
+            'skipped': ibi_report_upload_result.skipped | default(false),
+            'command_rc': ibi_report_upload_result.rc | default(none),
+            'command_rc_note': 'The shared uploader masks failures; this is not the DataRouter exit code.',
+            'elapsed': ibi_report_upload_result.delta | default(none),
+            'start': ibi_report_upload_result.start | default(none),
+            'end': ibi_report_upload_result.end | default(none),
+            'request_ids': ((ibi_report_upload_result.stdout | default('')) ~ '\n' ~
+                            (ibi_report_upload_result.stderr | default(''))) |
+                           regex_findall(ibi_report_request_id_pattern) | unique | list,
+            'private_result_file': (ibi_report_diagnostic_dir.path ~ '/upload-result.json')
+              if (ibi_report_diagnostic_copy is succeeded and ibi_report_diagnostic_copy is not skipped
+                  and not (ibi_report_diagnostic_copy.unreachable | default(false))) else none
+          }}) }}
+      when: ibi_report_ready
+      no_log: true
+
     - name: Record upload outcome or a run with no registered stages
       ansible.builtin.set_fact:
         ibi_report_summary: >-

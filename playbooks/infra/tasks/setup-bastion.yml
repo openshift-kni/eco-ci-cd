@@ -67,7 +67,8 @@
       - openconnect
       - git
       - firewalld
-      - podman
+      # fix issue with podman5 on RHEL9
+      - podman-4:4.9.4
       - tmux
       - java
       - brewkoji

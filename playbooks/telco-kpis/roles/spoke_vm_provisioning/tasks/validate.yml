@@ -1,0 +1,72 @@
+---
+- name: Ensure exactly one spoke master is defined (SNO only)
+  ansible.builtin.assert:
+    that:
+      - groups['masters'] | default([]) | length == 1
+    fail_msg: >-
+      VM spoke provisioning currently supports SNO only; found
+      {{ groups['masters'] | default([]) | length }} masters in the inventory.
+    quiet: true
+
+- name: Resolve spoke master facts
+  ansible.builtin.set_fact:
+    spoke_vm_master: "{{ groups['masters'][0] }}"
+    spoke_vm_spec: "{{ hostvars[groups['masters'][0]].vm_spec_string | from_yaml }}"
+    spoke_vm_hypervisor: >-
+      {{ hostvars[groups['masters'][0]].hypervisor
+         | default(hostvars[inventory_hostname].ansible_host | default(inventory_hostname)) }}
+
+- name: Resolve spoke VM network interfaces
+  ansible.builtin.set_fact:
+    spoke_vm_network_interfaces: >-
+      {{ hostvars[spoke_vm_master].network_interfaces_string | from_yaml }}
+
+- name: Assert required Vault values are present
+  ansible.builtin.assert:
+    that:
+      - hostvars[spoke_vm_master].vendor | default('') | lower == 'kvm'
+      - hostvars[spoke_vm_master].hostname is defined
+      - hostvars[spoke_vm_master].uuid is defined
+      - hostvars[spoke_vm_master].mac is defined
+      - hostvars[spoke_vm_master].bmc_user is defined
+      - hostvars[spoke_vm_master].bmc_password is defined
+      - spoke_vm_spec.cpu_cores is defined
+      - spoke_vm_spec.ram_mib is defined
+      - spoke_vm_spec.disk_size_gb is defined
+      - spoke_vm_spec.vm_bridge_interface is defined
+      - spoke_vm_network_interfaces is mapping
+      - spoke_vm_network_interfaces | length > 0
+    fail_msg: >-
+      Spoke master '{{ spoke_vm_master }}' is missing required Vault keys. See
+      docs/designs/VM-SPOKE-TELCO-KPIS-DESIGN.md for the expected contract.
+
+- name: Assert the inventory hypervisor matches the Vault selection
+  ansible.builtin.assert:
+    that:
+      - spoke_vm_hypervisor in [inventory_hostname, ansible_fqdn | default(''), ansible_host | default('')]
+    fail_msg: >-
+      The inventory host '{{ inventory_hostname }}' ({{ ansible_fqdn | default(ansible_host) }})
+      does not match the hypervisor declared in the spoke Vault
+      ('{{ spoke_vm_hypervisor }}'). Check the 'hypervisor' key in
+      ansible_group_masters and the Jenkins vault selection.
+    quiet: true
+
+- name: Check the VM bridge exists on the hypervisor
+  ansible.builtin.command:
+    argv:
+      - ip
+      - link
+      - show
+      - "{{ spoke_vm_spec.vm_bridge_interface }}"
+  register: _spoke_vm_bridge_check
+  changed_when: false
+
+- name: Check sushy-tools is running on the hypervisor
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - sushy-tools
+  register: _spoke_vm_sushy_service
+  changed_when: false
+  failed_when: _spoke_vm_sushy_service.stdout | trim != 'active'

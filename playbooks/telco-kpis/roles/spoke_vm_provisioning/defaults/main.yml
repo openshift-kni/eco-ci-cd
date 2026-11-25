@@ -1,0 +1,26 @@
+---
+# Defaults for provisioning a Telco-KPIs spoke master as a KVM VM on the
+# hypervisor selected by the spoke's Vault inventory.
+spoke_vm_provisioning_enabled: true
+
+# When false (default), an existing libvirt domain is left untouched. This
+# protects an already-installed spoke on a ZTP re-run. Set to true for a clean
+# redeploy (the domain and its disk are destroyed and recreated).
+spoke_vm_provisioning_recreate: false
+
+# Reuse the telco-kpis bastion-VM lock so VM creation on a shared hypervisor
+# is serialized. The lock is held only around create/destroy, never during ZTP.
+spoke_vm_provisioning_lock_name: vm_bastion_deploy
+spoke_vm_provisioning_lock_become: true
+spoke_vm_provisioning_lock_timeout: 1800
+spoke_vm_provisioning_lock_acquire_timeout: 3600
+spoke_vm_provisioning_lock_poll_interval: 60
+
+spoke_vm_provisioning_images_dir: /var/lib/libvirt/images
+spoke_vm_provisioning_network_mode: bridge
+
+spoke_vm_provisioning_sushy_port: 8082
+spoke_vm_provisioning_sushy_scheme: https
+spoke_vm_provisioning_sushy_validate_certs: false
+spoke_vm_provisioning_sushy_wait_retries: 30
+spoke_vm_provisioning_sushy_wait_delay: 2

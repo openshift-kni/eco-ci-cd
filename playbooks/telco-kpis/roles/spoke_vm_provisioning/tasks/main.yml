@@ -1,0 +1,41 @@
+---
+# Facts are gathered here (not at play level) so bare-metal spokes, which skip
+# this role, never connect to the hypervisor.
+- name: Gather hypervisor facts
+  ansible.builtin.setup:
+
+- name: Validate VM spoke inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Create and power off the spoke VM under the hypervisor lock
+  block:
+    - name: Acquire hypervisor VM creation lock
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: acquire
+      vars:
+        remote_flock_name: "{{ spoke_vm_provisioning_lock_name }}"
+        remote_flock_become: "{{ spoke_vm_provisioning_lock_become }}"
+        remote_flock_timeout: "{{ spoke_vm_provisioning_lock_timeout }}"
+        remote_flock_acquire_timeout: "{{ spoke_vm_provisioning_lock_acquire_timeout }}"
+        remote_flock_poll_interval: "{{ spoke_vm_provisioning_lock_poll_interval }}"
+
+    - name: Create the spoke VM
+      ansible.builtin.import_tasks: create.yml
+  always:
+    - name: Release hypervisor VM creation lock
+      ansible.builtin.include_role:
+        name: remote_flock
+        tasks_from: release
+      vars:
+        remote_flock_name: "{{ spoke_vm_provisioning_lock_name }}"
+        remote_flock_become: "{{ spoke_vm_provisioning_lock_become }}"
+      when:
+        - remote_flock_uuid is defined
+        - remote_flock_uuid | length > 0
+
+- name: Verify sushy exposes the spoke VM
+  ansible.builtin.import_tasks: sushy.yml
+
+- name: Export spoke VM details
+  ansible.builtin.import_tasks: export.yml

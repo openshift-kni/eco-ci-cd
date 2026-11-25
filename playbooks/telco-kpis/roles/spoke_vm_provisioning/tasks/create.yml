@@ -1,0 +1,130 @@
+---
+- name: Check spoke VM bridges on the hypervisor
+  ansible.builtin.command:
+    argv:
+      - ip
+      - link
+      - show
+      - "{{ item }}"
+  loop: "{{ spoke_vm_network_interfaces.keys() | list }}"
+  register: _spoke_vm_bridge_checks
+  changed_when: false
+  failed_when: false
+
+- name: Create missing isolated bridges for the spoke VM
+  ansible.builtin.command:
+    argv:
+      - ip
+      - link
+      - add
+      - name
+      - "{{ item.item }}"
+      - type
+      - bridge
+  loop: "{{ _spoke_vm_bridge_checks.results }}"
+  when: item.rc != 0
+  changed_when: true
+  become: true
+
+- name: Bring spoke VM bridges up
+  ansible.builtin.command:
+    argv:
+      - ip
+      - link
+      - set
+      - "{{ item }}"
+      - up
+  loop: "{{ spoke_vm_network_interfaces.keys() | list }}"
+  changed_when: false
+  become: true
+
+- name: List existing libvirt domains
+  community.libvirt.virt:
+    command: list_vms
+  register: _spoke_vm_existing_domains
+  changed_when: false
+
+- name: Check whether the spoke VM already exists
+  ansible.builtin.set_fact:
+    spoke_vm_exists: >-
+      {{ hostvars[spoke_vm_master].hostname in _spoke_vm_existing_domains.list_vms }}
+
+- name: Destroy the existing spoke VM for a clean redeploy
+  when:
+    - spoke_vm_exists | bool
+    - spoke_vm_provisioning_recreate | bool
+  block:
+    - name: Destroy existing spoke VM
+      ansible.builtin.include_role:
+        name: redhatci.ocp.destroy_vms
+      vars:
+        cluster_name: dummy
+        vm_bridge_interface: dummy
+        DELETE_VM_BRIDGE: false  # noqa: var-naming[pattern]
+        kvm_nodes:
+          - name: "{{ hostvars[spoke_vm_master].hostname }}"
+            disks:
+              main: "1"
+
+    - name: Refresh the libvirt domain list
+      community.libvirt.virt:
+        command: list_vms
+      register: _spoke_vm_existing_domains
+      changed_when: false
+
+    - name: Recompute spoke VM existence
+      ansible.builtin.set_fact:
+        spoke_vm_exists: >-
+          {{ hostvars[spoke_vm_master].hostname in _spoke_vm_existing_domains.list_vms }}
+
+- name: Leave an existing spoke VM untouched
+  ansible.builtin.debug:
+    msg: >-
+      VM {{ hostvars[spoke_vm_master].hostname }} already exists; leaving it
+      untouched. Set spoke_vm_provisioning_recreate=true for a clean redeploy.
+  when: spoke_vm_exists | bool
+
+- name: Create the spoke VM from Vault settings
+  when: not (spoke_vm_exists | bool)
+  block:
+    - name: Create the empty main disk
+      ansible.builtin.command:
+        argv:
+          - qemu-img
+          - create
+          - -f
+          - qcow2
+          - "{{ spoke_vm_provisioning_images_dir }}/{{ hostvars[spoke_vm_master].hostname }}_main.qcow2"
+          - "{{ spoke_vm_spec.disk_size_gb }}G"
+        creates: "{{ spoke_vm_provisioning_images_dir }}/{{ hostvars[spoke_vm_master].hostname }}_main.qcow2"
+
+    - name: Create the libvirt domain
+      ansible.builtin.include_role:
+        name: redhatci.ocp.create_vms
+      vars:
+        cluster_name: dummy
+        vm_bridge_name: "{{ spoke_vm_spec.vm_bridge_interface }}"
+        images_dir: "{{ spoke_vm_provisioning_images_dir }}"
+        create_vms_network_mode: "{{ spoke_vm_provisioning_network_mode }}"
+        additional_virt_install_options: >-
+          --events on_reboot=restart --install no_install=yes --wait=0 --boot hd,cdrom
+          {{ spoke_vm_spec.additional_vm_install_options | default('') }}
+        kvm_nodes:
+          - name: "{{ hostvars[spoke_vm_master].hostname }}"
+            uuid: "{{ hostvars[spoke_vm_master].uuid }}"
+            memory: "{{ spoke_vm_spec.ram_mib }}"
+            vcpu: "{{ spoke_vm_spec.cpu_cores }}"
+            disks: "{{ {'main': spoke_vm_spec.disk_size_gb} | combine(spoke_vm_spec.extra_disks | default({})) }}"
+            network_interfaces: "{{ spoke_vm_network_interfaces }}"
+
+    - name: Power off the spoke VM for the first Redfish boot
+      community.libvirt.virt:
+        name: "{{ hostvars[spoke_vm_master].hostname }}"
+        # community.libvirt.virt accepts destroyed/paused/running/shutdown;
+        # 'destroyed' is libvirt's force-off (it does not undefine the domain).
+        state: destroyed
+      failed_when: false
+
+    - name: Record that the spoke VM was created
+      ansible.builtin.set_fact:
+        spoke_vm_created: true

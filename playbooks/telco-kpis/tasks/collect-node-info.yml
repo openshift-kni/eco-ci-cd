@@ -439,6 +439,8 @@
       kernel_cmdline: "{{ kernel_cmdline | default('') }}"
       collected_at: "{{ ansible_date_time.iso8601 }}"
       report_headline: "{{ _report_headline }}"
+      virtualized: "{{ spoke_virtualized | default(false) }}"
+      hypervisor: "{{ spoke_hypervisor | default('N/A') }}"
       manifests:
         performance_profiles: >-
           {{ (performance_profiles.resources | to_nice_yaml | b64encode)

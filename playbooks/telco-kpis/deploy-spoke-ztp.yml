@@ -171,5 +171,17 @@
       ansible.builtin.debug:
         msg: "No OCP release image override — ran playbook will use hub cluster's own release image"
 
+- name: Provision VM-based spoke when defined in Vault
+  hosts: hypervisor
+  gather_facts: false
+  tasks:
+    - name: Provision spoke VM
+      ansible.builtin.include_role:
+        name: spoke_vm_provisioning
+      when:
+        - groups['masters'] | default([]) | length > 0
+        - hostvars[groups['masters'][0]].vendor | default('') | lower == 'kvm'
+        - spoke_vm_provisioning_enabled | default(true) | bool
+
 - name: Deploy spoke cluster via ZTP
   import_playbook: ../ran/deploy-spoke-ztp.yml

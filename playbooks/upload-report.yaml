@@ -90,8 +90,9 @@
     report_portal_launch_url_file: "/work/report-portal-launch.url"
     report_portal_launch_url_file_host: "{{ report_portal_work_dir }}/report-portal-launch.url"
     report_portal_reports_glob: "/work/reports/*.xml"
-    report_portal_hostname: >-
-      {{ report_portal_url | default('') | trim | regex_replace('^(https?://[^/]+).*$', '\g<1>') }}
+    # report-portal-uploader accepts a bare host or a full https:// URL and
+    # normalizes the scheme itself, so keep report_portal_url intact.
+    report_portal_hostname: "{{ report_portal_url | default('') | trim }}"
     report_portal_launch_url_name: "{{ report_portal_url_filename | default('.reportportal_url', true) }}"
     report_portal_launch_name: >-
       {{ reporter_launch_name if reporter_launch_name | default('', true) | length > 0

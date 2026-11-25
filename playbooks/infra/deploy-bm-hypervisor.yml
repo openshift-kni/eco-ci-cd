@@ -359,7 +359,8 @@
       loop:
         - git
         - java
-        - podman
+        # fix issue with podman5 on RHEL9
+        - podman-4:4.9.4
         - java-21-openjdk
 
     - name: Install and update CA

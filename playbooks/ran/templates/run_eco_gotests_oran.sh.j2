@@ -14,8 +14,8 @@ podman run -it --rm --net=host --uidmap 0:1:1000 --uidmap 1000:0:1 --uidmap 1001
   {% if hub_clusterconfigs_path is defined and hub_clusterconfigs_path | length > 0 %}-e ECO_CNF_RAN_KUBECONFIG_HUB=/clusterconfigs/auth/kubeconfig \
   {% endif %}
   -e ECO_CNF_RAN_ACM_OPERATOR_NAMESPACE={{ acm_operator_namespace }} \
-  -e ECO_CNF_RAN_HUB_APPS_DOMAIN={{ hub_apps_domain_result.stdout }} \
-  -e ECO_CNF_RAN_O2IMS_OAUTH_CLIENT_SECRET={{ o2ims_oauth_secret_result.stdout }} \
+  -e ECO_CNF_RAN_HUB_APPS_DOMAIN={{ hub_apps_domain_result.resources[0].spec.domain }} \
+  -e ECO_CNF_RAN_O2IMS_OAUTH_CLIENT_SECRET={{ o2ims_oauth_secret_result.resources[0].data['client-secret'] | b64decode }} \
   -e ECO_CNF_RAN_O2IMS_OAUTH_CLIENT_ID={{ o2ims_oauth_client_id }} \
   -e ECO_CNF_RAN_O2IMS_CLIENT_CERT_SECRET={{ o2ims_client_cert_secret }} \
   -e ECO_CNF_RAN_O2IMS_CLIENT_CERT_SECRET_NAMESPACE={{ o2ims_client_cert_secret_namespace }} \

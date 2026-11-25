@@ -28,25 +28,55 @@
     dest: "{{ oran_o2ims_tmp_dir.path }}/oauth-client-secrets.yaml"
     mode: "0644"
 
+- name: Apply template for oran-o2ims inventory
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    src: "{{ oran_o2ims_tmp_dir.path }}/inventory.yaml"
+
+- name: Apply template for o2ims-client-cert
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    src: "{{ oran_o2ims_tmp_dir.path }}/o2ims-client-cert.yaml"
+
 # We delete the existing trusted-ca-bundle configmap to ensure that when we
 # apply the new one, it injects the updated CA bundle with the bootstrapped
 # root CA.
-- name: Apply templates for oran-o2ims
-  ansible.builtin.shell: |
-    oc apply -f {{ oran_o2ims_tmp_dir.path }}/inventory.yaml && \
-    oc apply -f {{ oran_o2ims_tmp_dir.path }}/o2ims-client-cert.yaml && \
-    oc delete --ignore-not-found=true configmap o2ims-trusted-ca-bundle -n oran-o2ims && \
-    oc apply -f {{ oran_o2ims_tmp_dir.path }}/trusted-ca-bundle.yaml && \
-    oc apply -f {{ oran_o2ims_tmp_dir.path }}/oauth-client-secrets.yaml
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  register: apply_status
-  changed_when: "'created' in apply_status.stdout or 'configured' in apply_status.stdout"
+- name: Remove existing trusted-ca-bundle configmap
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    api_version: v1
+    kind: ConfigMap
+    name: o2ims-trusted-ca-bundle
+    namespace: "{{ oran_o2ims_deploy_namespace }}"
+
+- name: Apply template for trusted-ca-bundle
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    src: "{{ oran_o2ims_tmp_dir.path }}/trusted-ca-bundle.yaml"
+
+# no_log because the rendered manifest embeds the o2ims-client secret derived
+# from the realm export (see tasks/main.yaml).
+- name: Apply template for oauth-client-secrets
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    src: "{{ oran_o2ims_tmp_dir.path }}/oauth-client-secrets.yaml"
+  no_log: true
 
 - name: Wait for SMO registration to complete
-  ansible.builtin.shell: |
-    oc wait --timeout=30m --for=condition=SmoRegistrationCompleted=True -n {{ oran_o2ims_deploy_namespace }} inventory default
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  changed_when: false
-  retries: 30
+  kubernetes.core.k8s_info:
+    api_version: ocloud.openshift.io/v1alpha1
+    kind: Inventory
+    name: default
+    namespace: "{{ oran_o2ims_deploy_namespace }}"
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    wait: true
+    wait_condition:
+      type: SmoRegistrationCompleted
+      status: "True"
+    wait_sleep: 30
+    wait_timeout: 1800

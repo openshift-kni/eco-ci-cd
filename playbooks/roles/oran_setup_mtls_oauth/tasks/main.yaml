@@ -15,13 +15,12 @@
 # Bootstrapping the cluster PKI only needs to happen once, so we check if the root-ca-issuer
 # ClusterIssuer already exists. If it does, we skip the bootstrap.
 - name: Check if root-ca-issuer ClusterIssuer exists
-  ansible.builtin.shell: |
-    oc get clusterissuer root-ca-issuer
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
+  kubernetes.core.k8s_info:
+    api_version: cert-manager.io/v1
+    kind: ClusterIssuer
+    name: root-ca-issuer
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
   register: root_ca_issuer_exists
-  changed_when: false
-  failed_when: false
   when: not oran_skip_bootstrap_cluster_pki | default(false) | bool
 
 - name: Set oran_skip_bootstrap_cluster_pki to True is already bootstrapped
@@ -29,8 +28,7 @@
     oran_skip_bootstrap_cluster_pki: true
   when:
     - not oran_skip_bootstrap_cluster_pki | default(false) | bool
-    - root_ca_issuer_exists is success
-    - root_ca_issuer_exists.rc == 0
+    - root_ca_issuer_exists.resources | default([]) | length > 0
 
 # Bootstrap the cluster PKI by generating a root CA cert, updating the cluster
 # proxy, and creating a ClusterIssuer.

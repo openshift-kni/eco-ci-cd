@@ -13,55 +13,86 @@
       -addext "keyUsage=critical,cRLSign,digitalSignature,keyCertSign"
   changed_when: true
 
+- name: Read root CA certificate and key
+  ansible.builtin.slurp:
+    src: "{{ pki_tmp_dir.path }}/{{ item }}"
+  loop:
+    - root-ca.crt
+    - root-ca.key
+  register: root_ca_files
+  no_log: true
+
 - name: Create root CA secret
-  ansible.builtin.shell: |
-    oc delete --ignore-not-found=true secret root-ca -n cert-manager
-    oc create secret tls root-ca --cert={{ pki_tmp_dir.path }}/root-ca.crt --key={{ pki_tmp_dir.path }}/root-ca.key -n cert-manager
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  changed_when: true
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: root-ca
+        namespace: cert-manager
+      type: kubernetes.io/tls
+      data:
+        tls.crt: "{{ root_ca_files.results[0].content }}"
+        tls.key: "{{ root_ca_files.results[1].content }}"
+  no_log: true
+
+- name: Create custom CA certificates configmap
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: custom-ca-certs
+        namespace: openshift-config
+      data:
+        ca-bundle.crt: "{{ root_ca_files.results[0].content | b64decode }}"
+        ca-bundle.pem: "{{ root_ca_files.results[0].content | b64decode }}"
 
 - name: Update cluster trusted CA store
-  ansible.builtin.shell: |
-    oc delete --ignore-not-found=true configmap custom-ca-certs -n openshift-config
-    oc create configmap -n openshift-config custom-ca-certs \
-      --from-file=ca-bundle.crt={{ pki_tmp_dir.path }}/root-ca.crt \
-      --from-file=ca-bundle.pem={{ pki_tmp_dir.path }}/root-ca.crt
-    oc patch proxy/cluster --type=merge --patch='{"spec":{"trustedCA":{"name": "custom-ca-certs"}}}'
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  changed_when: true
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: Proxy
+      metadata:
+        name: cluster
+      spec:
+        trustedCA:
+          name: custom-ca-certs
 
 - name: Update default ingress controller for mTLS
-  vars:
-    ingress_controller_patch:
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    definition:
+      apiVersion: operator.openshift.io/v1
+      kind: IngressController
+      metadata:
+        name: default
+        namespace: openshift-ingress-operator
       spec:
         clientTLS:
           clientCertificatePolicy: Optional
           clientCA:
             name: custom-ca-certs
-  ansible.builtin.shell: |
-    oc patch ingresscontroller -n openshift-ingress-operator default --type=merge --patch='{{ ingress_controller_patch | to_json }}'
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  changed_when: true
 
 - name: Create ClusterIssuer with root CA
-  ansible.builtin.shell: |
-    set -o pipefail
-    cat <<EOF | oc apply -f -
-    apiVersion: cert-manager.io/v1
-    kind: ClusterIssuer
-    metadata:
-      name: root-ca-issuer
-    spec:
-      ca:
-        secretName: root-ca
-    EOF
-  environment:
-    KUBECONFIG: "{{ oran_hub_kubeconfig }}"
-  register: create_cluster_issuer
-  changed_when: "'created' in create_cluster_issuer.stdout or 'configured' in create_cluster_issuer.stdout"
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ oran_hub_kubeconfig }}"
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: ClusterIssuer
+      metadata:
+        name: root-ca-issuer
+      spec:
+        ca:
+          secretName: root-ca
 
 - name: Clean up temporary directory
   ansible.builtin.file:

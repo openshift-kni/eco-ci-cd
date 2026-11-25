@@ -69,16 +69,37 @@
             - oran_clusters_repo_branch: Git branch for the O-RAN clustertemplates
         success_msg: "All required variables are defined"
 
+    # The ProvisioningRequest CRD (installed by the o-cloud-manager operator)
+    # may not exist yet on a fresh hub; query the CRD first so its absence is
+    # not fatal.
+    - name: Check if the ProvisioningRequest CRD exists
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: provisioningrequests.clcm.openshift.io
+        kubeconfig: "{{ kubeconfig }}"
+      register: provisioning_request_crd
+
+    - name: List existing ProvisioningRequest resources
+      when: provisioning_request_crd.resources | length > 0
+      kubernetes.core.k8s_info:
+        api_version: clcm.openshift.io/v1alpha1
+        kind: ProvisioningRequest
+        kubeconfig: "{{ kubeconfig }}"
+      register: provisioning_requests
+
     - name: Cleanup existing ProvisioningRequest resources
-      ansible.builtin.command:
-        cmd: oc delete --timeout=10m --all provisioningrequest
-      register: pr_cleanup
-      changed_when: "'deleted' in pr_cleanup.stdout"
-      # ProvisioningRequest CRD may not exist yet on a fresh hub; that is not fatal.
-      failed_when:
-        - pr_cleanup.rc != 0
-        - "'the server doesn\\'t have a resource type' not in pr_cleanup.stderr"
-        - "'No resources found' not in pr_cleanup.stderr"
+      when: provisioning_requests.resources | default([]) | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: clcm.openshift.io/v1alpha1
+        kind: ProvisioningRequest
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ item.metadata.namespace | default(omit) }}"
+        kubeconfig: "{{ kubeconfig }}"
+        wait: true
+        wait_timeout: 600
+      loop: "{{ provisioning_requests.resources }}"
 
     - name: Ensure ArgoCD deployment kustomization exists
       ansible.builtin.stat:
@@ -214,16 +235,19 @@
                 kind: ClusterRole
                 name: hub-rds-cluster-role
 
-    - name: Display patched deployment kustomization
-      ansible.builtin.command:
-        cmd: "cat {{ argocd_deployment_path }}/kustomization.yaml"
+    - name: Read patched deployment kustomization
+      ansible.builtin.slurp:
+        src: "{{ argocd_deployment_path }}/kustomization.yaml"
       register: patched_kustomization
-      changed_when: false
 
     - name: Show patched deployment kustomization
       ansible.builtin.debug:
-        msg: "{{ patched_kustomization.stdout_lines }}"
+        msg: "{{ (patched_kustomization.content | b64decode).splitlines() }}"
 
+    # Kept as an oc command: kubernetes.core.k8s (2.4.x) cannot apply a
+    # kustomization directory (its `src` only reads plain YAML files, and the
+    # kustomize lookup would render on the controller instead of the bastion
+    # where the kustomization lives).
     - name: Apply ArgoCD deployment kustomization
       ansible.builtin.command:
         cmd: oc apply -k {{ argocd_deployment_path }}

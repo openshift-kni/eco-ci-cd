@@ -1,0 +1,14 @@
+---
+- name: Export spoke VM facts
+  ansible.builtin.set_fact:
+    spoke_vm_summary:
+      hostname: "{{ hostvars[spoke_vm_master].hostname }}"
+      uuid: "{{ hostvars[spoke_vm_master].uuid }}"
+      mac: "{{ hostvars[spoke_vm_master].mac }}"
+      bridge: "{{ spoke_vm_spec.vm_bridge_interface }}"
+      bmc_address: "{{ spoke_vm_bmc_address }}"
+      created: "{{ spoke_vm_created | default(false) }}"
+
+- name: Show spoke VM details
+  ansible.builtin.debug:
+    var: spoke_vm_summary

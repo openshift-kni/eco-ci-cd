@@ -32,6 +32,22 @@
         fail_msg: "spoke_kubeconfig parameter is required"
         success_msg: "Spoke kubeconfig: {{ spoke_kubeconfig }}"
 
+    - name: Detect whether the spoke is virtualized
+      ansible.builtin.set_fact:
+        spoke_virtualized: >-
+          {{ (hostvars[groups['masters'][0]].vendor | default('') | lower == 'kvm')
+             if (groups['masters'] | default([]) | length > 0) else false }}
+        spoke_hypervisor: >-
+          {{ hostvars[groups['masters'][0]].hypervisor | default('N/A')
+             if (groups['masters'] | default([]) | length > 0) else 'N/A' }}
+
+    - name: Note virtualized spoke
+      ansible.builtin.debug:
+        msg: >-
+          Spoke {{ spoke_cluster }} is virtualized (vendor=KVM, hypervisor={{ spoke_hypervisor }});
+          hardware BMC/BIOS fields will be reported as N/A.
+      when: spoke_virtualized | bool
+
     - name: Execute node info collection tasks
       ansible.builtin.include_tasks: "tasks/collect-node-info.yml"
 

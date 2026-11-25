@@ -40,6 +40,23 @@
         fail_msg: "spoke_kubeconfig parameter is required"
         success_msg: "Spoke kubeconfig: {{ spoke_kubeconfig }}"
 
+    - name: Detect whether the spoke is virtualized
+      ansible.builtin.set_fact:
+        spoke_virtualized: >-
+          {{ (hostvars[groups['masters'][0]].vendor | default('') | lower == 'kvm')
+             if (groups['masters'] | default([]) | length > 0) else false }}
+
+    - name: Skip BIOS validation on a virtualized spoke
+      ansible.builtin.debug:
+        msg:
+          - "BIOS validation is not applicable to virtualized spoke {{ spoke_cluster }}."
+          - "No physical BMC/BIOS is exposed by sushy-tools; skipping and finishing successfully."
+      when: spoke_virtualized | bool
+
+    - name: End play for a virtualized spoke
+      ansible.builtin.meta: end_play
+      when: spoke_virtualized | bool
+
     - name: Validate version parameter
       ansible.builtin.assert:
         that:

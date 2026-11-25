@@ -1,0 +1,34 @@
+---
+- name: Derive sushy base endpoint for the spoke VM
+  ansible.builtin.set_fact:
+    spoke_vm_sushy_base: >-
+      {{ spoke_vm_provisioning_sushy_scheme }}://{{ spoke_vm_hypervisor }}:{{ spoke_vm_provisioning_sushy_port }}
+
+- name: Derive sushy endpoints for the spoke VM
+  ansible.builtin.set_fact:
+    spoke_vm_sushy_url: "{{ spoke_vm_sushy_base }}/redfish/v1/Systems/{{ hostvars[spoke_vm_master].uuid }}"
+    spoke_vm_bmc_address: "redfish-virtualmedia+{{ spoke_vm_sushy_base }}/redfish/v1/Systems/{{ hostvars[spoke_vm_master].uuid }}"
+
+- name: Wait for sushy to expose the spoke VM
+  ansible.builtin.uri:
+    url: "{{ spoke_vm_sushy_url }}"
+    method: GET
+    url_username: "{{ hostvars[spoke_vm_master].bmc_user }}"
+    url_password: "{{ hostvars[spoke_vm_master].bmc_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ spoke_vm_provisioning_sushy_validate_certs }}"
+    status_code: [200, 401, 404]
+  register: _spoke_vm_sushy_result
+  until: _spoke_vm_sushy_result.status | default(0) == 200
+  retries: "{{ spoke_vm_provisioning_sushy_wait_retries }}"
+  delay: "{{ spoke_vm_provisioning_sushy_wait_delay }}"
+  no_log: "{{ ansible_verbosity < 3 }}"
+
+- name: Assert sushy exposes the spoke VM
+  ansible.builtin.assert:
+    that:
+      - _spoke_vm_sushy_result.status | default(0) == 200
+    fail_msg: >-
+      sushy did not expose {{ spoke_vm_sushy_url }} after
+      {{ spoke_vm_provisioning_sushy_wait_retries }} attempts.
+    quiet: true

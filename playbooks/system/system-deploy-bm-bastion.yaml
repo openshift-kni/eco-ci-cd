@@ -1,0 +1,68 @@
+## Disclaimer
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+# Ansible Playbook for Bare-Metal Bastion Deployment With libvirt Tooling
+
+## Overview
+# This playbook is a thin wrapper around `playbooks/infra/deploy-bm-bastion.yml`.
+# It performs the full bare-metal bastion deployment (Kickstart ISO creation,
+# iDRAC/iLO virtual-media boot, system activation and bastion setup) and, once
+# the installation is complete, installs the libvirt tooling needed to drive
+# virtual machines from the bastion.
+#
+# The package list is fixed in the play below; there is no variable to override
+# it. Edit the task if a deployment needs a different set.
+
+## Prerequisites
+# - All prerequisites of `playbooks/infra/deploy-bm-bastion.yml` apply.
+# - The bastion must have access to the repositories providing the libvirt packages
+#   (BaseOS/AppStream), since the packages are installed with dnf after the install.
+
+## Variables Used by Playbook
+# This playbook adds no variables of its own. Refer to
+# `playbooks/infra/deploy-bm-bastion.yml` for the full list of variables consumed
+# by the deployment itself.
+
+## Playbook Workflow
+# 1. Bare-Metal Bastion Deployment:
+#    - Imports `playbooks/infra/deploy-bm-bastion.yml`.
+#    - Builds the Kickstart ISO, boots the bare-metal host, activates the system
+#      and applies the bastion configuration.
+#
+# 2. libvirt Installation:
+#    - Installs the libvirt packages on the freshly deployed bastion:
+#      - libvirt-client:  virsh and the client tooling used to reach local or
+#                         remote (qemu+ssh) hypervisors
+#      - libvirt-daemon:  libvirtd itself. Note this is the bare daemon with no
+#                         hypervisor driver - the bastion cannot host VMs until
+#                         libvirt-daemon-kvm (or -driver-qemu) is also installed
+#      - python3-libvirt: Python bindings required by the `community.libvirt`
+#                         modules when they run on the bastion
+#      - libvirt-libs:    shared libraries behind the above (pulled in as a
+#                         dependency, listed explicitly to pin it as required)
+
+## Running the Playbook
+# Ensure that host_vars and group_vars are properly installed.
+# Pass location so the executor downloads the ISO from the local mirror:
+# ansible-playbook playbooks/system/system-deploy-bm-bastion.yaml \
+#   -i ./inventories/infra/deploy-bm-bastion.yml \
+#   --extra-vars location=tlv
+---
+- name: Deploy bare-metal bastion
+  ansible.builtin.import_playbook: ../infra/deploy-bm-bastion.yml
+
+- name: Install libvirt client packages on bastion
+  hosts: bastion
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Install libvirt packages
+      ansible.builtin.dnf:
+        name:
+          - libvirt-client
+          - libvirt-daemon
+          - python3-libvirt
+          - libvirt-libs
+        state: present

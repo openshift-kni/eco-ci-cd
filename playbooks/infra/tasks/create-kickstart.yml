@@ -22,7 +22,8 @@
     kickstart_iso_net_config: "{{ hostvars['bastion'].net_config | from_yaml }}"
     kickstart_iso_partitioning: >-
       {{ hostvars['bastion'].partitioning
-         | default(['zerombr', 'clearpart --all --initlabel', 'autopart'], true) }}
+         | default(['zerombr', 'clearpart --all --initlabel', 'autopart'], true)
+         | from_yaml }}
 
 - name: Setup http storage
   ansible.builtin.import_role:

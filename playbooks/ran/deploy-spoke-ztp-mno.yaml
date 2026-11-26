@@ -371,6 +371,12 @@
         - name: Select mirrored releases supporting requested architecture
           ansible.builtin.set_fact:
             _matching_release_digests: "{{ (_matching_release_digests + [_release_metadata.Digest]) | unique | list }}"
+            _mirrored_release_registration:
+              openshift_version: "{{ ocp_version }}"
+              version: "{{ _release_metadata.Labels['io.openshift.release'] }}"
+              cpu_architecture: "{{ 'multi' if _release_architectures | length > 1 else _release_metadata.Architecture }}"
+              cpu_architectures: "{{ _release_architectures | map('regex_replace', '^amd64$', 'x86_64') | list }}"
+              url: "{{ _mirrored_release_repository }}@{{ _release_metadata.Digest }}"
           loop: "{{ _candidate_release_manifests.results | selectattr('stdout', 'defined') | list }}"
           loop_control:
             label: "{{ item.item.item }}"
@@ -506,6 +512,42 @@
             name: agent
           register: _agent_service_config
 
+        # RHCOS validation reads an in-memory release list. Persist the selected
+        # payload so ARM discovery still works after assisted-service restarts.
+        - name: Select Assisted Service override ConfigMap
+          ansible.builtin.set_fact:
+            _assisted_service_configmap_name: >-
+              {{ (_agent_service_config.resources[0].metadata.annotations | default({})).get(
+                'unsupported.agent-install.openshift.io/assisted-service-configmap',
+                'assisted-installer-config-override') }}
+
+        - name: Get existing Assisted Service overrides
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ mce_namespace | default('multicluster-engine') }}"
+            name: "{{ _assisted_service_configmap_name }}"
+          register: _assisted_service_overrides
+
+        - name: Persist mirrored release in Assisted Service overrides
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ _assisted_service_configmap_name }}"
+                namespace: "{{ mce_namespace | default('multicluster-engine') }}"
+              data: >-
+                {{ _existing_overrides | combine({'RELEASE_IMAGES': (
+                  (_existing_overrides.get('RELEASE_IMAGES', '[]') | from_json
+                    | rejectattr('url', 'equalto', release_image_digest) | list)
+                  + [_mirrored_release_registration]) | to_json}) }}
+          vars:
+            _existing_overrides: >-
+              {{ (_assisted_service_overrides.resources[0].data | default({}))
+                if _assisted_service_overrides.resources | length > 0 else {} }}
+
         - name: Compute merged osImages list
           ansible.builtin.set_fact:
             _merged_os_images: >-
@@ -521,7 +563,7 @@
                 }]
               }}
 
-        - name: Patch agent Service config with RHCOS image
+        - name: Patch agent Service config with RHCOS image and release overrides
           kubernetes.core.k8s:
             state: patched
             definition:
@@ -529,6 +571,8 @@
               kind: AgentServiceConfig
               metadata:
                 name: agent
+                annotations:
+                  unsupported.agent-install.openshift.io/assisted-service-configmap: "{{ _assisted_service_configmap_name }}"
               spec:
                 osImages: "{{ _merged_os_images }}"
 

@@ -103,9 +103,11 @@
     disk_id_for_partitioning: >-
       {{ hostvars[extra_manifests_node]['disk_id_for_partitioning'] | default('')
          if extra_manifests_node in hostvars else '' }}
+    # Generated host_vars sometimes keep the quotes as part of the value
+    # ('"5"'), and '"5" | int' is 0 - so they come off before the conversion.
     disk_lso_partitions_count: >-
-      {{ hostvars[extra_manifests_node]['disk_lso_partitions_count'] | default('')
-         if extra_manifests_node in hostvars else '' }}
+      {{ (hostvars[extra_manifests_node]['disk_lso_partitions_count'] | default('')
+          if extra_manifests_node in hostvars else '') | string | trim('"') | int }}
     disk_lso_partitions_size: >-
       {{ hostvars[extra_manifests_node]['disk_lso_partitions_size'] | default('')
          if extra_manifests_node in hostvars else '' }}

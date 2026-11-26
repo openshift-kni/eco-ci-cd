@@ -1,5 +1,16 @@
 ---
 # tasks file for kickstart_iso
+- name: Verify partitioning is a list of directives
+  ansible.builtin.assert:
+    that:
+      - kickstart_iso_partitioning is sequence
+      - kickstart_iso_partitioning is not string
+    fail_msg: >-
+      kickstart_iso_partitioning must be a list of Kickstart storage directives, got
+      {{ kickstart_iso_partitioning | type_debug }}. A YAML block scalar coming from the
+      inventory has to be piped through `from_yaml` before it is handed to this role,
+      otherwise the kickstart template iterates over it character by character.
+
 - name: Install required dependencies
   become: true
   ansible.builtin.dnf:

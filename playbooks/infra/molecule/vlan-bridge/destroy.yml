@@ -1,0 +1,41 @@
+---
+- name: Destroy only this scenario's libvirt VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check for the instance inventory created by this scenario
+      ansible.builtin.stat:
+        path: "{{ molecule_instance_config }}"
+      register: instance_config
+
+    - name: Remove the test VM only when this scenario created it
+      when: instance_config.stat.exists
+      block:
+        - name: Stop the running test VM
+          ansible.builtin.command:
+            argv: [virsh, destroy, molecule-vlan-bridge]
+          register: stopped_vm
+          failed_when: false
+          changed_when: stopped_vm.rc == 0
+
+        - name: Stop and undefine the test VM
+          ansible.builtin.command:
+            argv: [virsh, undefine, molecule-vlan-bridge, --remove-all-storage]
+          register: removed_vm
+          changed_when: removed_vm.rc == 0
+
+        - name: Remove Molecule's instance inventory
+          ansible.builtin.file:
+            path: "{{ molecule_instance_config }}"
+            state: absent
+
+    - name: Remove the test overlay disk
+      ansible.builtin.file:
+        path: /tmp/opencode/molecule-vlan-bridge.qcow2
+        state: absent
+
+    - name: Remove the test cloud-init data
+      ansible.builtin.file:
+        path: /tmp/opencode/molecule-vlan-bridge-user-data
+        state: absent

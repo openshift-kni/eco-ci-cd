@@ -1,0 +1,43 @@
+---
+- name: Set up a disposable parent NIC already used by another bridge
+  hosts: hypervisor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create a virtual Ethernet pair inside the guest
+      ansible.builtin.command:
+        argv: [ip, link, add, name, testuplink, type, veth, peer, name, testpeer]
+      changed_when: true
+
+    - name: Bring up the unused peer to provide carrier on the test uplink
+      ansible.builtin.command:
+        argv: [ip, link, set, dev, testpeer, up]
+      changed_when: true
+
+    - name: Create an existing bridge separate from the test bridge
+      community.general.nmcli:
+        type: bridge
+        conn_name: br-existing
+        ifname: br-existing
+        method4: disabled
+        method6: disabled
+        stp: false
+        state: present
+
+    - name: Attach the test uplink to the existing bridge
+      community.general.nmcli:
+        type: ethernet
+        conn_name: testuplink
+        ifname: testuplink
+        slave_type: bridge
+        master: br-existing
+        method4: disabled
+        state: present
+
+    - name: Activate the existing bridge and parent
+      ansible.builtin.command:
+        argv: [nmcli, connection, up, "{{ item }}"]
+      loop:
+        - br-existing
+        - testuplink
+      changed_when: true

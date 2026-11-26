@@ -293,34 +293,30 @@
   register: master0_vault_stat
   delegate_to: localhost
 
+# Virtualized spokes expose only sushy-tools, not a physical BMC. Skip the
+# vault read and leave the BMC fields empty so the Redfish BIOS/hardware
+# queries are skipped (same behaviour as run-bios-validation.yml).
 - name: Read BMC credentials from master0 vault file
-  ansible.builtin.include_vars:
-    file: /eco-ci-cd/inventories/ocp-deployment/host_vars/master0
-    name: master0_vault
-  when: master0_vault_stat.stat.exists
-  delegate_to: localhost
+  ansible.builtin.set_fact:
+    master0_vault: >-
+      {{ lookup('file', '/eco-ci-cd/inventories/ocp-deployment/host_vars/master0') | from_yaml }}
+  when:
+    - master0_vault_stat.stat.exists
+    - not (spoke_virtualized | default(false) | bool)
   no_log: "{{ ansible_verbosity < 3 }}"
 
 - name: Set BMC credentials from vault (NEVER logged)
   ansible.builtin.set_fact:
-    bmc_address: "{{ master0_vault.bmc_address | default('') }}"
-    bmc_user: "{{ master0_vault.bmc_user | default('') }}"
-    bmc_pass: "{{ master0_vault.bmc_password | default('') }}"
-  when: master0_vault_stat.stat.exists and master0_vault is defined
+    bmc_address: "{{ (master0_vault | default({})).bmc_address | default('') }}"
+    bmc_user: "{{ (master0_vault | default({})).bmc_user | default('') }}"
+    bmc_pass: "{{ (master0_vault | default({})).bmc_password | default('') }}"
   no_log: "{{ ansible_verbosity < 3 }}"
-
-- name: Set empty BMC credentials if vault not found
-  ansible.builtin.set_fact:
-    bmc_address: ""
-    bmc_user: ""
-    bmc_pass: ""
-  when: not master0_vault_stat.stat.exists
 
 - name: Extract BMC IP from bmc_address URL
   ansible.builtin.set_fact:
     bmc_ip: "{{
-      ((bmc_address | regex_search('https?://([^/]+)', '\\1'))[0] | trim)
-      if (bmc_address and bmc_address | regex_search('https?://([^/]+)', '\\1'))
+      ((bmc_address | default('') | regex_search('https?://([^/]+)', '\\1'))[0] | trim)
+      if (bmc_address | default('') and bmc_address | default('') | regex_search('https?://([^/]+)', '\\1'))
       else '' }}"
   no_log: "{{ ansible_verbosity < 3 }}"
 
@@ -334,7 +330,11 @@
     validate_certs: false
     timeout: 30
   register: redfish_systems
-  when: bmc_ip != '' and bmc_user != '' and bmc_pass != ''
+  when:
+    - bmc_ip != ''
+    - bmc_user != ''
+    - bmc_pass != ''
+    - not (spoke_virtualized | default(false) | bool)
   no_log: "{{ ansible_verbosity < 3 }}"
   failed_when: false
 
@@ -353,6 +353,7 @@
     - redfish_systems is defined
     - redfish_systems.json is defined
     - redfish_systems.json.Members is defined
+    - not (spoke_virtualized | default(false) | bool)
   no_log: "{{ ansible_verbosity < 3 }}"
   failed_when: false
 
@@ -412,6 +413,16 @@
     - redfish_bios.json is defined
     - redfish_bios.json.Attributes is defined
 
+- name: Mark BIOS settings as not applicable for virtualized spokes
+  ansible.builtin.set_fact:
+    bios_settings_struct:
+      arch: "{{ node_arch }}"
+      bmc_ip: "N/A"
+      vendor: "{{ (hardware_details | default({})).vendor | default('N/A') }}"
+      attributes: {}
+      note: "Virtualized spoke; no physical BMC/BIOS is exposed through sushy-tools"
+  when: spoke_virtualized | default(false) | bool
+
 - name: Build BIOS data structure with raw attributes
   ansible.builtin.set_fact:
     bios_settings_struct:
@@ -421,6 +432,7 @@
       attributes: "{{ bios_raw_attributes | default({}) }}"
   when:
     - bios_raw_attributes is defined
+    - not (spoke_virtualized | default(false) | bool)
 
 - name: Build node info JSON
   ansible.builtin.set_fact:

@@ -1,0 +1,7 @@
+---
+# Pass these as extra vars so the shared ZTP playbook's hub facts cannot override the target.
+ocp_full_version: "{{ target.version }}"
+ocp_version: "{{ target.version.split('.')[:2] | join('.') }}"
+# oc-mirror tags a digest-pinned release with its hexadecimal digest.
+mirror_ocp_release_tag: "{{ target.image.split('@sha256:')[1] }}"
+release_image_digest: "{{ _mirrored_release_repository }}@{{ target.image.split('@')[1] }}"

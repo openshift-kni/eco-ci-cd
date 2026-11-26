@@ -31,72 +31,8 @@
   loop_control:
     loop_var: operator_item
 
-- name: Extract lockdown FBC digests from operators (spoke lockdown validation mode)
-  when: (telco_kpis_lockdown_feature_enabled | default(false) | bool)
-  block:
-    - name: Extract lockdown FBC digest for redhat-operators catalog
-      changed_when: false
-      ansible.builtin.set_fact:
-        redhat_lockdown_fbc: >-
-          {{
-            (ocp_operator_mirror_operators_prod
-            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_redhat_catalog_name)
-            | selectattr('fbc', 'defined')
-            | map(attribute='fbc')
-            | first | default(''))
-          }}
-
-    - name: Extract lockdown FBC digest for certified-operators catalog
-      changed_when: false
-      ansible.builtin.set_fact:
-        certified_lockdown_fbc: >-
-          {{
-            (ocp_operator_mirror_operators_prod
-            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_certified_catalog_name)
-            | selectattr('fbc', 'defined')
-            | map(attribute='fbc')
-            | first | default(''))
-          }}
-
-    - name: Extract lockdown FBC digest for community-operators catalog
-      changed_when: false
-      ansible.builtin.set_fact:
-        community_lockdown_fbc: >-
-          {{
-            (ocp_operator_mirror_operators_prod
-            | selectattr('catalog', 'equalto', ocp_operator_mirror_prod_community_catalog_name)
-            | selectattr('fbc', 'defined')
-            | map(attribute='fbc')
-            | first | default(''))
-          }}
-
-    - name: Map production catalogs to index images (digest-based lockdown mode)
-      changed_when: false
-      ansible.builtin.set_fact:
-        catalog_index_map:
-          redhat-operators: >-
-            {{
-              redhat_lockdown_fbc
-              if (redhat_lockdown_fbc | default('') | length > 0)
-              else (ocp_operator_mirror_prod_catalog_image_name ~ ':v' ~ (production_catalog_version | default(catalog_version)))
-            }}
-          certified-operators: >-
-            {{
-              certified_lockdown_fbc
-              if (certified_lockdown_fbc | default('') | length > 0)
-              else ('registry.redhat.io/redhat/certified-operator-index:v' ~ (certified_catalog_version | default(catalog_version)))
-            }}
-          community-operators: >-
-            {{
-              community_lockdown_fbc
-              if (community_lockdown_fbc | default('') | length > 0)
-              else ('registry.redhat.io/redhat/community-operator-index:v' ~ (community_catalog_version | default(catalog_version)))
-            }}
-
-
-- name: Map production catalogs to index images (tag-based mode)
+- name: Map production catalogs to index images
   changed_when: false
-  when: not (telco_kpis_lockdown_feature_enabled | default(false) | bool)
   ansible.builtin.set_fact:
     catalog_index_map:
       redhat-operators: "{{ ocp_operator_mirror_prod_catalog_image_name }}:v{{ production_catalog_version | default(catalog_version) }}"
@@ -235,14 +171,6 @@
   ansible.builtin.set_fact:
     oc_mirror_signature_flag: "{{ '--remove-signatures' if (oc_mirror_version is version('4.20', '>')) else '' }}"
 
-- name: Workaround oc-mirror v2 authfile issue
-  no_log: true
-  ansible.builtin.copy:
-    src: "{{ ocp_operator_mirror_pull_secret_path }}"
-    remote_src: true
-    dest: "$XDG_RUNTIME_DIR/containers/auth.json"
-    mode: "0644"
-
 - name: Run oc-mirror to push operators to internal registry # noqa: command-instead-of-shell
   args:
     chdir: /tmp
@@ -259,12 +187,6 @@
     docker://{{ ocp_operator_mirror_registry_url }}/{{ ocp_operator_mirror_folder }}
     --ignore-release-signature {{ oc_mirror_signature_flag }} --v2
 
-- name: Remove authfile workaround oc-mirror v2 authfile issue
-  no_log: true
-  ansible.builtin.file:
-    path: "$XDG_RUNTIME_DIR/containers/auth.json"
-    state: absent
-
 - name: Show oc-mirror result
   ansible.builtin.debug:
     var: oc_mirror.stdout
@@ -278,12 +200,13 @@
       - "idms*.yaml"
     file_type: file
 
-- name: Extract manifest paths
+- name: Separate CatalogSource and IDMS manifest paths
   ansible.builtin.set_fact:
-    manifest_paths: "{{ mirror_manifests.files | map(attribute='path') | list }}"
+    _prod_cs_paths: "{{ mirror_manifests.files | map(attribute='path') | select('search', '/cs') | list }}"
+    _prod_idms_paths: "{{ mirror_manifests.files | map(attribute='path') | select('search', '/idms') | list }}"
 
-- name: Apply CatalogSources manifests
-  loop: "{{ manifest_paths }}"
+- name: Apply CatalogSource manifests
+  loop: "{{ _prod_cs_paths }}"
   loop_control:
     loop_var: manifest_item
   kubernetes.core.k8s:
@@ -293,44 +216,33 @@
   notify:
     - Cleanup ocp_operator_mirror artifacts
 
-# Re-tag the digest-based catalog image with a static spoke tag so ZTP configs
-# can use a predictable image reference (e.g., :v4.22-spoke instead of :sha256-af78a…).
-- name: Re-tag catalog index for spoke ZTP (lockdown mode)
-  when: telco_kpis_lockdown_feature_enabled | default(false) | bool
-  block:
-    - name: Read CatalogSource manifests to extract digest-based image refs
-      ansible.builtin.slurp:
-        src: "{{ cs_file }}"
-      loop: "{{ manifest_paths | select('search', 'cs-.*\\.yaml$') | list }}"
-      loop_control:
-        loop_var: cs_file
-      register: _retag_cs_manifests
+- name: Read IDMS manifest contents
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop: "{{ _prod_idms_paths }}"
+  register: _prod_idms_slurp
 
-    - name: Extract catalog images from CatalogSource manifests
-      ansible.builtin.set_fact:
-        _retag_catalog_images: >-
-          {{
-            _retag_cs_manifests.results
-            | map(attribute='content')
-            | map('b64decode')
-            | map('from_yaml')
-            | selectattr('spec.image', 'defined')
-            | map(attribute='spec.image')
-            | list
-          }}
+- name: Build operator-specific IDMS name
+  ansible.builtin.set_fact:
+    _prod_idms_name: >-
+      idms-prod-mirror-{{ ocp_operator_mirror_operators_prod
+                          | map(attribute='name')
+                          | map('regex_replace', '^openshift-', '')
+                          | sort | join('--') }}
 
-    - name: Re-tag each catalog index with static spoke tag
-      ansible.builtin.include_role:
-        name: lockdowns
-        tasks_from: spoke/retag-catalog-index.yml
-      vars:
-        lockdown_retag_source_image: "{{ catalog_image }}"
-        lockdown_retag_target_image: >-
-          {{ catalog_image | regex_replace(':[^:]+$', '') }}:v{{ production_catalog_version | default(catalog_version) }}-spoke
-        lockdown_retag_authfile: "{{ ocp_operator_mirror_pull_secret_path }}"
-      loop: "{{ _retag_catalog_images }}"
-      loop_control:
-        loop_var: catalog_image
+- name: Apply IDMS with operator-specific name
+  kubernetes.core.k8s:
+    kubeconfig: "{{ ocp_operator_mirror_kubeconfig }}"
+    state: present
+    definition: >-
+      {{ (item.content | b64decode | from_yaml)
+         | combine({'metadata': {'name': _prod_idms_name ~ '-' ~ idx}}, recursive=True) }}
+  loop: "{{ _prod_idms_slurp.results }}"
+  loop_control:
+    index_var: idx
+    label: "{{ _prod_idms_name }}-{{ idx }}"
+  notify:
+    - Cleanup ocp_operator_mirror artifacts
 
 - name: Mutate ocp_operator_mirror_operators_prod catalogs in place
   ansible.builtin.set_fact:
@@ -346,16 +258,3 @@
       {%- for op in ocp_operator_mirror_operators_prod -%}
       {{ op | combine({'catalog': map.get(op.catalog, op.catalog)}) }}{{ ',' if not loop.last else '' }}
       {%- endfor -%}]
-
-- name: Accumulate lockdown metadata from production catalogs (spoke lockdown generation mode)
-  when:
-    - ocp_operator_mirror_generate_lockdown | default(false) | bool
-    - oc_mirror is defined
-    - oc_mirror.stdout is defined
-  ansible.builtin.include_role:
-    name: lockdowns
-    tasks_from: spoke/accumulate-metadata-prod.yml
-  vars:
-    lockdown_oc_mirror_output: "{{ oc_mirror.stdout }}"
-    lockdown_operators_list: "{{ ocp_operator_mirror_operators_prod }}"
-    lockdown_catalog_version: "{{ catalog_version }}"

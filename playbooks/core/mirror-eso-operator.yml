@@ -1,0 +1,288 @@
+# This playbook is not officially supported and comes with no guarantees.
+# Use it at your own risk. Ensure you test thoroughly in your environment
+# before deploying to production.
+
+## Overview:
+# This Ansible playbook mirrors the External Secrets Operator (ESO) images from
+# registry.redhat.io to a disconnected internal registry and verifies that the
+# mirrored catalog is functional. It uses the ocp_operator_mirror role for the
+# actual mirroring and adds verification tasks for each acceptance criterion:
+#   1. ESO operator images are present in the disconnected registry
+#   2. CatalogSource pointing to the mirrored catalog exists on the Hub
+#   3. ImageDigestMirrorSet (IDMS) for ESO image references is applied
+#   4. PackageManifest for openshift-external-secrets-operator is available
+
+## Prerequisites:
+# - Ansible 2.9+ installed on the control node
+# - SSH access to bastion hosts
+# - Installed OpenShift cluster (4.20+, 4.22+ recommended)
+# - KUBECONFIG file for the Hub cluster
+# - Internal registry URL and credentials
+# - Pull secret JSON file with registry.redhat.io credentials
+# - skopeo installed on the bastion
+# - oc-mirror installed on the bastion (auto-downloaded if missing)
+# - redhatci.ocp Ansible collection installed (ansible-galaxy collection install redhatci.ocp)
+# - kubernetes and openshift Python modules (auto-installed by the playbook)
+
+## Roles Used
+# - ocp_operator_mirror (disconnected mirroring)
+
+## Roles Requirements (from redhatci.ocp collection)
+# - redhatci.ocp.olm_operator
+# - redhatci.ocp.catalog_source
+
+## Variables
+# - kubeconfig (str): path to kubeconfig, exported to K8S_AUTH_KUBECONFIG
+# - version (str): OCP major.minor used to pick catalog index images (e.g., 4.22)
+# - mirror_registry_url (str): internal registry URL for pushing images (e.g., registry.example.com:5000)
+# - mirror_registry_user (str): username for internal mirror registry
+# - mirror_registry_password (str): password for internal mirror registry
+# - pull_secret_file (str): path to pull secret JSON file for registry.redhat.io
+# - pull_secret_string (str): base64-encoded pull secret (alternative to pull_secret_file)
+# - skip_registry_cleanup (bool): skip resetting internal registry storage before mirroring, default true
+# - mirror_registry_folder (str): subfolder in registry for mirrored content, default ""
+
+## Usage:
+
+# Example 1: Mirror ESO to disconnected registry and verify
+# ansible-playbook ./playbooks/core/mirror-eso-operator.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json"'
+
+# Example 2: Mirror with registry cleanup disabled (preserve existing images)
+# ansible-playbook ./playbooks/core/mirror-eso-operator.yml \
+#   -i ./inventories/ocp-deployment/deploy-ocp-hybrid-multinode.yml \
+#   --extra-vars 'kubeconfig="/path/to/kubeconfig" version="4.22" \
+#   mirror_registry_url="registry.example.com:5000" mirror_registry_user="admin" \
+#   mirror_registry_password="secret" pull_secret_file="/path/to/pull-secret.json" \
+#   skip_registry_cleanup=true'
+---
+- name: Mirror and Verify External Secrets Operator
+  hosts: bastion
+  gather_facts: true
+  vars:
+    skip_registry_cleanup: true
+    _eso_ns: external-secrets-operator
+    operators:
+      - name: openshift-external-secrets-operator
+        catalog: redhat-operators
+        nsname: "{{ _eso_ns }}"
+        channel: stable-v1
+        deploy_default_config: false
+        og_spec: {}
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ kubeconfig }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - (kubeconfig | default('')) | length > 0
+          - (version | default('')) | length > 0
+          - (mirror_registry_url | default('')) | length > 0
+          - (mirror_registry_user | default('')) | length > 0
+          - (mirror_registry_password | default('')) | length > 0
+        fail_msg: >-
+          Missing required variables. All of the following must be provided:
+          kubeconfig, version, mirror_registry_url,
+          mirror_registry_user, mirror_registry_password
+
+    - name: Fail if no pull secret is provided
+      ansible.builtin.fail:
+        msg: >-
+          A pull secret is required for disconnected mirroring.
+          Provide either pull_secret_file (path to JSON file)
+          or pull_secret_string (base64-encoded JSON).
+      when:
+        - pull_secret_file is not defined
+        - pull_secret_string is not defined
+
+    - name: Resolve pull secret
+      block:
+        - name: Read pull secret from file
+          when: pull_secret_file is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ lookup('file', pull_secret_file) | from_json }}"
+
+        - name: Decode pull secret from string
+          when: pull_secret_file is not defined and pull_secret_string is defined
+          ansible.builtin.set_fact:
+            _pull_secret: "{{ pull_secret_string | b64decode | from_json }}"
+
+    - name: Install requirements
+      ansible.builtin.pip:
+        name:
+          - kubernetes==33.1.0
+          - openshift
+        state: present
+
+    - name: Ensure skopeo is available
+      block:
+        - name: Check if skopeo is installed
+          ansible.builtin.command: which skopeo
+          register: skopeo_check
+          changed_when: false
+          failed_when: false
+
+        - name: Fail if skopeo is not installed
+          when: skopeo_check.rc != 0
+          ansible.builtin.fail:
+            msg: >-
+              skopeo is required for disconnected mirroring but was not found.
+              Install it with: sudo dnf install -y skopeo
+
+    - name: Ensure oc-mirror is available
+      block:
+        - name: Check if oc-mirror is installed
+          ansible.builtin.command: which oc-mirror
+          register: oc_mirror_check
+          changed_when: false
+          failed_when: false
+
+        - name: Download oc-mirror archive
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.get_url:
+            url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/latest/oc-mirror.tar.gz"
+            dest: "/tmp/oc-mirror.tar.gz"
+            mode: '0644'
+
+        - name: Extract oc-mirror archive
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.unarchive:
+            src: "/tmp/oc-mirror.tar.gz"
+            dest: /tmp
+            remote_src: true
+
+        - name: Install oc-mirror binary
+          when: oc_mirror_check.rc != 0
+          ansible.builtin.copy:
+            remote_src: true
+            src: /tmp/oc-mirror
+            dest: "{{ ansible_env.HOME }}/.local/bin/oc-mirror"
+            mode: '0755'
+
+    # ── Phase B: Mirror ESO operator to internal registry ──
+
+    - name: Mirror ESO operator to internal registry
+      ansible.builtin.include_role:
+        name: ocp_operator_mirror
+      vars:
+        ocp_operator_mirror_registry_url: "{{ mirror_registry_url }}"
+        ocp_operator_mirror_registry_user: "{{ mirror_registry_user }}"
+        ocp_operator_mirror_registry_password: "{{ mirror_registry_password }}"
+        ocp_operator_mirror_pull_secret: "{{ _pull_secret }}"
+        ocp_operator_mirror_version: "{{ version }}"
+        ocp_operator_mirror_operators: "{{ operators }}"
+        ocp_operator_mirror_kubeconfig: "{{ kubeconfig }}"
+        ocp_operator_mirror_skip_internal_registry_cleanup: "{{ skip_registry_cleanup | default(true) }}"
+        ocp_operator_mirror_folder: "{{ mirror_registry_folder | default('operators') }}"
+
+    # ── Phase C: Verify cluster resources ──
+
+    - name: Get all ImageDigestMirrorSets on the cluster
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ImageDigestMirrorSet
+      register: _idms_list
+
+    - name: Assert at least one IDMS exists
+      ansible.builtin.assert:
+        that:
+          - _idms_list.resources | length > 0
+        fail_msg: >-
+          No ImageDigestMirrorSet resources found on the cluster.
+          The mirror step should have created at least one IDMS.
+
+    - name: Display IDMS resources found
+      ansible.builtin.debug:
+        msg: >-
+          Found {{ _idms_list.resources | length }} IDMS resource(s):
+          {{ _idms_list.resources | map(attribute='metadata.name') | list | join(', ') }}
+
+    - name: Wait for ESO PackageManifest to be available
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        name: openshift-external-secrets-operator
+        namespace: openshift-marketplace
+      register: _pm_info
+      retries: 20
+      delay: 15
+      until:
+        - _pm_info.resources | length > 0
+        - _pm_info.resources[0].status is defined
+        - _pm_info.resources[0].status.catalogSource is defined
+
+    - name: Derive CatalogSource name from PackageManifest
+      ansible.builtin.set_fact:
+        _cs_name: "{{ _pm_info.resources[0].status.catalogSource }}"
+
+    - name: Display PackageManifest details
+      ansible.builtin.debug:
+        msg: >-
+          PackageManifest 'openshift-external-secrets-operator' available.
+          Catalog: {{ _cs_name }},
+          Channel: {{ _pm_info.resources[0].status.defaultChannel | default('unknown') }}
+
+    - name: Verify CatalogSource exists and is READY
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        name: "{{ _cs_name }}"
+        namespace: openshift-marketplace
+      register: _cs_info
+      retries: 12
+      delay: 15
+      until:
+        - _cs_info.resources | length > 0
+        - _cs_info.resources[0].status is defined
+        - _cs_info.resources[0].status.connectionState is defined
+        - _cs_info.resources[0].status.connectionState.lastObservedState == "READY"
+
+    - name: Display CatalogSource status
+      ansible.builtin.debug:
+        msg: >-
+          CatalogSource '{{ _cs_name }}' is {{ _cs_info.resources[0].status.connectionState.lastObservedState }}
+          (image: {{ _cs_info.resources[0].spec.image | default('unknown') }})
+
+    # ── Phase D: Verify images in mirror registry ──
+
+    - name: Extract catalog image from CatalogSource
+      ansible.builtin.set_fact:
+        _cs_image: "{{ _cs_info.resources[0].spec.image }}"
+
+    - name: Verify catalog image exists in mirror registry
+      ansible.builtin.command:
+        cmd: >-
+          skopeo inspect
+          --creds {{ mirror_registry_user }}:{{ mirror_registry_password }}
+          docker://{{ _cs_image }}
+      register: _catalog_image_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Assert catalog image is accessible in mirror registry
+      ansible.builtin.assert:
+        that:
+          - _catalog_image_check.rc == 0
+        fail_msg: >-
+          Catalog image '{{ _cs_image }}' is NOT accessible in the mirror registry.
+          skopeo inspect failed (rc={{ _catalog_image_check.rc }}).
+
+    # ── Summary ──
+
+    - name: Display mirror verification summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "ESO Mirror Verification PASSED"
+          - "========================================="
+          - "CatalogSource: {{ _cs_name }} (READY)"
+          - "IDMS: {{ _idms_list.resources | map(attribute='metadata.name') | list | join(', ') }}"
+          - "PackageManifest: openshift-external-secrets-operator (available, channel={{ _pm_info.resources[0].status.defaultChannel | default('unknown') }})"
+          - "Catalog Image: {{ _cs_image }} (verified in registry)"
+          - "========================================="

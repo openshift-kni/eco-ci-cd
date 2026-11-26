@@ -4,7 +4,6 @@ set -o pipefail
 
 export PATH="/usr/local/go/bin:{{ ansible_env.HOME }}/go/bin:$PATH"
 export KUBECONFIG="{{ kubeconfig }}"
-export POLARION_REPORT=true
 export REPORT_DIR_NAME="{{ downstream_test_report_path }}"
 export FEATURES="{{ cnf_gotests_features }}"
 export CNF_TEST_IMAGE={{ cnf_test_image }}

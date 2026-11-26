@@ -3,10 +3,8 @@
 # This playbook is not officially supported and comes with no guarantees.
 # Test thoroughly in your environment before deploying to production.
 #
-# Collect current-run IBI JUnit reports and upload one Report Portal launch.
-# Uses the unchanged upload-report.yaml with the same two XML sets as PTP:
-# labelled suites for Report Portal and separately named raw JUnit copies.
-# The existing Polarion upload runs first, followed by Report Portal.
+# Collect current-run IBI JUnit reports and upload one Report Portal launch
+# with report-portal-uploader. Polarion reporting is no longer attempted.
 #
 # Inventory: ibi_report_seed and bastion (target), with their saved inventory vars.
 # Inputs: ibi_report_shared_dir, ibi_report_output_dir, ibi_report_work_dir,
@@ -75,7 +73,7 @@
         path: "{{ ibi_report_work_dir }}/{{ item }}"
         state: directory
         mode: '0700'
-      loop: [raw, results, junit]
+      loop: [raw, results]
 
     - name: Remove stale upload confirmations
       ansible.builtin.file:
@@ -213,20 +211,17 @@
             replace: '\1[{{ item.suite }}] \2\3'
           loop: "{{ ibi_report_manifest }}"
 
-        - name: Provide separately named raw JUnit copies like PTP
-          ansible.builtin.copy:
-            src: "{{ item.source }}"
-            dest: "{{ ibi_report_work_dir }}/junit/raw-{{ item.suite }}-{{ item.source | basename }}"
-            mode: '0600'
-          loop: "{{ ibi_report_manifest }}"
-
         - name: Configure the existing shared uploader
+          # The imported upload play targets hosts: bastion. add_host registers
+          # that name in bastions so the play runs even when this reporting
+          # flow has no real bastion inventory entry, while carrying the
+          # local output paths and hub kubeconfig to the uploader.
           ansible.builtin.add_host:
             name: bastion
+            groups: bastions
             kubeconfig: "{{ ibi_report_hub_kubeconfig }}"
             upload_to_report_portal: true
             processed_report_dir: "{{ ibi_report_work_dir }}/results"
-            junit_report_dir: "{{ ibi_report_work_dir }}/junit"
             reporter_template_name: "{{ ibi_report_launch_name }}-{{ ibi_report_version }}"
             reporter_launch_name: "{{ ibi_report_launch_name }}"
             report_portal_url_filename: .ibi-reportportal-url
@@ -318,7 +313,7 @@
       ansible.builtin.set_fact:
         ibi_report_summary: >-
           {{ ibi_report_summary | combine({'upload':
-              ('completed' if hostvars['bastion'].report_portal_url | default('') is match('^https://[^/]+/')
+              ('completed' if hostvars['bastion'].report_portal_launch_url | default('') is match('^https://[^/]+/')
                else 'completion unconfirmed')}) if ibi_report_ready else
              ibi_report_summary | combine({'upload': 'skipped: no test stage registered a report directory'}) }}
 
@@ -330,7 +325,7 @@
 
     - name: Publish the returned launch link
       ansible.builtin.copy:
-        content: "{{ hostvars['bastion'].report_portal_url }}\n"
+        content: "{{ hostvars['bastion'].report_portal_launch_url }}\n"
         dest: "{{ item }}"
         mode: '0644'
       loop:

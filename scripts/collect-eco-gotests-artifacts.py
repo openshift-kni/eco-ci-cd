@@ -2,11 +2,11 @@
 """Collect eco-gotests artifacts.
 
 Handles local operations:
-  - Gather JUnit XMLs to a unified directory for telcov10n-verify-junit-reports
-    (testsuite names renamed to the suite name in the copies)
+  - Publish one Ginkgo suite JUnit XML per suite into the shared report
+    directory (testsuite names renamed to the suite name). That single
+    directory is both the rpu input and the JUnit verification input
   - Zip k8sreporter artifacts (excluding XML files)
-  - Prepare report dirs for telcov10n-functional-report
-  - Stage junit_eco_gotests_<suite>/ dirs (report XMLs, the renamed JUnit copy
+  - Stage junit_eco_gotests_<suite>/ dirs (report XMLs, the renamed suite copy
     and the k8sreporter zip) for the caller to fetch via SCP
 
 Suites are eco-gotests test runs (e.g. the O-RAN runs oran-pre-provision and
@@ -32,7 +32,7 @@ Usage:
 
 from argparse import ArgumentParser
 from glob import glob
-from logging import INFO, basicConfig, error, exception, info
+from logging import INFO, basicConfig, error, exception, info, warning
 from os import makedirs, walk
 from os.path import basename, isdir, isfile, join, relpath
 from re import sub
@@ -57,17 +57,6 @@ def write_xml_with_renamed_testsuites(src, dst, suite):
     info("Copied %s → %s", src, dst)
 
 
-def rename_and_gather_junit_xmls(suite, report_dir, junit_dir):
-    """Copy JUnit XMLs to the unified dir with testsuite attributes renamed.
-
-    The original files are left untouched; only the gathered copies carry
-    the suite name.
-    """
-    for xml_path in glob(join(report_dir, "*junit*.xml")):
-        dest = join(junit_dir, f"{suite}_{basename(xml_path)}")
-        write_xml_with_renamed_testsuites(xml_path, dest, suite)
-
-
 def create_k8sreporter_zip(suite, report_dir, k8s_reporter_dir):
     """Zip all k8sreporter artifacts for a suite, excluding XML files."""
     files = [
@@ -89,39 +78,34 @@ def create_k8sreporter_zip(suite, report_dir, k8s_reporter_dir):
     info("Created %s (%d files)", zip_path, len(files))
 
 
-def prepare_report_files(suite, report_dir, report_junit_dir, report_polarion_dir):
-    """Copy Polarion XML and Ginkgo JUnit to report dirs with renamed testsuites.
+def prepare_report_files(suite, report_dir, report_out_dir):
+    """Publish the suite's Ginkgo JUnit report to the shared report directory.
 
-    Dir names are crossed with their content (matches the upstream
-    telcov10n-functional-report conventions):
-      report_junit_dir/    → JUNIT_REPORT_PATH (Polarion report_testrun XMLs)
-      report_polarion_dir/ → POLARION_REPORT_PATH (Ginkgo JUnit XMLs)
+    Only the raw Ginkgo JUnit report is written; the lossy Polarion
+    report_testrun aggregate is never copied. One file per suite keeps rpu
+    from counting the same specs twice.
+
+    The destination is keyed by the suite name, not by the source basename.
+    That matters for O-RAN, where the same eco-gotests feature runs several
+    times with different label filters and every run writes an identically
+    named ``oran_suite_test_junit.xml`` into its own report dir.
     """
-    polarion_src = join(report_dir, "report_testrun.xml")
-    if isfile(polarion_src):
-        write_xml_with_renamed_testsuites(
-            polarion_src,
-            join(report_junit_dir, f"{suite}_suite_test_polarion.xml"),
-            suite,
-        )
-
     # Each suite produces a single *suite_test_junit.xml; take the first match.
     ginkgo_matches = glob(join(report_dir, "*suite_test_junit.xml"))
     if ginkgo_matches:
         write_xml_with_renamed_testsuites(
             ginkgo_matches[0],
-            join(report_polarion_dir, f"{suite}_suite_test.xml"),
+            join(report_out_dir, f"{suite}_suite_test.xml"),
             suite,
         )
 
 
 def stage_suite_artifacts(suite, report_dir, junit_dir, k8s_reporter_dir, artifacts_dir):
-    """Stage junit_eco_gotests_<suite>/ with the former playbook's layout.
+    """Stage junit_eco_gotests_<suite>/ for the caller to fetch via SCP.
 
-    Holds every XML from the suite's report dir (original names), the JUnit
-    XML overwritten with the unified-dir copy (testsuites renamed, original
-    file name restored) and the k8sreporter zip. The caller fetches the
-    staged tree to the CI artifact_dir via SCP.
+    Holds every XML from the suite's report dir (original names), the renamed
+    suite report published to the shared report directory and the k8sreporter
+    zip.
     """
     suite_dir = join(artifacts_dir, f"junit_eco_gotests_{suite}")
     makedirs(suite_dir, exist_ok=True)
@@ -129,8 +113,9 @@ def stage_suite_artifacts(suite, report_dir, junit_dir, k8s_reporter_dir, artifa
     for xml_path in glob(join(report_dir, "*.xml")):
         copy2(xml_path, join(suite_dir, basename(xml_path)))
 
-    for xml_path in glob(join(junit_dir, f"{suite}_*.xml")):
-        copy2(xml_path, join(suite_dir, basename(xml_path)[len(suite) + 1:]))
+    suite_report = join(junit_dir, f"{suite}_suite_test.xml")
+    if isfile(suite_report):
+        copy2(suite_report, join(suite_dir, basename(suite_report)))
 
     zip_path = join(k8s_reporter_dir, f"{suite}_k8sreporter.zip")
     if isfile(zip_path):
@@ -149,18 +134,24 @@ def parse_arguments():
         description="Collect eco-gotests artifacts on the bastion"
     )
     parser.add_argument("--suites", required=True,
-                        help="Space-separated suite names; artifacts are read from "
-                             "<prefix><suite>/report for each")
+                        help="Space-separated, unique suite names; artifacts are read "
+                             "from <prefix><suite>/report for each. The suite name keys "
+                             "the published report, so repeated runs of the same "
+                             "feature (e.g. O-RAN label filters) stay separate")
     parser.add_argument("--junit-dir", default="/tmp/eco_gotests_junit",
                         help="Unified JUnit directory on bastion")
     parser.add_argument("--k8s-reporter-dir", required=True,
                         help="Versioned k8sreporter directory (e.g. /tmp/k8sreporter-5.0.1)")
     parser.add_argument("--eco-gotest-dir-prefix", default="/tmp/eco_gotests_",
                         help="Bastion path prefix for suite directories")
-    parser.add_argument("--report-junit-dir", default="/tmp/test_reports/junit",
-                        help="Bastion dir for Polarion report_testrun XMLs (JUNIT_REPORT_PATH)")
-    parser.add_argument("--report-polarion-dir", default="/tmp/test_reports/polarion",
-                        help="Bastion dir for ReportPortal Ginkgo JUnit XMLs (POLARION_REPORT_PATH)")
+    # Accepted for compatibility with older callers; the suite reports are
+    # written to --junit-dir now.
+    parser.add_argument("--report-portal-dir", "--report-polarion-dir",
+                        dest="report_portal_dir", default=None,
+                        help="Deprecated and ignored; suite reports go to --junit-dir")
+    # Accepted for compatibility with older callers; Polarion reporting is gone.
+    parser.add_argument("--report-junit-dir", default=None,
+                        help="Deprecated and ignored; Polarion reporting was removed")
     parser.add_argument("--artifacts-dir", default="/tmp/eco_gotests_artifacts",
                         help="Bastion dir where junit_eco_gotests_<suite>/ dirs are staged "
                              "for the caller to fetch")
@@ -169,13 +160,33 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
+    if args.report_junit_dir is not None:
+        warning(
+            "--report-junit-dir=%s is deprecated and ignored; "
+            "suite reports go to --junit-dir",
+            args.report_junit_dir,
+        )
+
+    if args.report_portal_dir is not None:
+        warning(
+            "--report-portal-dir=%s is deprecated and ignored; "
+            "suite reports go to --junit-dir",
+            args.report_portal_dir,
+        )
+
     suites = args.suites.split()
+    duplicates = sorted({suite for suite in suites if suites.count(suite) > 1})
+    if duplicates:
+        error(
+            "Duplicate suite names in --suites (%s); each run needs a unique "
+            "name because all runs publish into the same report directory",
+            ", ".join(duplicates),
+        )
+        exit(1)
 
     reset_directories(
         args.junit_dir,
         args.k8s_reporter_dir,
-        args.report_polarion_dir,
-        args.report_junit_dir,
         args.artifacts_dir,
     )
 
@@ -188,11 +199,8 @@ def main():
 
         info("Processing suite: %s", suite)
         try:
-            rename_and_gather_junit_xmls(suite, report_dir, args.junit_dir)
+            prepare_report_files(suite, report_dir, args.junit_dir)
             create_k8sreporter_zip(suite, report_dir, args.k8s_reporter_dir)
-            prepare_report_files(
-                suite, report_dir, args.report_junit_dir, args.report_polarion_dir
-            )
             stage_suite_artifacts(
                 suite, report_dir, args.junit_dir, args.k8s_reporter_dir, args.artifacts_dir
             )

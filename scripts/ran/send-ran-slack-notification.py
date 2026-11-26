@@ -5,7 +5,6 @@ Usage:
     python send-ran-report-notification.py \
         --webhook-url <slack_webhook_url> \
         --build <build_version> \
-        --polarion-url <polarion_url> \
         --job-url <prow_job_url> \
         --reportportal-url-3node <url> \
         --reportportal-url-standard <url>
@@ -35,56 +34,48 @@ def construct_message(args):
     if args.reportportal_url_3node:
         section = "\n*3-Node MNO*\n___________"
         section += f"\nSent to Report Portal: {args.reportportal_url_3node}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # Standard MNO section
     if args.reportportal_url_standard:
         section = "\n*Standard MNO*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_standard}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # TWO SNO section
     if args.reportportal_url_two_sno:
         section = "\n*Two SNO*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_two_sno}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # PTP SNO section
     if args.reportportal_url_ptp_sno:
         section = "\n*PTP SNO*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_ptp_sno}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # PTP GM section
     if args.reportportal_url_ptp_gm:
         section = "\n*PTP GM*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_ptp_gm}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # SNO Day2 Worker section
     if args.reportportal_url_sno_day2_worker:
         section = "\n*SNO Day2 Worker*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_sno_day2_worker}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # IBU section
     if args.reportportal_url_ibu:
         section = "\n*IBU*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_ibu}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # O-RAN section
     if args.reportportal_url_oran:
         section = "\n*O-RAN*\n____________"
         section += f"\nSent to Report Portal: {args.reportportal_url_oran}"
-        section += f"\nSent to Polarion: {args.polarion_url}"
         sections.append(section)
 
     # Footer with Prow job URL
@@ -128,7 +119,10 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Send RAN test report notification to Slack")
     parser.add_argument("--webhook-url", required=True, help="Slack webhook URL")
     parser.add_argument("--build", required=True, help="OCP build version")
-    parser.add_argument("--polarion-url", required=True, help="Polarion test run URL")
+    # Accepted for compatibility with the reporting step, which still passes
+    # it. Polarion reporting was retired in favour of Report Portal.
+    parser.add_argument("--polarion-url", required=False, default="",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--job-url", required=True, help="Prow job URL for 'more info' link")
     parser.add_argument("--reportportal-url-3node", required=False, help="Report Portal URL for 3-node")
     parser.add_argument("--reportportal-url-standard", required=False, help="Report Portal URL for standard")

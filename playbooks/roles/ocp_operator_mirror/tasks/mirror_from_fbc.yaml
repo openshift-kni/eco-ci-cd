@@ -288,7 +288,10 @@
 - name: Rewrite image registries to stage (registry.redhat.io -> registry.stage.redhat.io)
   changed_when: false
   ansible.builtin.set_fact:
-    _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/', 'registry.stage.redhat.io/') | list }}"
+    # GA RHEL product images (rhel8/, rhel9/, ...) are only guaranteed on prod:
+    # registry.stage.redhat.io garbage-collects old builds (e.g. rhel9/postgresql-18
+    # pinned by the o-cloud-manager bundle), so keep them on registry.redhat.io.
+    _image_list: "{{ _image_list | map('regex_replace', '^registry\\.redhat\\.io/(?!rhel[0-9]+/)', 'registry.stage.redhat.io/') | list }}"
   when:
     - not (('acm' in ((operator.catalog | default('')) | lower)) or ('mce' in ((operator.catalog | default('')) | lower)))
 

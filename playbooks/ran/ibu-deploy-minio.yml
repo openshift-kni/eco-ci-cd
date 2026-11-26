@@ -100,7 +100,10 @@
         image: "{{ minio_image }}"
         state: started
         network: host
-        restart_policy: on-failure
+        # 'always', not 'on-failure': MinIO exits 0 on SIGTERM (e.g. when the
+        # SSH session that started it ends), which on-failure treats as
+        # success and never restarts.
+        restart_policy: always
         detach: true
         volume:
           - "{{ minio_work_dir }}/s3-volume:/data:rw,z"
@@ -111,6 +114,25 @@
         log_options:
           path: "{{ minio_work_dir }}/container.log"
         command: "server /data --console-address :{{ minio_console_port }}"
+
+    # Rootless podman containers are tied to their user's login session:
+    # when the Ansible SSH connection closes, systemd stops the session and
+    # SIGTERMs the container (MinIO exits 0 on SIGTERM). Enabling lingering
+    # keeps the user manager — and with it the container — alive after
+    # logout. Without this, every playbook run leaves a dead MinIO behind.
+    - name: Enable lingering for the login user so MinIO survives logout
+      become: true
+      ansible.builtin.shell:
+        cmd: |
+          user="${SUDO_USER:?SUDO_USER not set}"
+          if [ "$(loginctl show-user "$user" --property=Linger --value)" = "yes" ]; then
+            echo "already-enabled"
+          else
+            loginctl enable-linger "$user"
+            echo "enabled"
+          fi
+      register: _minio_linger
+      changed_when: "'already-enabled' not in _minio_linger.stdout"
 
     - name: Wait for MinIO API to be ready
       ansible.builtin.wait_for:

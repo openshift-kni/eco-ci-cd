@@ -1,0 +1,85 @@
+---
+# Reinstall the ARM IBX seed spoke at the target OpenShift version prepared by
+# arm-ibx-prepare-releases.yml. The shared ZTP playbook cleans up the previous
+# deployment on the hub, installs the mirrored payload, and waits for policy
+# compliance. This playbook then reads ClusterVersion on the spoke and reports
+# the installed version once the target release is marked Completed.
+#
+# Required inputs
+#   Pass both files with -e. arm-ibx-releases.json supplies target.version and
+#   target.image. vars/arm-ibx-target.yml maps them to the shared playbook's
+#   release variables so the target version takes precedence over the hub version.
+#   spoke_cluster is the target cluster name. kubeconfig is the hub kubeconfig
+#   path on the bastion.
+#   ztp_git_repo_url and ztp_git_branch select the ZTP repository and revision.
+#   ztp_clusters_git_path and ztp_policies_git_path are the repository-relative
+#   paths for the target ClusterInstance and policies.
+#   The inventory must include the bastion, hypervisor, one master with hostname,
+#   bmc_user and bmc_password, and zero workers. It normally supplies
+#   disconnected_registry_url, disconnected_registry_port, pull_secret_string
+#   and gitlab_access_token. The ARM IBX lane uses arch=multi (the default).
+#
+# Optional settings
+#   ztp_workdir_path defaults to /tmp/ztp-workdir on the bastion.
+#   mirror_ocp_release_registry_path defaults to ocp<target major>, such as ocp4.
+#   mirror_ocp_release_tls_verify defaults to false for the disconnected registry.
+#   Use --tags preflight to check the release inputs and inventory before reinstalling.
+#
+# Example for the 4.20 lane, run from the eco-ci-cd repository root
+#   ansible-playbook playbooks/ran/arm-ibx-deploy-target.yml \
+#     -i inventories/ocp-deployment/build-inventory.py \
+#     -e @arm-ibx-releases.json -e @playbooks/ran/vars/arm-ibx-target.yml \
+#     -e spoke_cluster=helix95 \
+#     -e kubeconfig=/home/telcov10n/project/generated/kni-qe-133/auth/kubeconfig \
+#     -e ztp_git_repo_url=https://gitlab.cee.redhat.com/telcov10n/ztp-site-configs-ci.git \
+#     -e ztp_git_branch=arm_ibx \
+#     -e ztp_clusters_git_path=4.20/arm-ibx-target/clusterinstance \
+#     -e ztp_policies_git_path=4.20/policygentemplate
+
+- name: Validate the prepared ARM IBX target
+  hosts: bastion
+  gather_facts: false
+  tags: [preflight]
+  tasks:
+    - name: Check the target release and spoke inventory before reinstallation
+      ansible.builtin.assert:
+        that:
+          - target.version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+          - target.image is match('^.+@sha256:[a-f0-9]{64}$')
+          - ocp_full_version == target.version
+          - mirror_ocp_release_tag == target.image.split('@sha256:')[1]
+          - groups.get('masters', []) | length == 1
+          - groups.get('workers', []) | length == 0
+          - hostvars[groups['masters'][0]].hostname | default('') | trim | length > 0
+          - ztp_clusters_git_path | length > 0
+          - ztp_policies_git_path | length > 0
+
+- name: Reinstall the spoke from the mirrored target release
+  ansible.builtin.import_playbook: deploy-spoke-ztp-mno.yaml
+  vars:
+    force_cleanup: true
+
+- name: Verify the installed ARM IBX target
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - name: Wait for the spoke to complete installation at the prepared version
+      kubernetes.core.k8s_info:
+        kubeconfig: "/tmp/{{ spoke_cluster }}-kubeconfig"
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: target_cluster_version
+      until: >-
+        target_cluster_version.resources | length == 1 and
+        target_cluster_version.resources[0].status.history | default([]) | length > 0 and
+        target_cluster_version.resources[0].status.history[0].version == target.version and
+        target_cluster_version.resources[0].status.history[0].state == 'Completed'
+      retries: 30
+      delay: 20
+
+    - name: Report the installed target version
+      ansible.builtin.debug:
+        msg: >-
+          Target spoke {{ spoke_cluster }} successfully deployed
+          OpenShift {{ target_cluster_version.resources[0].status.history[0].version }}.

@@ -161,6 +161,33 @@
           loop: "{{ reports_portal_attributes | default('') | split(';') | reject('equalto', '') | list }}"
           when: item is search(':')
 
+        - name: Inspect the previous uploader work directory
+          ansible.builtin.stat:
+            path: "{{ report_portal_work_dir }}"
+            follow: false
+            get_checksum: false
+          register: report_portal_previous_work_dir
+
+        - name: Repair reports directory permissions from previous uploader runs
+          when: report_portal_previous_work_dir.stat.isdir | default(false)
+          block:
+            - name: Inspect the previous staged reports directory
+              ansible.builtin.stat:
+                path: "{{ report_portal_work_dir }}/reports"
+                follow: false
+                get_checksum: false
+              register: report_portal_previous_reports_dir
+
+            - name: Restore directory traversal before cleanup
+              ansible.builtin.file:
+                path: "{{ report_portal_work_dir }}/reports"
+                state: directory
+                follow: false
+                mode: "0700"
+              when:
+                - report_portal_previous_reports_dir.stat.isdir | default(false)
+                - report_portal_previous_reports_dir.stat.mode == '0600'
+
         - name: Remove the previous uploader work directory
           ansible.builtin.file:
             path: "{{ report_portal_work_dir }}"
@@ -176,13 +203,14 @@
             - "{{ report_portal_work_dir }}/reports"
           notify: Remove Report Portal uploader work directory
 
-        - name: Stage reports for Report Portal
+        # The remote directory copy would apply mode to reports/ itself.
+        # The directories already have private modes, and XML modes are set below.
+        - name: Stage reports for Report Portal  # noqa: risky-file-permissions
           ansible.builtin.copy:
             src: "{{ report_portal_reports_dir }}/"
             dest: "{{ report_portal_work_dir }}/reports/"
             remote_src: "{{ (lookup('ansible.builtin.env', 'SHARED_DIR') | default('')) | length == 0 }}"
             directory_mode: "0700"
-            mode: "0600"
 
         - name: Find staged XML reports
           ansible.builtin.find:
@@ -198,6 +226,13 @@
             fail_msg: >-
               No XML reports found in {{ report_portal_reports_dir }}.
               Expected prepared JUnit reports.
+
+        - name: Restrict staged XML report permissions
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: file
+            mode: "0600"
+          loop: "{{ report_portal_staged_files.files | map(attribute='path') | list }}"
 
         - name: Render the report-portal-uploader configuration
           ansible.builtin.template:

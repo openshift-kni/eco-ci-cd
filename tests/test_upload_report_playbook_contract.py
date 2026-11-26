@@ -191,6 +191,24 @@ class UploadReportPlaybookContractTest(unittest.TestCase):
         conditions = conditions if isinstance(conditions, list) else [conditions]
         self.assertIn(UPLOAD_GATE, conditions)
 
+    def test_staging_sets_directory_and_xml_modes_separately(self):
+        tasks = load_all_playbook_tasks(PLAYBOOK)
+        directories = tasks["Create uploader directories"]["ansible.builtin.file"]
+        self.assertEqual(directories["mode"], "0700")
+
+        copy = tasks["Stage reports for Report Portal"]["ansible.builtin.copy"]
+        self.assertNotIn("mode", copy)
+
+        restrict = tasks["Restrict staged XML report permissions"]
+        self.assertEqual(
+            restrict["ansible.builtin.file"],
+            {"path": "{{ item }}", "state": "file", "mode": "0600"},
+        )
+        staged_files = tasks["Find staged XML reports"]["register"]
+        self.assertIn(f"{staged_files}.files", restrict["loop"])
+        names = list(tasks)
+        self.assertLess(names.index("Find staged XML reports"), names.index(restrict["name"]))
+
     def test_work_dir_is_removed_unless_kept_or_the_upload_failed(self):
         tasks = load_all_playbook_tasks(PLAYBOOK)
         create = tasks["Create uploader directories"]

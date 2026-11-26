@@ -24,10 +24,11 @@ rtcsync
 #minsources 2
 
 # Allow NTP client access from local network.
-#allow 192.168.0.0/16
+allow 192.168.0.0/16
+allow 2620:52:9::/48
 
 # Serve time even if not synchronized to a time source.
-#local stratum 10
+local stratum 10
 
 # Require authentication (nts or key option) for all NTP sources.
 #authselectmode require

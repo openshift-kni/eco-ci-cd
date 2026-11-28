@@ -11,6 +11,7 @@
   retries: 180
   delay: 10
 
+# Ansible defaults to ssh -tt. These waits do not need a terminal.
 - name: Wait for bootstrap complete
   ansible.builtin.shell:
     cmd: |
@@ -27,6 +28,8 @@
       tail -n 40 .openshift_install.log >&2 || true
       exit "$rc"
     chdir: "{{ manifests_dir }}"
+  vars:
+    ansible_ssh_use_tty: false
   timeout: "{{ mabi_task_timeout }}"
   changed_when: false
 
@@ -53,6 +56,8 @@
           tail -n 40 .openshift_install.log >&2 || true
           exit "$rc"
         chdir: "{{ manifests_dir }}"
+      vars:
+        ansible_ssh_use_tty: false
       timeout: "{{ mabi_task_timeout }}"
       register: _mabi_install_output
       changed_when: false
@@ -84,6 +89,8 @@
           tail -n 40 .openshift_install.log >&2 || true
           exit "$rc"
         chdir: "{{ manifests_dir }}"
+      vars:
+        ansible_ssh_use_tty: false
       register: _mabi_recheck
       changed_when: false
       failed_when: false
@@ -91,6 +98,7 @@
     - name: Gather logs from installation
       when: _mabi_recheck.rc != 0
       vars:
+        ansible_ssh_use_tty: false
         rendezvous_ip_address: "{{ hostvars[agent_based_installer_bootstrap_node][host_ip_keyword] }}"
       ansible.builtin.shell:
         cmd: |

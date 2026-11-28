@@ -243,9 +243,13 @@
     dest: "$XDG_RUNTIME_DIR/containers/auth.json"
     mode: "0644"
 
+# Ansible defaults to ssh -tt. This task does not need a terminal, and a
+# terminal puts oc-mirror output on the SSH channel.
 - name: Run oc-mirror to push operators to internal registry # noqa: command-instead-of-shell
   args:
     chdir: /tmp
+  vars:
+    ansible_ssh_use_tty: false
   register: oc_mirror
   changed_when: true
   retries: 3
